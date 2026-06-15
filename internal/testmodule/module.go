@@ -1,0 +1,35 @@
+package testmodule
+
+import (
+	"context"
+	"fmt"
+
+	"95.79.129.33/go-cms/dev/core"
+)
+
+type Module struct{}
+
+func (m *Module) Boot(ctx context.Context, moduleContext core.ModuleContext) error {
+	fmt.Println("test module booted")
+
+	app := moduleContext.App()
+	runtime := moduleContext.Runtime()
+
+	_ = app
+	_ = runtime
+
+	return nil
+}
+
+func New() *Module {
+	return &Module{}
+}
+
+func (m *Module) Code() string {
+	return "test"
+}
+
+func (m *Module) Register(registry core.Registry) error {
+	fmt.Println("test module registered")
+	return nil
+}
