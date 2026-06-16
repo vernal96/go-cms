@@ -20,21 +20,26 @@ type CacheStore interface {
 	Get(ctx context.Context, key string) ([]byte, bool, error)
 	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
 	Delete(ctx context.Context, key string) error
-	Clear(ctx context.Context) error
 }
 
 type CacheManager interface {
 	Store(name string) (CacheStore, error)
+
 	Default() (CacheStore, error)
 	Redis() (CacheStore, error)
 	File() (CacheStore, error)
 	Memory() (CacheStore, error)
 	Null() CacheStore
+
+	RegisterStore(name string, store CacheStore) error
+	SetDefaultStore(name string) error
 }
 
 type DefaultCacheManager struct {
-	mu     sync.RWMutex
-	stores map[string]CacheStore
+	mu           sync.RWMutex
+	stores       map[string]CacheStore
+	defaultStore string
+	nullStore    CacheStore
 }
 
 func NewDefaultCacheManager() *DefaultCacheManager {
@@ -42,15 +47,20 @@ func NewDefaultCacheManager() *DefaultCacheManager {
 
 	return &DefaultCacheManager{
 		stores: map[string]CacheStore{
-			CacheStoreDefault: nullStore,
-			CacheStoreNull:    nullStore,
+			CacheStoreNull: nullStore,
 		},
+		defaultStore: CacheStoreNull,
+		nullStore:    nullStore,
 	}
 }
 
 func (m *DefaultCacheManager) Store(name string) (CacheStore, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	if name == CacheStoreDefault {
+		name = m.defaultStore
+	}
 
 	store, exists := m.stores[name]
 	if !exists {
@@ -77,21 +87,20 @@ func (m *DefaultCacheManager) Memory() (CacheStore, error) {
 }
 
 func (m *DefaultCacheManager) Null() CacheStore {
-	store, err := m.Store(CacheStoreNull)
-	if err != nil {
-		return NullCacheStore{}
-	}
-
-	return store
+	return m.nullStore
 }
 
 func (m *DefaultCacheManager) RegisterStore(name string, store CacheStore) error {
 	if name == "" {
-		return fmt.Errorf("store name is empty")
+		return errors.New("cache store name is empty")
 	}
 
 	if name == CacheStoreDefault {
-		return errors.New("use SetDefaultStore instead of registering default store directly")
+		return errors.New("cache store name \"default\" is reserved")
+	}
+
+	if name == CacheStoreNull {
+		return errors.New("cache store name \"null\" is reserved")
 	}
 
 	if store == nil {
@@ -114,31 +123,29 @@ func (m *DefaultCacheManager) SetDefaultStore(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	store, exists := m.stores[name]
+	if name == CacheStoreDefault {
+		return errors.New("cache store name \"default\" cannot be used as default target")
+	}
 
-	if !exists {
+	if _, exists := m.stores[name]; !exists {
 		return fmt.Errorf("cache store %q is not registered", name)
 	}
 
-	m.stores[CacheStoreDefault] = store
+	m.defaultStore = name
 
 	return nil
 }
 
 type NullCacheStore struct{}
 
-func (s NullCacheStore) Get(ctx context.Context, key string) (any, bool, error) {
+func (s NullCacheStore) Get(ctx context.Context, key string) ([]byte, bool, error) {
 	return nil, false, nil
 }
 
-func (s NullCacheStore) Set(ctx context.Context, key string, value any, ttl time.Duration) error {
+func (s NullCacheStore) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	return nil
 }
 
 func (s NullCacheStore) Delete(ctx context.Context, key string) error {
-	return nil
-}
-
-func (s NullCacheStore) Clear(ctx context.Context) error {
 	return nil
 }
