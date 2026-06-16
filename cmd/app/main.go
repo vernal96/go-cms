@@ -22,12 +22,20 @@ func main() {
 
 	runtimeFactory := core.NewSiteRuntimeFactory(app, profileRegistry)
 
-	site := core.Site{
+	siteResolver, err := core.NewMemorySiteResolver(core.Site{
 		ID:          1,
 		ProfileCode: "main",
 		Domain:      "example.com",
 		Locale:      "ru",
 		Settings:    map[string]any{},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	site, err := siteResolver.ResolveByDomain(ctx, "example.com")
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	runtime, err := runtimeFactory.Make(ctx, site)
