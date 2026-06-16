@@ -28,7 +28,7 @@ func (f *SiteRuntimeFactory) Make(ctx context.Context, site Site) (*SiteRuntime,
 	}
 
 	if site.ProfileCode == "" {
-		return nil, errors.New("site code is empty")
+		return nil, errors.New("site profile code is empty")
 	}
 
 	profile, exists := f.profiles.Profile(site.ProfileCode)

@@ -13,7 +13,7 @@ type SiteRuntime struct {
 
 func NewSiteRuntime(site Site, profile SiteProfile, registry Registry) (*SiteRuntime, error) {
 	if site.ProfileCode == "" {
-		return nil, errors.New("site code is empty")
+		return nil, errors.New("site profile code is empty")
 	}
 
 	if profile == nil {

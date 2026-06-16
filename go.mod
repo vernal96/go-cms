@@ -1,3 +1,3 @@
-module "95.79.129.33/go-cms/dev"
+module github.com/vernal96/go-cms
 
 go 1.26.1

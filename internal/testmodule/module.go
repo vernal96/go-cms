@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"95.79.129.33/go-cms/dev/core"
+	"github.com/vernal96/go-cms/core"
 )
 
 type Module struct{}

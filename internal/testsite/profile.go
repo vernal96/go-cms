@@ -1,8 +1,8 @@
 package testsite
 
 import (
-	"95.79.129.33/go-cms/dev/core"
-	"95.79.129.33/go-cms/dev/internal/testmodule"
+	"github.com/vernal96/go-cms/core"
+	"github.com/vernal96/go-cms/internal/testmodule"
 )
 
 type Profile struct{}

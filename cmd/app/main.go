@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"95.79.129.33/go-cms/dev/core"
-	"95.79.129.33/go-cms/dev/internal/testsite"
+	"github.com/vernal96/go-cms/core"
+	"github.com/vernal96/go-cms/internal/testsite"
 )
 
 func main() {
