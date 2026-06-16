@@ -27,26 +27,38 @@ func (f *SiteRuntimeFactory) Make(ctx context.Context, site Site) (*SiteRuntime,
 		return nil, errors.New("site profile registry is nil")
 	}
 
-	if site.Code == "" {
+	if site.ProfileCode == "" {
 		return nil, errors.New("site code is empty")
 	}
 
-	profile, exists := f.profiles.Profile(site.Code)
+	profile, exists := f.profiles.Profile(site.ProfileCode)
 	if !exists {
-		return nil, fmt.Errorf("site profile %q not found", site.Code)
+		return nil, fmt.Errorf("site profile %q not found", site.ProfileCode)
 	}
 
 	registry := NewDefaultRegistry()
-
 	modules := profile.Modules()
 
+	seenModules := make(map[string]struct{}, len(modules))
+
 	for _, module := range modules {
-		if err := registry.RegisterModule(module); err != nil {
-			return nil, fmt.Errorf("register site module %q: %w", module.Code(), err)
+		if module == nil {
+			return nil, errors.New("site module is nil")
 		}
 
+		code := module.Code()
+		if code == "" {
+			return nil, errors.New("site module code is empty")
+		}
+
+		if _, exists := seenModules[code]; exists {
+			return nil, fmt.Errorf("site module %q already registered", code)
+		}
+
+		seenModules[code] = struct{}{}
+
 		if err := module.Register(registry); err != nil {
-			return nil, fmt.Errorf("register site module extensions %q: %w", module.Code(), err)
+			return nil, fmt.Errorf("register site module extensions %q: %w", code, err)
 		}
 	}
 

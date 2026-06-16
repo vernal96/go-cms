@@ -1,8 +1,9 @@
 package core
 
 type Site struct {
-	ID       int64
-	Code     string
-	Domain   string
-	Settings map[string]any
+	ID          int64
+	ProfileCode string
+	Domain      string
+	Locale      string
+	Settings    map[string]any
 }
