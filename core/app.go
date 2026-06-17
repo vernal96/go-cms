@@ -15,7 +15,7 @@ type App struct {
 func NewApp(deps AppDeps) *App {
 	cache := deps.Cache
 	if cache == nil {
-		cache = NewDefaultCacheManager()
+		cache = NullCacheManager{}
 	}
 
 	storage := deps.Storage

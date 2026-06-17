@@ -4,7 +4,11 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/vernal96/go-cms/core"
 )
+
+const StoreName core.CacheStoreName = "memory"
 
 type Store struct {
 	mu    sync.RWMutex

@@ -3,9 +3,8 @@ package project
 import "github.com/vernal96/go-cms/core"
 
 type CacheStoreRegistration struct {
-	Name    string
-	Store   core.CacheStore
-	Default bool
+	Name  core.CacheStoreName
+	Store core.CacheStore
 }
 
 type FileDiskRegistration struct {

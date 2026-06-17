@@ -5,18 +5,9 @@ import (
 )
 
 func BootstrapApp(config Config) (*core.App, error) {
-	cache := core.NewDefaultCacheManager()
-
-	for _, store := range config.CacheStores {
-		if err := cache.RegisterStore(store.Name, store.Store); err != nil {
-			return nil, err
-		}
-
-		if store.Default {
-			if err := cache.SetDefaultStore(store.Name); err != nil {
-				return nil, err
-			}
-		}
+	cache, err := NewCacheManager(config.CacheStores)
+	if err != nil {
+		return nil, err
 	}
 
 	storage := core.NewDefaultFileStorageManager()
