@@ -5,11 +5,16 @@ import (
 	"github.com/vernal96/go-cms/internal/project"
 )
 
-func Null() project.Config {
-	return project.Config{
-		CacheStores:  nil,
-		FileDisks:    nil,
-		SiteProfiles: nil,
-		Events:       core.NullEventBus{},
+func NullInfrastructure() project.InfrastructureConfig {
+	return project.InfrastructureConfig{
+		CacheStores: nil,
+		FileDisks:   nil,
+		Events:      core.NullEventBus{},
+	}
+}
+
+func NullSiteProfiles() project.SiteProfileConfig {
+	return project.SiteProfileConfig{
+		Profiles: nil,
 	}
 }
