@@ -7,8 +7,9 @@ import (
 
 func Null() project.Config {
 	return project.Config{
-		CacheStores: nil,
-		FileDisks:   nil,
-		Events:      core.NullEventBus{},
+		CacheStores:  nil,
+		FileDisks:    nil,
+		SiteProfiles: nil,
+		Events:       core.NullEventBus{},
 	}
 }
