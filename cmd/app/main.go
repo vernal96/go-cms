@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/vernal96/go-cms/configs"
 	"github.com/vernal96/go-cms/core"
+	"github.com/vernal96/go-cms/internal/configs"
 	"github.com/vernal96/go-cms/internal/project"
 	"github.com/vernal96/go-cms/internal/testsite"
 )
