@@ -17,6 +17,9 @@ func (p *Profile) Code() string {
 
 func (p *Profile) Modules() []core.Module {
 	return []core.Module{
-		testmodule.New(),
+		testmodule.New(testmodule.Config{
+			//CacheStore: core.CacheStoreName("missing_cache"),
+			//FileDisk:   core.FileDisk("missing_disk"),
+		}),
 	}
 }

@@ -7,7 +7,29 @@ import (
 	"github.com/vernal96/go-cms/core"
 )
 
-type Module struct{}
+type Config struct {
+	CacheStore core.CacheStoreName
+	FileDisk   core.FileDisk
+}
+
+type Module struct {
+	config Config
+}
+
+func New(config Config) *Module {
+	return &Module{
+		config: config,
+	}
+}
+
+func (m *Module) Code() string {
+	return "test"
+}
+
+func (m *Module) Register(registry core.Registry) error {
+	fmt.Println("test module registered")
+	return nil
+}
 
 func (m *Module) Boot(ctx context.Context, moduleContext core.ModuleContext) error {
 	fmt.Println("test module booted")
@@ -21,15 +43,16 @@ func (m *Module) Boot(ctx context.Context, moduleContext core.ModuleContext) err
 	return nil
 }
 
-func New() *Module {
-	return &Module{}
-}
+func (m *Module) Requirements() core.ModuleRequirements {
+	requirements := core.ModuleRequirements{}
 
-func (m *Module) Code() string {
-	return "test"
-}
+	if m.config.CacheStore != "" {
+		requirements.CacheStores = append(requirements.CacheStores, m.config.CacheStore)
+	}
 
-func (m *Module) Register(registry core.Registry) error {
-	fmt.Println("test module registered")
-	return nil
+	if m.config.FileDisk != "" {
+		requirements.FileDisks = append(requirements.FileDisks, m.config.FileDisk)
+	}
+
+	return requirements
 }
