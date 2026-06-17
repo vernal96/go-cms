@@ -2,6 +2,7 @@ package testmodule
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/vernal96/go-cms/core"
@@ -32,27 +33,31 @@ func (m *Module) Register(registry core.Registry) error {
 }
 
 func (m *Module) Boot(ctx context.Context, moduleContext core.ModuleContext) error {
-	fmt.Println("test module booted")
+	if m.config.CacheStore == "" {
+		return errors.New("test module cache store is empty")
+	}
 
-	app := moduleContext.App()
+	if m.config.FileDisk == "" {
+		return errors.New("test module file disk is empty")
+	}
+
+	cacheStore, err := moduleContext.App().CacheManager().Store(m.config.CacheStore)
+	if err != nil {
+		return fmt.Errorf("get test module cache store %q: %w", m.config.CacheStore, err)
+	}
+
+	fileStorage, err := moduleContext.App().Storage().Disk(m.config.FileDisk)
+	if err != nil {
+		return fmt.Errorf("get test module file disk %q: %w", m.config.FileDisk, err)
+	}
+
 	runtime := moduleContext.Runtime()
 
-	_ = app
+	_ = cacheStore
+	_ = fileStorage
 	_ = runtime
 
+	fmt.Println("test module booted")
+
 	return nil
-}
-
-func (m *Module) Requirements() core.ModuleRequirements {
-	requirements := core.ModuleRequirements{}
-
-	if m.config.CacheStore != "" {
-		requirements.CacheStores = append(requirements.CacheStores, m.config.CacheStore)
-	}
-
-	if m.config.FileDisk != "" {
-		requirements.FileDisks = append(requirements.FileDisks, m.config.FileDisk)
-	}
-
-	return requirements
 }
