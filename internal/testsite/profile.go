@@ -1,6 +1,8 @@
 package testsite
 
 import (
+	"github.com/vernal96/go-cms/adapters/cache/memorycache"
+	"github.com/vernal96/go-cms/adapters/storage/memorystorage"
 	"github.com/vernal96/go-cms/core"
 	"github.com/vernal96/go-cms/internal/testmodule"
 )
@@ -18,8 +20,8 @@ func (p *Profile) Code() string {
 func (p *Profile) Modules() []core.Module {
 	return []core.Module{
 		testmodule.New(testmodule.Config{
-			//CacheStore: core.CacheStoreName("missing_cache"),
-			//FileDisk:   core.FileDisk("missing_disk"),
+			CacheStore: memorycache.StoreName,
+			FileDisk:   memorystorage.DiskName,
 		}),
 	}
 }
