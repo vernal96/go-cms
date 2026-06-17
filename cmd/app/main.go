@@ -14,7 +14,7 @@ import (
 func main() {
 	ctx := context.Background()
 
-	config := configs.Null()
+	config := configs.Dev()
 
 	app, err := project.BootstrapApp(config)
 	if err != nil {
