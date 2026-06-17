@@ -8,7 +8,6 @@ import (
 	"github.com/vernal96/go-cms/core"
 	"github.com/vernal96/go-cms/internal/configs"
 	"github.com/vernal96/go-cms/internal/project"
-	"github.com/vernal96/go-cms/internal/testsite"
 )
 
 func main() {
@@ -21,13 +20,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	profileRegistry := core.NewDefaultSiteProfileRegistry()
-
-	if err := profileRegistry.RegisterProfile(testsite.New()); err != nil {
+	profileManager, err := project.NewSiteProfileManager(config.SiteProfiles)
+	if err != nil {
 		log.Fatal(err)
 	}
 
-	runtimeFactory := core.NewSiteRuntimeFactory(app, profileRegistry)
+	runtimeFactory := core.NewSiteRuntimeFactory(app, profileManager)
 
 	siteResolver, err := core.NewMemorySiteResolver(core.Site{
 		ID:          1,
