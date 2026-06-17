@@ -13,9 +13,8 @@ func DevConfig() Config {
 	return Config{
 		CacheStores: []CacheStoreRegistration{
 			{
-				Name:    core.CacheStoreMemory,
-				Store:   memorycache.NewStore(),
-				Default: true,
+				Name:  memorycache.StoreName,
+				Store: memorycache.NewStore(),
 			},
 		},
 		FileDisks: []FileDiskRegistration{
