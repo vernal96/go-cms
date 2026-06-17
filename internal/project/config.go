@@ -10,7 +10,6 @@ type CacheStoreRegistration struct {
 type FileDiskRegistration struct {
 	Name    core.FileDisk
 	Storage core.FileStorage
-	Default bool
 }
 
 type Config struct {

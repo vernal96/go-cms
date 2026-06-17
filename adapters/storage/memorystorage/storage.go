@@ -9,6 +9,8 @@ import (
 	"github.com/vernal96/go-cms/core"
 )
 
+const DiskName core.FileDisk = "memory"
+
 type Storage struct {
 	mu    sync.RWMutex
 	files map[string][]byte

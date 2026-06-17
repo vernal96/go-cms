@@ -4,10 +4,7 @@ import (
 	"github.com/vernal96/go-cms/adapters/cache/memorycache"
 	"github.com/vernal96/go-cms/adapters/eventbus/memoryeventbus"
 	"github.com/vernal96/go-cms/adapters/storage/memorystorage"
-	"github.com/vernal96/go-cms/core"
 )
-
-const FileDiskMemory core.FileDisk = "memory"
 
 func DevConfig() Config {
 	return Config{
@@ -19,9 +16,8 @@ func DevConfig() Config {
 		},
 		FileDisks: []FileDiskRegistration{
 			{
-				Name:    FileDiskMemory,
+				Name:    memorystorage.DiskName,
 				Storage: memorystorage.NewStorage(),
-				Default: true,
 			},
 		},
 		Events: memoryeventbus.NewBus(),

@@ -20,7 +20,7 @@ func NewApp(deps AppDeps) *App {
 
 	storage := deps.Storage
 	if storage == nil {
-		storage = NewDefaultFileStorageManager()
+		storage = NullFileStorageManager{}
 	}
 
 	events := deps.Events
