@@ -13,7 +13,7 @@ import (
 func main() {
 	ctx := context.Background()
 
-	app, err := project.BootstrapApp()
+	app, err := project.BootstrapApp(config)
 	if err != nil {
 		log.Fatal(err)
 	}
