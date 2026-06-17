@@ -12,8 +12,13 @@ type FileDiskRegistration struct {
 	Storage core.FileStorage
 }
 
+type SiteProfileRegistration struct {
+	Profile core.SiteProfile
+}
+
 type Config struct {
-	CacheStores []CacheStoreRegistration
-	FileDisks   []FileDiskRegistration
-	Events      core.EventBus
+	CacheStores  []CacheStoreRegistration
+	FileDisks    []FileDiskRegistration
+	SiteProfiles []SiteProfileRegistration
+	Events       core.EventBus
 }
