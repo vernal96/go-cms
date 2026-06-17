@@ -4,8 +4,6 @@ import (
 	"github.com/vernal96/go-cms/core"
 )
 
-const FileDiskMemory core.FileDisk = "memory"
-
 func BootstrapApp(config Config) (*core.App, error) {
 	cache := core.NewDefaultCacheManager()
 
