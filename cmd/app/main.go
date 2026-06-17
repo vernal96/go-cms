@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/vernal96/go-cms/configs"
 	"github.com/vernal96/go-cms/core"
 	"github.com/vernal96/go-cms/internal/project"
 	"github.com/vernal96/go-cms/internal/testsite"
@@ -13,7 +14,7 @@ import (
 func main() {
 	ctx := context.Background()
 
-	config := project.DevConfig()
+	config := configs.Dev()
 
 	app, err := project.BootstrapApp(config)
 	if err != nil {
