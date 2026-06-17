@@ -15,11 +15,14 @@ func BootstrapApp(config Config) (*core.App, error) {
 		return nil, err
 	}
 
-	app := core.NewApp(core.AppDeps{
-		Cache:   cache,
-		Storage: storage,
-		Events:  config.Events,
-	})
+	app, err := core.NewApp(
+		cache,
+		storage,
+		config.Events,
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	return app, nil
 }

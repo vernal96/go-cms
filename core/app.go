@@ -1,10 +1,6 @@
 package core
 
-type AppDeps struct {
-	Cache   CacheManager
-	Storage FileStorageManager
-	Events  EventBus
-}
+import "errors"
 
 type App struct {
 	cache   CacheManager
@@ -12,27 +8,28 @@ type App struct {
 	events  EventBus
 }
 
-func NewApp(deps AppDeps) *App {
-	cache := deps.Cache
+func NewApp(
+	cache CacheManager,
+	storage FileStorageManager,
+	events EventBus,
+) (*App, error) {
 	if cache == nil {
-		cache = NullCacheManager{}
+		return nil, errors.New("cache manager is nil")
 	}
 
-	storage := deps.Storage
 	if storage == nil {
-		storage = NullFileStorageManager{}
+		return nil, errors.New("file storage manager is nil")
 	}
 
-	events := deps.Events
 	if events == nil {
-		events = NullEventBus{}
+		return nil, errors.New("event bus is nil")
 	}
 
 	return &App{
 		cache:   cache,
 		storage: storage,
 		events:  events,
-	}
+	}, nil
 }
 
 func (a *App) CacheManager() CacheManager {
