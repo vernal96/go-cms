@@ -1,9 +1,8 @@
 package project
 
 import (
-	"log"
-
 	"github.com/vernal96/go-cms/adapters/cache/memorycache"
+	"github.com/vernal96/go-cms/adapters/eventbus/memoryeventbus"
 	"github.com/vernal96/go-cms/adapters/storage/memorystorage"
 	"github.com/vernal96/go-cms/core"
 )
@@ -11,23 +10,33 @@ import (
 const FileDiskMemory core.FileDisk = "memory"
 
 func BootstrapApp() (*core.App, error) {
-	app := core.NewApp(core.AppDeps{})
+	cache := core.NewDefaultCacheManager()
 
-	if err := app.CacheManager().RegisterStore(core.CacheStoreMemory, memorycache.NewStore()); err != nil {
-		log.Fatal(err)
+	if err := cache.RegisterStore(core.CacheStoreMemory, memorycache.NewStore()); err != nil {
+		return nil, err
 	}
 
-	if err := app.CacheManager().SetDefaultStore(core.CacheStoreMemory); err != nil {
-		log.Fatal(err)
+	if err := cache.SetDefaultStore(core.CacheStoreMemory); err != nil {
+		return nil, err
 	}
 
-	if err := app.Storage().RegisterDisk(FileDiskMemory, memorystorage.NewStorage()); err != nil {
-		log.Fatal(err)
+	storage := core.NewDefaultFileStorageManager()
+
+	if err := storage.RegisterDisk(FileDiskMemory, memorystorage.NewStorage()); err != nil {
+		return nil, err
 	}
 
-	if err := app.Storage().SetDefaultDisk(FileDiskMemory); err != nil {
-		log.Fatal(err)
+	if err := storage.SetDefaultDisk(FileDiskMemory); err != nil {
+		return nil, err
 	}
+
+	events := memoryeventbus.NewBus()
+
+	app := core.NewApp(core.AppDeps{
+		Cache:   cache,
+		Storage: storage,
+		Events:  events,
+	})
 
 	return app, nil
 }
