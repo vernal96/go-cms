@@ -13,14 +13,15 @@ import (
 func main() {
 	ctx := context.Background()
 
-	config := configs.Dev()
+	infrastructureConfig := configs.DevInfrastructure()
+	siteProfileConfig := configs.DevSiteProfiles()
 
-	app, err := project.BootstrapApp(config)
+	app, err := project.BootstrapApp(infrastructureConfig)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	profileManager, err := project.NewSiteProfileManager(config.SiteProfiles)
+	profileManager, err := project.NewSiteProfileManager(siteProfileConfig)
 	if err != nil {
 		log.Fatal(err)
 	}
