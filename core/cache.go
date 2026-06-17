@@ -18,16 +18,6 @@ type CacheManager interface {
 	Null() CacheStore
 }
 
-type NullCacheManager struct{}
-
-func (m NullCacheManager) Store(name CacheStoreName) (CacheStore, error) {
-	return NullCacheStore{}, nil
-}
-
-func (m NullCacheManager) Null() CacheStore {
-	return NullCacheStore{}
-}
-
 type NullCacheStore struct{}
 
 func (s NullCacheStore) Get(ctx context.Context, key string) ([]byte, bool, error) {

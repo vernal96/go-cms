@@ -5,11 +5,13 @@ import (
 )
 
 func BootstrapApp(config Config) (*core.App, error) {
+	// Создаем менеджер кэша
 	cache, err := NewCacheManager(config.CacheStores)
 	if err != nil {
 		return nil, err
 	}
 
+	// Создаем файловый менеджер
 	storage, err := NewFileStorageManager(config.FileDisks)
 	if err != nil {
 		return nil, err

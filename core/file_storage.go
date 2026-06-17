@@ -22,16 +22,6 @@ type FileStorageManager interface {
 	Null() FileStorage
 }
 
-type NullFileStorageManager struct{}
-
-func (m NullFileStorageManager) Disk(name FileDisk) (FileStorage, error) {
-	return NullFileStorage{}, nil
-}
-
-func (m NullFileStorageManager) Null() FileStorage {
-	return NullFileStorage{}
-}
-
 type NullFileStorage struct{}
 
 func (s NullFileStorage) Save(ctx context.Context, path string, content io.Reader) error {
