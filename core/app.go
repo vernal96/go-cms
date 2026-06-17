@@ -1,6 +1,10 @@
 package core
 
-import "errors"
+type AppDeps struct {
+	Cache   CacheManager
+	Storage FileStorageManager
+	Events  EventBus
+}
 
 type App struct {
 	cache   CacheManager
@@ -8,11 +12,26 @@ type App struct {
 	events  EventBus
 }
 
-func NewApp() *App {
+func NewApp(deps AppDeps) *App {
+	cache := deps.Cache
+	if cache == nil {
+		cache = NewDefaultCacheManager()
+	}
+
+	storage := deps.Storage
+	if storage == nil {
+		storage = NewDefaultFileStorageManager()
+	}
+
+	events := deps.Events
+	if events == nil {
+		events = NullEventBus{}
+	}
+
 	return &App{
-		cache:   NewDefaultCacheManager(),
-		storage: NewDefaultFileStorageManager(),
-		events:  NullEventBus{},
+		cache:   cache,
+		storage: storage,
+		events:  events,
 	}
 }
 
@@ -26,14 +45,4 @@ func (a *App) Storage() FileStorageManager {
 
 func (a *App) EventBus() EventBus {
 	return a.events
-}
-
-func (a *App) SetEventBus(bus EventBus) error {
-	if bus == nil {
-		return errors.New("event bus is nil")
-	}
-
-	a.events = bus
-
-	return nil
 }

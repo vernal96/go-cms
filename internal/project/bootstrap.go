@@ -30,9 +30,5 @@ func BootstrapApp() (*core.App, error) {
 		log.Fatal(err)
 	}
 
-	if err := app.SetEventBus(memoryeventbus.NewBus()); err != nil {
-		return nil, err
-	}
-
 	return app, nil
 }
