@@ -8,8 +8,8 @@ import (
 	"github.com/vernal96/go-cms/internal/testsite"
 )
 
-func Dev() project.Config {
-	return project.Config{
+func DevInfrastructure() project.InfrastructureConfig {
+	return project.InfrastructureConfig{
 		CacheStores: []project.CacheStoreRegistration{
 			{
 				Name:  memorycache.StoreName,
@@ -22,11 +22,16 @@ func Dev() project.Config {
 				Storage: memorystorage.NewStorage(),
 			},
 		},
-		SiteProfiles: []project.SiteProfileRegistration{
+		Events: memoryeventbus.NewBus(),
+	}
+}
+
+func DevSiteProfiles() project.SiteProfileConfig {
+	return project.SiteProfileConfig{
+		Profiles: []project.SiteProfileRegistration{
 			{
 				Profile: testsite.New(),
 			},
 		},
-		Events: memoryeventbus.NewBus(),
 	}
 }
