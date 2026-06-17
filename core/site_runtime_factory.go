@@ -77,3 +77,44 @@ func (f *SiteRuntimeFactory) Make(ctx context.Context, site Site) (*SiteRuntime,
 
 	return runtime, nil
 }
+
+func (f *SiteRuntimeFactory) checkModuleRequirements(module Module) error {
+	moduleWithRequirements, ok := module.(ModuleWithRequirements)
+	if !ok {
+		return nil
+	}
+
+	requirements := moduleWithRequirements.Requirements()
+
+	for _, cacheStoreName := range requirements.CacheStores {
+		if cacheStoreName == "" {
+			return fmt.Errorf("site module %q requires empty cache store name", module.Code())
+		}
+
+		if _, err := f.app.CacheManager().Store(cacheStoreName); err != nil {
+			return fmt.Errorf(
+				"site module %q requires cache store %q: %w",
+				module.Code(),
+				cacheStoreName,
+				err,
+			)
+		}
+	}
+
+	for _, fileDisk := range requirements.FileDisks {
+		if fileDisk == "" {
+			return fmt.Errorf("site module %q requires empty file disk name", module.Code())
+		}
+
+		if _, err := f.app.Storage().Disk(fileDisk); err != nil {
+			return fmt.Errorf(
+				"site module %q requires file disk %q: %w",
+				module.Code(),
+				fileDisk,
+				err,
+			)
+		}
+	}
+
+	return nil
+}
