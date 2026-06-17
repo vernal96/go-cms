@@ -57,6 +57,10 @@ func (f *SiteRuntimeFactory) Make(ctx context.Context, site Site) (*SiteRuntime,
 
 		seenModules[code] = struct{}{}
 
+		if err := f.checkModuleRequirements(module); err != nil {
+			return nil, err
+		}
+
 		if err := module.Register(registry); err != nil {
 			return nil, fmt.Errorf("register site module extensions %q: %w", code, err)
 		}

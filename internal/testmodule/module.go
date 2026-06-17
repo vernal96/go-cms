@@ -33,10 +33,3 @@ func (m *Module) Register(registry core.Registry) error {
 	fmt.Println("test module registered")
 	return nil
 }
-
-func (m *Module) Requirements() core.ModuleRequirements {
-	return core.ModuleRequirements{
-		CacheStores: []core.CacheStoreName{"missing_cache"},
-		FileDisks:   []core.FileDisk{"missing_disk"},
-	}
-}
