@@ -15,7 +15,6 @@ type CacheStore interface {
 
 type CacheManager interface {
 	Store(name CacheStoreName) (CacheStore, error)
-	Null() CacheStore
 }
 
 type NullCacheStore struct{}

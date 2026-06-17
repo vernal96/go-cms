@@ -48,8 +48,4 @@ func (m *FileStorageManager) Disk(name core.FileDisk) (core.FileStorage, error) 
 	return disk, nil
 }
 
-func (m *FileStorageManager) Null() core.FileStorage {
-	return core.NullFileStorage{}
-}
-
 var _ core.FileStorageManager = (*FileStorageManager)(nil)

@@ -19,7 +19,6 @@ type FileStorage interface {
 
 type FileStorageManager interface {
 	Disk(name FileDisk) (FileStorage, error)
-	Null() FileStorage
 }
 
 type NullFileStorage struct{}

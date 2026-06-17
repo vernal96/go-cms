@@ -48,8 +48,4 @@ func (m *CacheManager) Store(name core.CacheStoreName) (core.CacheStore, error) 
 	return store, nil
 }
 
-func (m *CacheManager) Null() core.CacheStore {
-	return core.NullCacheStore{}
-}
-
 var _ core.CacheManager = (*CacheManager)(nil)
