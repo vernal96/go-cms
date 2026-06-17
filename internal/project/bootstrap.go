@@ -4,7 +4,6 @@ import (
 	"log"
 
 	"github.com/vernal96/go-cms/adapters/cache/memorycache"
-	"github.com/vernal96/go-cms/adapters/eventbus/memoryeventbus"
 	"github.com/vernal96/go-cms/adapters/storage/memorystorage"
 	"github.com/vernal96/go-cms/core"
 )
@@ -12,7 +11,7 @@ import (
 const FileDiskMemory core.FileDisk = "memory"
 
 func BootstrapApp() (*core.App, error) {
-	app := core.NewApp()
+	app := core.NewApp(core.AppDeps{})
 
 	if err := app.CacheManager().RegisterStore(core.CacheStoreMemory, memorycache.NewStore()); err != nil {
 		log.Fatal(err)
