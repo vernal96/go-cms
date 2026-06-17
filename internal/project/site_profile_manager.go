@@ -11,10 +11,10 @@ type SiteProfileManager struct {
 	profiles map[string]core.SiteProfile
 }
 
-func NewSiteProfileManager(registrations []SiteProfileRegistration) (*SiteProfileManager, error) {
-	profiles := make(map[string]core.SiteProfile, len(registrations))
+func NewSiteProfileManager(config SiteProfileConfig) (*SiteProfileManager, error) {
+	profiles := make(map[string]core.SiteProfile, len(config.Profiles))
 
-	for _, registration := range registrations {
+	for _, registration := range config.Profiles {
 		profile := registration.Profile
 		if profile == nil {
 			return nil, errors.New("site profile is nil")
