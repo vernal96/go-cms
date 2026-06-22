@@ -7,6 +7,11 @@ type CacheStoreRegistration struct {
 	Store core.CacheStore
 }
 
+type CacheScopeRegistration struct {
+	Scope core.CacheScope
+	Store core.CacheStore
+}
+
 type FileDiskRegistration struct {
 	Name    core.FileDisk
 	Storage core.FileStorage
@@ -14,6 +19,7 @@ type FileDiskRegistration struct {
 
 type InfrastructureConfig struct {
 	CacheStores []CacheStoreRegistration
+	CacheScopes []CacheScopeRegistration
 	FileDisks   []FileDiskRegistration
 	Events      core.EventBus
 }
