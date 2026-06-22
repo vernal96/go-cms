@@ -6,7 +6,7 @@ import (
 
 func BootstrapApp(config InfrastructureConfig) (*core.App, error) {
 	// Создаем менеджер кэша
-	cache, err := NewCacheManager(config.CacheStores)
+	cache, err := NewCacheManager(config.CacheStores, config.CacheScopes)
 	if err != nil {
 		return nil, err
 	}
