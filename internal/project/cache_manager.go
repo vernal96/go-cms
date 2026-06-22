@@ -9,12 +9,16 @@ import (
 
 type CacheManager struct {
 	stores map[core.CacheStoreName]core.CacheStore
+	scopes map[core.CacheScope]core.CacheStore
 }
 
-func NewCacheManager(registrations []CacheStoreRegistration) (*CacheManager, error) {
-	stores := make(map[core.CacheStoreName]core.CacheStore, len(registrations))
+func NewCacheManager(
+	storeRegistrations []CacheStoreRegistration,
+	scopeRegistrations []CacheScopeRegistration,
+) (*CacheManager, error) {
+	stores := make(map[core.CacheStoreName]core.CacheStore, len(storeRegistrations))
 
-	for _, registration := range registrations {
+	for _, registration := range storeRegistrations {
 		if registration.Name == "" {
 			return nil, errors.New("cache store name is empty")
 		}
@@ -30,8 +34,27 @@ func NewCacheManager(registrations []CacheStoreRegistration) (*CacheManager, err
 		stores[registration.Name] = registration.Store
 	}
 
+	scopes := make(map[core.CacheScope]core.CacheStore, len(scopeRegistrations))
+
+	for _, registration := range scopeRegistrations {
+		if registration.Scope == "" {
+			return nil, errors.New("cache scope is empty")
+		}
+
+		if registration.Store == nil {
+			return nil, fmt.Errorf("cache scope %q store is nil", registration.Scope)
+		}
+
+		if _, exists := scopes[registration.Scope]; exists {
+			return nil, fmt.Errorf("cache scope %q is already registered", registration.Scope)
+		}
+
+		scopes[registration.Scope] = registration.Store
+	}
+
 	return &CacheManager{
 		stores: stores,
+		scopes: scopes,
 	}, nil
 }
 
@@ -43,6 +66,19 @@ func (m *CacheManager) Store(name core.CacheStoreName) (core.CacheStore, error) 
 	store, exists := m.stores[name]
 	if !exists {
 		return nil, fmt.Errorf("cache store %q is not registered", name)
+	}
+
+	return store, nil
+}
+
+func (m *CacheManager) Scope(scope core.CacheScope) (core.CacheStore, error) {
+	if scope == "" {
+		return nil, errors.New("cache scope is empty")
+	}
+
+	store, exists := m.scopes[scope]
+	if !exists {
+		return nil, fmt.Errorf("cache scope %q is not registered", scope)
 	}
 
 	return store, nil
