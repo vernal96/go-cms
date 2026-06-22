@@ -8,8 +8,10 @@ import (
 	"github.com/vernal96/go-cms/core"
 )
 
+const CacheScopeDefault core.CacheScope = "test.default"
+
 type Config struct {
-	CacheStore core.CacheStoreName
+	CacheScope core.CacheScope
 	FileDisk   core.FileDisk
 }
 
@@ -33,17 +35,17 @@ func (m *Module) Register(registry core.Registry) error {
 }
 
 func (m *Module) Boot(ctx context.Context, moduleContext core.ModuleContext) error {
-	if m.config.CacheStore == "" {
-		return errors.New("test module cache store is empty")
+	if m.config.CacheScope == "" {
+		return errors.New("test module cache scope is empty")
 	}
 
 	if m.config.FileDisk == "" {
 		return errors.New("test module file disk is empty")
 	}
 
-	cacheStore, err := moduleContext.App().CacheManager().Store(m.config.CacheStore)
+	cacheStore, err := moduleContext.App().CacheManager().Scope(m.config.CacheScope)
 	if err != nil {
-		return fmt.Errorf("get test module cache store %q: %w", m.config.CacheStore, err)
+		return fmt.Errorf("get test module cache scope %q: %w", m.config.CacheScope, err)
 	}
 
 	fileStorage, err := moduleContext.App().Storage().Disk(m.config.FileDisk)
