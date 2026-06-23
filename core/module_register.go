@@ -2,6 +2,10 @@ package core
 
 import "fmt"
 
+type ModuleEntities struct {
+	Widgets []Widget
+}
+
 func RegisterModuleEntities(registry Registry, entities ModuleEntities) error {
 	if registry == nil {
 		return fmt.Errorf("registry is nil")
