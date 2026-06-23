@@ -1,6 +1,10 @@
 package core
 
-import "context"
+import (
+	"context"
+
+	"github.com/vernal96/go-cms/core/fields"
+)
 
 type WidgetCode string
 type WidgetTemplateCode string
@@ -23,4 +27,15 @@ type WidgetResult struct {
 type WidgetTemplate interface {
 	Code() WidgetTemplateCode
 	Name() string
+}
+
+type WidgetParamCode string
+
+type WidgetParamDefinition struct {
+	Code        WidgetParamCode
+	Name        string
+	Field       fields.FieldType
+	Required    bool
+	Default     any
+	Description string
 }
