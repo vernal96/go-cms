@@ -6,6 +6,11 @@ type RuntimeRegistry struct {
 	widgetTemplates map[WidgetCode]map[WidgetTemplateCode]WidgetTemplate
 }
 
+func (r *RuntimeRegistry) Controllers() ControllerRegistry {
+	//TODO implement me
+	panic("implement me")
+}
+
 func NewRuntimeRegistry() *RuntimeRegistry {
 	return &RuntimeRegistry{
 		widgets:         make(map[WidgetCode]Widget),
