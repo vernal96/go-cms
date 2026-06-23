@@ -25,7 +25,7 @@ func (m *Module) Code() string {
 }
 
 func (m *Module) Register(registry core.Registry) error {
-	return core.RegisterModuleEntities(registry, core.ModuleEntities{
+	return core.RegisterModule(registry, core.ModuleRegistry{
 		Widgets: []core.Widget{
 			widgets.NewSiteInfoWidget(),
 		},
