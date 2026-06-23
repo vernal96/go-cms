@@ -2,11 +2,13 @@ package coremodule
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/vernal96/go-cms/core"
+	"github.com/vernal96/go-cms/core/modules/core/controllers"
 	"github.com/vernal96/go-cms/core/modules/core/widgets"
 )
+
+const ModuleCode = "core"
 
 type Config struct{}
 
@@ -21,27 +23,22 @@ func New(config Config) *Module {
 }
 
 func (m *Module) Code() string {
-	return "core"
+	return ModuleCode
 }
 
 func (m *Module) Register(registry core.Registry) error {
-	return core.RegisterModule(registry, core.ModuleRegistry{
+	return core.RegisterModule(registry.ForModule(m.Code()), core.ModuleRegistry{
 		Widgets: []core.Widget{
 			widgets.NewSiteInfoWidget(),
+		},
+		Controllers: []core.Controller{
+			controllers.NewSiteController(),
 		},
 	})
 }
 
 func (m *Module) Boot(ctx context.Context, moduleContext core.ModuleContext) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	site := moduleContext.Runtime().Site()
-
-	fmt.Println("core module booted for site:", site.Domain)
-
-	return nil
+	return ctx.Err()
 }
 
 var _ core.Module = (*Module)(nil)
