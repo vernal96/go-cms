@@ -25,11 +25,11 @@ func (m *Module) Code() string {
 }
 
 func (m *Module) Register(registry core.Registry) error {
-	if err := registry.Widgets().Register(widgets.NewSiteInfoWidget()); err != nil {
-		return err
-	}
-
-	return nil
+	return core.RegisterModuleEntities(registry, core.ModuleEntities{
+		Widgets: []core.Widget{
+			widgets.NewSiteInfoWidget(),
+		},
+	})
 }
 
 func (m *Module) Boot(ctx context.Context, moduleContext core.ModuleContext) error {
