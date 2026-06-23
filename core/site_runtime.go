@@ -29,7 +29,7 @@ func NewSiteRuntime(site Site, profile SiteProfile, registry Registry) (*SiteRun
 	}
 
 	if registry == nil {
-		registry = NewDefaultRegistry()
+		registry = NewRuntimeRegistry()
 	}
 
 	return &SiteRuntime{

@@ -36,7 +36,7 @@ func (f *SiteRuntimeFactory) Make(ctx context.Context, site Site) (*SiteRuntime,
 		return nil, fmt.Errorf("site profile %q not found", site.ProfileCode)
 	}
 
-	registry := NewDefaultRegistry()
+	registry := NewRuntimeRegistry()
 	modules := profile.Modules()
 
 	seenModules := make(map[string]struct{}, len(modules))
@@ -57,7 +57,9 @@ func (f *SiteRuntimeFactory) Make(ctx context.Context, site Site) (*SiteRuntime,
 
 		seenModules[code] = struct{}{}
 
-		if err := module.Register(registry); err != nil {
+		moduleRegistry := registry.ForModule(code)
+
+		if err := module.Register(moduleRegistry); err != nil {
 			return nil, fmt.Errorf("register site module extensions %q: %w", code, err)
 		}
 	}
