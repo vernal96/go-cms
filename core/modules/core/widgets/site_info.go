@@ -2,11 +2,15 @@ package widgets
 
 import (
 	"context"
+	"errors"
 
 	"github.com/vernal96/go-cms/core"
 )
 
-const SiteInfoWidgetCode core.WidgetCode = "site_info"
+const (
+	SiteInfoWidgetCode      core.WidgetCode = "site_info"
+	SiteInfoWidgetParamSite core.WidgetParamCode = "site"
+)
 
 type SiteInfoWidget struct{}
 
@@ -31,12 +35,25 @@ func (s *SiteInfoWidget) Render(ctx context.Context, params core.WidgetParams) (
 		return core.WidgetResult{}, err
 	}
 
+	siteValue, exists := params[string(SiteInfoWidgetParamSite)]
+	if !exists {
+		return core.WidgetResult{}, errors.New("site info widget site param is missing")
+	}
+
+	site, ok := siteValue.(core.Site)
+	if !ok {
+		return core.WidgetResult{}, errors.New("site info widget site param must be core.Site")
+	}
+
 	return core.WidgetResult{
 		Data: map[string]any{
-			"title":       "Core module widget",
-			"site_id":     params["site_is"],
-			"site_domain": params["site_domain"],
-			"locale":      params["locale"],
+			"site": map[string]any{
+				"id":           site.ID,
+				"profile_code": site.ProfileCode,
+				"domain":       site.Domain,
+				"locale":       site.Locale,
+				"settings":     site.Settings,
+			},
 		},
 	}, nil
 }
