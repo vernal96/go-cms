@@ -4,15 +4,16 @@ import (
 	"github.com/vernal96/go-cms/core"
 )
 
-func BootstrapApp(config InfrastructureConfig) (*core.App, error) {
-	// Создаем менеджер кэша
-	cache, err := NewCacheManager(config.CacheStores, config.CacheScopes)
+func BootstrapApp(infrastructure *InfrastructureRegistry) (*core.App, error) {
+	cache, err := NewCacheManager(
+		infrastructure.CacheStores(),
+		infrastructure.CacheScopes(),
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	// Создаем файловый менеджер
-	storage, err := NewFileStorageManager(config.FileDisks)
+	storage, err := NewFileStorageManager(infrastructure.FileDisks())
 	if err != nil {
 		return nil, err
 	}
@@ -20,7 +21,7 @@ func BootstrapApp(config InfrastructureConfig) (*core.App, error) {
 	app, err := core.NewApp(
 		cache,
 		storage,
-		config.Events,
+		infrastructure.EventBus(),
 	)
 	if err != nil {
 		return nil, err

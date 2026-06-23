@@ -6,22 +6,25 @@ import (
 	"log"
 
 	"github.com/vernal96/go-cms/core"
-	"github.com/vernal96/go-cms/internal/configs"
 	"github.com/vernal96/go-cms/internal/project"
+	"github.com/vernal96/go-cms/internal/registry"
 )
 
 func main() {
 	ctx := context.Background()
 
-	infrastructureConfig := configs.DevInfrastructure()
-	siteProfileConfig := configs.DevSiteProfiles()
+	infrastructureRegistry := project.NewInfrastructureRegistry()
+	siteProfileRegistry := project.NewSiteProfileRegistry()
 
-	app, err := project.BootstrapApp(infrastructureConfig)
+	registry.RegisterDevInfrastructure(infrastructureRegistry)
+	registry.RegisterDevSiteProfiles(siteProfileRegistry)
+
+	app, err := project.BootstrapApp(infrastructureRegistry)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	profileManager, err := project.NewSiteProfileManager(siteProfileConfig)
+	profileManager, err := project.NewSiteProfileManager(siteProfileRegistry)
 	if err != nil {
 		log.Fatal(err)
 	}
