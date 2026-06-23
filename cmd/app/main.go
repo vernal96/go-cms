@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/vernal96/go-cms/adapters/site/memorysite"
 	"github.com/vernal96/go-cms/core"
 	"github.com/vernal96/go-cms/internal/project"
 	"github.com/vernal96/go-cms/internal/registry"
@@ -31,7 +32,7 @@ func main() {
 
 	runtimeFactory := core.NewSiteRuntimeFactory(app, profileManager)
 
-	siteResolver, err := core.NewMemorySiteResolver(core.Site{
+	siteResolver, err := memorysite.NewResolver(core.Site{
 		ID:          1,
 		ProfileCode: "main",
 		Domain:      "example.com",
