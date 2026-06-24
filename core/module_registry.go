@@ -3,13 +3,20 @@ package core
 import "fmt"
 
 type ModuleRegistry struct {
-	Widgets     []Widget
-	Controllers []Controller
+	ResourceTypes []ResourceTypeDefinition
+	Widgets       []Widget
+	Controllers   []Controller
 }
 
 func RegisterModule(registry Registry, moduleRegistry ModuleRegistry) error {
 	if registry == nil {
 		return fmt.Errorf("registry is nil")
+	}
+
+	for _, resourceType := range moduleRegistry.ResourceTypes {
+		if err := registry.ResourceTypes().Register(resourceType); err != nil {
+			return fmt.Errorf("register resource type: %w", err)
+		}
 	}
 
 	for _, widget := range moduleRegistry.Widgets {

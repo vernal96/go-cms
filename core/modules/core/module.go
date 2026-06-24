@@ -5,6 +5,7 @@ import (
 
 	"github.com/vernal96/go-cms/core"
 	"github.com/vernal96/go-cms/core/modules/core/controllers"
+	"github.com/vernal96/go-cms/core/modules/core/resources"
 	"github.com/vernal96/go-cms/core/modules/core/widgets"
 )
 
@@ -28,6 +29,9 @@ func (m *Module) Code() string {
 
 func (m *Module) Register(registry core.Registry) error {
 	return core.RegisterModule(registry, core.ModuleRegistry{
+		ResourceTypes: []core.ResourceTypeDefinition{
+			resources.NewPageResourceType(),
+		},
 		Widgets: []core.Widget{
 			widgets.NewSiteInfoWidget(),
 		},

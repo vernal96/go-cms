@@ -3,9 +3,16 @@ package core
 type Registry interface {
 	ForModule(moduleCode string) Registry
 
+	ResourceTypes() ResourceTypeRegistry
 	Widgets() WidgetRegistry
 	WidgetTemplates() WidgetTemplateRegistry
 	Controllers() ControllerRegistry
+}
+
+type ResourceTypeRegistry interface {
+	Register(resourceType ResourceTypeDefinition) error
+	Get(code ResourceType) (ResourceTypeDefinition, bool)
+	All() []ResourceTypeDefinition
 }
 
 type WidgetRegistry interface {

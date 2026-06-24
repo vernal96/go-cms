@@ -6,15 +6,17 @@ type RuntimeRegistry struct {
 }
 
 type runtimeRegistryState struct {
-	widgets         map[WidgetCode]Widget
-	widgetTemplates map[WidgetCode]map[WidgetTemplateCode]WidgetTemplate
-	controllers     []Controller
+	resourceTypes    map[ResourceType]ResourceTypeDefinition
+	widgets          map[WidgetCode]Widget
+	widgetTemplates  map[WidgetCode]map[WidgetTemplateCode]WidgetTemplate
+	controllers      []Controller
 	controllerRoutes map[string]struct{}
 }
 
 func NewRuntimeRegistry() *RuntimeRegistry {
 	return &RuntimeRegistry{
 		state: &runtimeRegistryState{
+			resourceTypes:    make(map[ResourceType]ResourceTypeDefinition),
 			widgets:          make(map[WidgetCode]Widget),
 			widgetTemplates:  make(map[WidgetCode]map[WidgetTemplateCode]WidgetTemplate),
 			controllers:      make([]Controller, 0),
@@ -27,6 +29,12 @@ func (r *RuntimeRegistry) ForModule(moduleCode string) Registry {
 	return &RuntimeRegistry{
 		moduleCode: moduleCode,
 		state:      r.state,
+	}
+}
+
+func (r *RuntimeRegistry) ResourceTypes() ResourceTypeRegistry {
+	return &runtimeResourceTypeRegistry{
+		resourceTypes: r.state.resourceTypes,
 	}
 }
 
