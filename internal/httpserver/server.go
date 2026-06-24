@@ -102,9 +102,12 @@ func writeJSON(ctx context.Context, response http.ResponseWriter, value any) {
 		return
 	}
 
-	response.Header().Set("Content-Type", "application/json; charset=utf-8")
-
-	if err := json.NewEncoder(response).Encode(value); err != nil {
+	payload, err := json.Marshal(value)
+	if err != nil {
 		http.Error(response, fmt.Sprintf("encode response: %v", err), http.StatusInternalServerError)
+		return
 	}
+
+	response.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_, _ = response.Write(append(payload, '\n'))
 }
