@@ -64,7 +64,7 @@ func (f *SiteRuntimeFactory) Make(ctx context.Context, site Site) (*SiteRuntime,
 		}
 	}
 
-	runtime, err := NewSiteRuntime(site, profile, registry)
+	runtime, err := NewSiteRuntime(f.app, site, profile, registry)
 	if err != nil {
 		return nil, err
 	}

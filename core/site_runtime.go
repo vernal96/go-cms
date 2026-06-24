@@ -6,12 +6,17 @@ import (
 )
 
 type SiteRuntime struct {
+	app      *App
 	site     Site
 	profile  SiteProfile
 	registry Registry
 }
 
-func NewSiteRuntime(site Site, profile SiteProfile, registry Registry) (*SiteRuntime, error) {
+func NewSiteRuntime(app *App, site Site, profile SiteProfile, registry Registry) (*SiteRuntime, error) {
+	if app == nil {
+		return nil, errors.New("app is nil")
+	}
+
 	if site.ProfileCode == "" {
 		return nil, errors.New("site profile code is empty")
 	}
@@ -33,10 +38,15 @@ func NewSiteRuntime(site Site, profile SiteProfile, registry Registry) (*SiteRun
 	}
 
 	return &SiteRuntime{
+		app:      app,
 		site:     site,
 		profile:  profile,
 		registry: registry,
 	}, nil
+}
+
+func (r *SiteRuntime) App() *App {
+	return r.app
 }
 
 func (r *SiteRuntime) Site() Site {

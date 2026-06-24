@@ -8,11 +8,13 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vernal96/go-cms/adapters/database/postgresdb"
 	"github.com/vernal96/go-cms/core"
 )
 
 type Repository struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	ownsPool bool
 }
 
 func Connect(ctx context.Context, dsn string) (*Repository, error) {
@@ -26,7 +28,14 @@ func Connect(ctx context.Context, dsn string) (*Repository, error) {
 		return nil, err
 	}
 
-	return NewRepository(pool)
+	repository, err := NewRepository(pool)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	repository.ownsPool = true
+
+	return repository, nil
 }
 
 func NewRepository(pool *pgxpool.Pool) (*Repository, error) {
@@ -40,28 +49,13 @@ func NewRepository(pool *pgxpool.Pool) (*Repository, error) {
 }
 
 func (r *Repository) Close() {
-	r.pool.Close()
+	if r.ownsPool {
+		r.pool.Close()
+	}
 }
 
 func (r *Repository) Migrate(ctx context.Context) error {
-	_, err := r.pool.Exec(ctx, `
-CREATE TABLE IF NOT EXISTS sites (
-	id BIGSERIAL PRIMARY KEY,
-	profile_code TEXT NOT NULL,
-	domain TEXT NOT NULL UNIQUE,
-	locale TEXT NOT NULL DEFAULT 'ru',
-	settings JSONB NOT NULL DEFAULT '{}'::jsonb,
-	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_sites_profile_code ON sites(profile_code);
-`)
-	if err != nil {
-		return fmt.Errorf("migrate sites table: %w", err)
-	}
-
-	return nil
+	return postgresdb.Migrate(ctx, r.pool)
 }
 
 func (r *Repository) EnsureSite(ctx context.Context, site core.Site) error {

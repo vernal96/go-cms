@@ -22,11 +22,14 @@ type InfrastructureRegistry struct {
 	cacheScopes []CacheScopeRegistration
 	fileDisks   []FileDiskRegistration
 	events      core.EventBus
+	logger      core.Logger
+	resources   core.ResourceRepository
 }
 
 func NewInfrastructureRegistry() *InfrastructureRegistry {
 	return &InfrastructureRegistry{
 		events: core.NullEventBus{},
+		logger: core.NullLogger{},
 	}
 }
 
@@ -52,7 +55,27 @@ func (r *InfrastructureRegistry) RegisterFileDisk(name core.FileDisk, storage co
 }
 
 func (r *InfrastructureRegistry) UseEventBus(events core.EventBus) {
+	if events == nil {
+		return
+	}
+
 	r.events = events
+}
+
+func (r *InfrastructureRegistry) UseLogger(logger core.Logger) {
+	if logger == nil {
+		return
+	}
+
+	r.logger = logger
+}
+
+func (r *InfrastructureRegistry) UseResourceRepository(resources core.ResourceRepository) {
+	if resources == nil {
+		return
+	}
+
+	r.resources = resources
 }
 
 func (r *InfrastructureRegistry) CacheStores() []CacheStoreRegistration {
@@ -69,4 +92,12 @@ func (r *InfrastructureRegistry) FileDisks() []FileDiskRegistration {
 
 func (r *InfrastructureRegistry) EventBus() core.EventBus {
 	return r.events
+}
+
+func (r *InfrastructureRegistry) Logger() core.Logger {
+	return r.logger
+}
+
+func (r *InfrastructureRegistry) ResourceRepository() core.ResourceRepository {
+	return r.resources
 }

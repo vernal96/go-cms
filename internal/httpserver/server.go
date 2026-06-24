@@ -60,6 +60,11 @@ func (s *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) 
 
 	result, err := route.Handler(ctx, runtime, request)
 	if err != nil {
+		if errors.Is(err, core.ErrResourceNotFound) {
+			http.Error(response, "resource not found", http.StatusNotFound)
+			return
+		}
+
 		http.Error(response, err.Error(), http.StatusInternalServerError)
 		return
 	}

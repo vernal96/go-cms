@@ -22,6 +22,8 @@ func BootstrapApp(infrastructure *InfrastructureRegistry) (*core.App, error) {
 		cache,
 		storage,
 		infrastructure.EventBus(),
+		infrastructure.Logger(),
+		infrastructure.ResourceRepository(),
 	)
 	if err != nil {
 		return nil, err
