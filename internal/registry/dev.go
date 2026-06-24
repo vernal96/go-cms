@@ -19,7 +19,7 @@ func RegisterDevInfrastructure(r *project.InfrastructureRegistry) {
 	r.RegisterCacheScope(testmodule.CacheScopeDefault, cacheStore)
 
 	r.RegisterFileDisk(
-		memorystorage.DiskName,
+		testsite.FileDiskTest,
 		memorystorage.NewStorage(),
 	)
 
