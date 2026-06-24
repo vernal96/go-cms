@@ -6,13 +6,14 @@ type RuntimeRegistry struct {
 }
 
 type runtimeRegistryState struct {
-	resourceTypes     map[ResourceType]ResourceTypeDefinition
-	resourceTemplates map[ResourceType]map[ResourceTemplateCode]ResourceTemplateDefinition
-	resourceFields    map[ResourceType]map[ResourceTemplateCode]map[ResourceFieldCode]ResourceFieldDefinition
-	widgets           map[WidgetCode]Widget
-	widgetTemplates   map[WidgetCode]map[WidgetTemplateCode]WidgetTemplate
-	controllers       []Controller
-	controllerRoutes  map[string]struct{}
+	resourceTypes             map[ResourceType]ResourceTypeDefinition
+	resourceTemplates         map[ResourceType]map[ResourceTemplateCode]ResourceTemplateDefinition
+	resourceFields            map[ResourceType]map[ResourceTemplateCode]map[ResourceFieldCode]ResourceFieldDefinition
+	resourceTemplateRenderers map[ResourceType]map[ResourceTemplateCode]ResourceTemplateRenderer
+	widgets                   map[WidgetCode]Widget
+	widgetTemplates           map[WidgetCode]map[WidgetTemplateCode]WidgetTemplate
+	controllers               []Controller
+	controllerRoutes          map[string]struct{}
 }
 
 func NewRuntimeRegistry() *RuntimeRegistry {
@@ -21,10 +22,13 @@ func NewRuntimeRegistry() *RuntimeRegistry {
 			resourceTypes:     make(map[ResourceType]ResourceTypeDefinition),
 			resourceTemplates: make(map[ResourceType]map[ResourceTemplateCode]ResourceTemplateDefinition),
 			resourceFields:    make(map[ResourceType]map[ResourceTemplateCode]map[ResourceFieldCode]ResourceFieldDefinition),
-			widgets:           make(map[WidgetCode]Widget),
-			widgetTemplates:   make(map[WidgetCode]map[WidgetTemplateCode]WidgetTemplate),
-			controllers:       make([]Controller, 0),
-			controllerRoutes:  make(map[string]struct{}),
+			resourceTemplateRenderers: make(
+				map[ResourceType]map[ResourceTemplateCode]ResourceTemplateRenderer,
+			),
+			widgets:          make(map[WidgetCode]Widget),
+			widgetTemplates:  make(map[WidgetCode]map[WidgetTemplateCode]WidgetTemplate),
+			controllers:      make([]Controller, 0),
+			controllerRoutes: make(map[string]struct{}),
 		},
 	}
 }
@@ -54,6 +58,14 @@ func (r *RuntimeRegistry) ResourceFields() ResourceFieldRegistry {
 		resourceTypes:     r.state.resourceTypes,
 		resourceTemplates: r.state.resourceTemplates,
 		resourceFields:    r.state.resourceFields,
+	}
+}
+
+func (r *RuntimeRegistry) ResourceTemplateRenderers() ResourceTemplateRendererRegistry {
+	return &runtimeResourceTemplateRendererRegistry{
+		resourceTypes:             r.state.resourceTypes,
+		resourceTemplates:         r.state.resourceTemplates,
+		resourceTemplateRenderers: r.state.resourceTemplateRenderers,
 	}
 }
 

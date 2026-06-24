@@ -51,4 +51,16 @@ func TestModuleRegistersPageResourceTypeAndDefaultTemplate(t *testing.T) {
 	if field.Required() {
 		t.Fatal("content resource field must not be required")
 	}
+
+	renderer, exists := registry.ResourceTemplateRenderers().Get(
+		resources.PageResourceTypeCode,
+		resources.PageDefaultTemplateCode,
+	)
+	if !exists {
+		t.Fatal("default page resource template renderer is not registered")
+	}
+	if renderer.ResourceType() != resources.PageResourceTypeCode ||
+		renderer.ResourceTemplate() != resources.PageDefaultTemplateCode {
+		t.Fatalf("unexpected page renderer: %#v", renderer)
+	}
 }

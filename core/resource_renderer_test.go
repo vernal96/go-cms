@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 )
 
@@ -75,10 +74,28 @@ func TestResourceRendererValidatesRegistry(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+
+	t.Run("resource template renderer", func(t *testing.T) {
+		registry := newResourceRendererRegistry(t)
+		runtime := newResourceRendererRuntime(t, registry)
+
+		_, err := renderer.Render(context.Background(), runtime, data)
+		if err == nil ||
+			err.Error() != `resource template renderer for resource type "page" and template "default" is not registered` {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
-func TestResourceRendererRendersDefaultPage(t *testing.T) {
-	runtime := newResourceRendererRuntime(t, newDefaultPageRegistry(t))
+func TestResourceRendererDispatchesToRegisteredRenderer(t *testing.T) {
+	registry := newResourceRendererRegistry(t)
+	templateRenderer := &recordingResourceTemplateRenderer{
+		output: "<html>rendered</html>",
+	}
+	if err := registry.ResourceTemplateRenderers().Register(templateRenderer); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newResourceRendererRuntime(t, registry)
 	data := ResourceData{
 		Resource: Resource{
 			ID:       1,
@@ -86,89 +103,27 @@ func TestResourceRendererRendersDefaultPage(t *testing.T) {
 			Template: "default",
 			Title:    "Home",
 		},
-		Values: []ResourceFieldValue{
-			{
-				ResourceID: 1,
-				Field:      "content",
-				Value:      "Hello world",
-			},
-		},
 	}
 
-	html, err := NewResourceRenderer().Render(context.Background(), runtime, data)
+	output, err := NewResourceRenderer().Render(context.Background(), runtime, data)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if !strings.Contains(html, "<title>Home</title>") {
-		t.Fatalf("rendered HTML does not contain title: %s", html)
+	if output != templateRenderer.output {
+		t.Fatalf("unexpected output: %q", output)
 	}
-	if !strings.Contains(html, "<h1>Home</h1>") {
-		t.Fatalf("rendered HTML does not contain heading: %s", html)
+	if !templateRenderer.called {
+		t.Fatal("registered renderer was not called")
 	}
-	if !strings.Contains(html, "<div>Hello world</div>") {
-		t.Fatalf("rendered HTML does not contain content: %s", html)
+	if templateRenderer.runtime != runtime {
+		t.Fatal("renderer received a different runtime")
 	}
-}
-
-func TestResourceRendererRejectsUnsupportedRegisteredTemplate(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	if err := registry.ResourceTypes().Register(rendererCollectionType{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.ResourceTemplates().Register(rendererCollectionTemplate{}); err != nil {
-		t.Fatal(err)
-	}
-	runtime := newResourceRendererRuntime(t, registry)
-
-	_, err := NewResourceRenderer().Render(context.Background(), runtime, ResourceData{
-		Resource: Resource{
-			ID:       1,
-			Type:     "collection",
-			Template: "list",
-		},
-	})
-	if err == nil ||
-		err.Error() != `resource renderer does not support resource type "collection" and template "list"` {
-		t.Fatalf("unexpected error: %v", err)
+	if templateRenderer.data.Resource.ID != data.Resource.ID {
+		t.Fatalf("renderer received unexpected data: %#v", templateRenderer.data)
 	}
 }
 
-func TestResourceRendererEscapesHTML(t *testing.T) {
-	runtime := newResourceRendererRuntime(t, newDefaultPageRegistry(t))
-	data := ResourceData{
-		Resource: Resource{
-			ID:       1,
-			Type:     "page",
-			Template: "default",
-			Title:    "<b>Home</b>",
-		},
-		Values: []ResourceFieldValue{
-			{
-				ResourceID: 1,
-				Field:      "content",
-				Value:      "<script>alert(1)</script>",
-			},
-		},
-	}
-
-	html, err := NewResourceRenderer().Render(context.Background(), runtime, data)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if strings.Contains(html, "<script>") {
-		t.Fatalf("rendered HTML contains a raw script tag: %s", html)
-	}
-	if !strings.Contains(html, "&lt;script&gt;alert(1)&lt;/script&gt;") {
-		t.Fatalf("rendered HTML does not contain escaped content: %s", html)
-	}
-	if strings.Contains(html, "<b>Home</b>") {
-		t.Fatalf("rendered HTML contains a raw title tag: %s", html)
-	}
-}
-
-func newDefaultPageRegistry(t *testing.T) *RuntimeRegistry {
+func newResourceRendererRegistry(t *testing.T) *RuntimeRegistry {
 	t.Helper()
 
 	registry := NewRuntimeRegistry()
@@ -193,26 +148,29 @@ func newResourceRendererRuntime(t *testing.T, registry Registry) *SiteRuntime {
 	)
 }
 
-type rendererCollectionType struct{}
-
-func (rendererCollectionType) Code() ResourceType {
-	return "collection"
+type recordingResourceTemplateRenderer struct {
+	output  string
+	called  bool
+	runtime *SiteRuntime
+	data    ResourceData
 }
 
-func (rendererCollectionType) Name() string {
-	return "Collection"
+func (r *recordingResourceTemplateRenderer) ResourceType() ResourceType {
+	return "page"
 }
 
-type rendererCollectionTemplate struct{}
-
-func (rendererCollectionTemplate) Code() ResourceTemplateCode {
-	return "list"
+func (r *recordingResourceTemplateRenderer) ResourceTemplate() ResourceTemplateCode {
+	return "default"
 }
 
-func (rendererCollectionTemplate) Name() string {
-	return "Collection list"
-}
+func (r *recordingResourceTemplateRenderer) Render(
+	ctx context.Context,
+	runtime *SiteRuntime,
+	data ResourceData,
+) (string, error) {
+	r.called = true
+	r.runtime = runtime
+	r.data = data
 
-func (rendererCollectionTemplate) ResourceType() ResourceType {
-	return "collection"
+	return r.output, nil
 }

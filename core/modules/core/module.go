@@ -38,6 +38,9 @@ func (m *Module) Register(registry core.Registry) error {
 		ResourceFields: []core.ResourceFieldDefinition{
 			resources.NewPageContentField(),
 		},
+		ResourceTemplateRenderers: []core.ResourceTemplateRenderer{
+			resources.NewPageDefaultRenderer(),
+		},
 		Widgets: []core.Widget{
 			widgets.NewSiteInfoWidget(),
 		},

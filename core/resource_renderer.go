@@ -1,26 +1,10 @@
 package core
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"html/template"
 )
-
-const defaultPageTemplate = `<!doctype html>
-<html lang="{{ .Locale }}">
-<head>
-    <meta charset="utf-8">
-    <title>{{ .Title }}</title>
-</head>
-<body>
-    <main>
-        <h1>{{ .Title }}</h1>
-        <div>{{ .Content }}</div>
-    </main>
-</body>
-</html>`
 
 type ResourceRenderer struct{}
 
@@ -62,46 +46,17 @@ func (r *ResourceRenderer) Render(
 		)
 	}
 
-	if resource.Type != ResourceType("page") ||
-		resourceTemplate != ResourceTemplateCode("default") {
+	renderer, exists := runtime.Registry().ResourceTemplateRenderers().Get(
+		resource.Type,
+		resourceTemplate,
+	)
+	if !exists {
 		return "", fmt.Errorf(
-			"resource renderer does not support resource type %q and template %q",
+			"resource template renderer for resource type %q and template %q is not registered",
 			resource.Type,
 			resourceTemplate,
 		)
 	}
 
-	values := make(map[ResourceFieldCode]any, len(data.Values))
-	for _, value := range data.Values {
-		values[value.Field] = value.Value
-	}
-
-	content := ""
-	if value, exists := values[ResourceFieldCode("content")]; exists {
-		if stringValue, ok := value.(string); ok {
-			content = stringValue
-		} else {
-			content = fmt.Sprint(value)
-		}
-	}
-
-	pageTemplate, err := template.New("page/default").Parse(defaultPageTemplate)
-	if err != nil {
-		return "", fmt.Errorf("parse default page template: %w", err)
-	}
-
-	var output bytes.Buffer
-	if err := pageTemplate.Execute(&output, struct {
-		Locale  string
-		Title   string
-		Content string
-	}{
-		Locale:  runtime.Locale(),
-		Title:   resource.Title,
-		Content: content,
-	}); err != nil {
-		return "", fmt.Errorf("render default page template: %w", err)
-	}
-
-	return output.String(), nil
+	return renderer.Render(ctx, runtime, data)
 }
