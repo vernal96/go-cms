@@ -31,7 +31,6 @@ func (m *Module) Code() string {
 }
 
 func (m *Module) Register(registry core.Registry) error {
-	fmt.Println("test module registered")
 	return nil
 }
 
@@ -59,8 +58,6 @@ func (m *Module) Boot(ctx context.Context, moduleContext core.ModuleContext) err
 	_ = cacheStore
 	_ = fileStorage
 	_ = runtime
-
-	fmt.Println("test module booted")
 
 	return nil
 }
