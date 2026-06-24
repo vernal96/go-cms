@@ -9,6 +9,7 @@ import (
 )
 
 const CacheScopeDefault core.CacheScope = "test.default"
+const FileDiskDefault core.FileDisk = "test"
 
 type Config struct {
 	CacheScope core.CacheScope
