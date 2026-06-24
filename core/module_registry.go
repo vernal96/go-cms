@@ -3,9 +3,10 @@ package core
 import "fmt"
 
 type ModuleRegistry struct {
-	ResourceTypes []ResourceTypeDefinition
-	Widgets       []Widget
-	Controllers   []Controller
+	ResourceTypes     []ResourceTypeDefinition
+	ResourceTemplates []ResourceTemplateDefinition
+	Widgets           []Widget
+	Controllers       []Controller
 }
 
 func RegisterModule(registry Registry, moduleRegistry ModuleRegistry) error {
@@ -16,6 +17,12 @@ func RegisterModule(registry Registry, moduleRegistry ModuleRegistry) error {
 	for _, resourceType := range moduleRegistry.ResourceTypes {
 		if err := registry.ResourceTypes().Register(resourceType); err != nil {
 			return fmt.Errorf("register resource type: %w", err)
+		}
+	}
+
+	for _, template := range moduleRegistry.ResourceTemplates {
+		if err := registry.ResourceTemplates().Register(template); err != nil {
+			return fmt.Errorf("register resource template: %w", err)
 		}
 	}
 

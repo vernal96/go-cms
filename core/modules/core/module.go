@@ -32,6 +32,9 @@ func (m *Module) Register(registry core.Registry) error {
 		ResourceTypes: []core.ResourceTypeDefinition{
 			resources.NewPageResourceType(),
 		},
+		ResourceTemplates: []core.ResourceTemplateDefinition{
+			resources.NewPageDefaultTemplate(),
+		},
 		Widgets: []core.Widget{
 			widgets.NewSiteInfoWidget(),
 		},

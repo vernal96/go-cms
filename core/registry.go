@@ -4,6 +4,7 @@ type Registry interface {
 	ForModule(moduleCode string) Registry
 
 	ResourceTypes() ResourceTypeRegistry
+	ResourceTemplates() ResourceTemplateRegistry
 	Widgets() WidgetRegistry
 	WidgetTemplates() WidgetTemplateRegistry
 	Controllers() ControllerRegistry
@@ -13,6 +14,12 @@ type ResourceTypeRegistry interface {
 	Register(resourceType ResourceTypeDefinition) error
 	Get(code ResourceType) (ResourceTypeDefinition, bool)
 	All() []ResourceTypeDefinition
+}
+
+type ResourceTemplateRegistry interface {
+	Register(template ResourceTemplateDefinition) error
+	Get(resourceType ResourceType, code ResourceTemplateCode) (ResourceTemplateDefinition, bool)
+	AllForResourceType(resourceType ResourceType) []ResourceTemplateDefinition
 }
 
 type WidgetRegistry interface {
