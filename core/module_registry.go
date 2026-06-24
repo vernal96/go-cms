@@ -5,6 +5,7 @@ import "fmt"
 type ModuleRegistry struct {
 	ResourceTypes     []ResourceTypeDefinition
 	ResourceTemplates []ResourceTemplateDefinition
+	ResourceFields    []ResourceFieldDefinition
 	Widgets           []Widget
 	Controllers       []Controller
 }
@@ -23,6 +24,12 @@ func RegisterModule(registry Registry, moduleRegistry ModuleRegistry) error {
 	for _, template := range moduleRegistry.ResourceTemplates {
 		if err := registry.ResourceTemplates().Register(template); err != nil {
 			return fmt.Errorf("register resource template: %w", err)
+		}
+	}
+
+	for _, field := range moduleRegistry.ResourceFields {
+		if err := registry.ResourceFields().Register(field); err != nil {
+			return fmt.Errorf("register resource field: %w", err)
 		}
 	}
 

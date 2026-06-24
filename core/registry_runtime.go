@@ -8,6 +8,7 @@ type RuntimeRegistry struct {
 type runtimeRegistryState struct {
 	resourceTypes     map[ResourceType]ResourceTypeDefinition
 	resourceTemplates map[ResourceType]map[ResourceTemplateCode]ResourceTemplateDefinition
+	resourceFields    map[ResourceType]map[ResourceTemplateCode]map[ResourceFieldCode]ResourceFieldDefinition
 	widgets           map[WidgetCode]Widget
 	widgetTemplates   map[WidgetCode]map[WidgetTemplateCode]WidgetTemplate
 	controllers       []Controller
@@ -19,6 +20,7 @@ func NewRuntimeRegistry() *RuntimeRegistry {
 		state: &runtimeRegistryState{
 			resourceTypes:     make(map[ResourceType]ResourceTypeDefinition),
 			resourceTemplates: make(map[ResourceType]map[ResourceTemplateCode]ResourceTemplateDefinition),
+			resourceFields:    make(map[ResourceType]map[ResourceTemplateCode]map[ResourceFieldCode]ResourceFieldDefinition),
 			widgets:           make(map[WidgetCode]Widget),
 			widgetTemplates:   make(map[WidgetCode]map[WidgetTemplateCode]WidgetTemplate),
 			controllers:       make([]Controller, 0),
@@ -44,6 +46,14 @@ func (r *RuntimeRegistry) ResourceTemplates() ResourceTemplateRegistry {
 	return &runtimeResourceTemplateRegistry{
 		resourceTypes:     r.state.resourceTypes,
 		resourceTemplates: r.state.resourceTemplates,
+	}
+}
+
+func (r *RuntimeRegistry) ResourceFields() ResourceFieldRegistry {
+	return &runtimeResourceFieldRegistry{
+		resourceTypes:     r.state.resourceTypes,
+		resourceTemplates: r.state.resourceTemplates,
+		resourceFields:    r.state.resourceFields,
 	}
 }
 

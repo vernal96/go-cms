@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/vernal96/go-cms/core"
+	modulefields "github.com/vernal96/go-cms/core/modules/core/fields"
 	"github.com/vernal96/go-cms/core/modules/core/resources"
 )
 
@@ -31,5 +32,23 @@ func TestModuleRegistersPageResourceTypeAndDefaultTemplate(t *testing.T) {
 	}
 	if template.Name() != "Default page" {
 		t.Fatalf("unexpected default page resource template name: %q", template.Name())
+	}
+
+	field, exists := registry.ResourceFields().Get(
+		resources.PageResourceTypeCode,
+		resources.PageDefaultTemplateCode,
+		resources.PageContentFieldCode,
+	)
+	if !exists {
+		t.Fatal("content page resource field is not registered")
+	}
+	if field.Name() != "Content" {
+		t.Fatalf("unexpected content resource field name: %q", field.Name())
+	}
+	if field.Field().Code() != modulefields.TextFieldTypeCode {
+		t.Fatalf("unexpected content field type: %q", field.Field().Code())
+	}
+	if field.Required() {
+		t.Fatal("content resource field must not be required")
 	}
 }

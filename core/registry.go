@@ -5,6 +5,7 @@ type Registry interface {
 
 	ResourceTypes() ResourceTypeRegistry
 	ResourceTemplates() ResourceTemplateRegistry
+	ResourceFields() ResourceFieldRegistry
 	Widgets() WidgetRegistry
 	WidgetTemplates() WidgetTemplateRegistry
 	Controllers() ControllerRegistry
@@ -20,6 +21,19 @@ type ResourceTemplateRegistry interface {
 	Register(template ResourceTemplateDefinition) error
 	Get(resourceType ResourceType, code ResourceTemplateCode) (ResourceTemplateDefinition, bool)
 	AllForResourceType(resourceType ResourceType) []ResourceTemplateDefinition
+}
+
+type ResourceFieldRegistry interface {
+	Register(field ResourceFieldDefinition) error
+	Get(
+		resourceType ResourceType,
+		template ResourceTemplateCode,
+		code ResourceFieldCode,
+	) (ResourceFieldDefinition, bool)
+	AllForTemplate(
+		resourceType ResourceType,
+		template ResourceTemplateCode,
+	) []ResourceFieldDefinition
 }
 
 type WidgetRegistry interface {
