@@ -11,7 +11,12 @@ import (
 )
 
 func TestResourceControllerRoute(t *testing.T) {
-	routes := NewResourceController().Routes()
+	controller := NewResourceController()
+	if controller.reader == nil {
+		t.Fatal("resource controller reader is nil")
+	}
+
+	routes := controller.Routes()
 
 	if len(routes) != 1 {
 		t.Fatalf("unexpected route count: %d", len(routes))

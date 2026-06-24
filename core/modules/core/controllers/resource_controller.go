@@ -2,16 +2,16 @@ package controllers
 
 import (
 	"context"
-	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/vernal96/go-cms/core"
 )
 
 const ResourceRoutePath = "/_cms/resource"
 
-type ResourceController struct{}
+type ResourceController struct {
+	reader *core.ResourceReader
+}
 
 type resourceFieldDefinitionResponse struct {
 	Code             core.ResourceFieldCode    `json:"code"`
@@ -28,7 +28,9 @@ type resourceFieldValueResponse struct {
 }
 
 func NewResourceController() *ResourceController {
-	return &ResourceController{}
+	return &ResourceController{
+		reader: core.NewResourceReader(),
+	}
 }
 
 func (c *ResourceController) Routes() []core.Route {
@@ -46,37 +48,20 @@ func (c *ResourceController) resource(
 	runtime *core.SiteRuntime,
 	request *http.Request,
 ) (any, error) {
-	if runtime == nil {
-		return nil, errors.New("site runtime is nil")
-	}
-
 	resourcePath := request.URL.Query().Get("path")
 	if resourcePath == "" {
 		resourcePath = "/"
 	}
-	if !strings.HasPrefix(resourcePath, "/") {
-		return nil, errors.New("resource path must start with /")
-	}
 
-	resource, err := runtime.App().Resources().FindByPath(ctx, runtime.Site().ID, resourcePath)
-	if err != nil {
-		return nil, err
-	}
-
-	registeredFields := runtime.Registry().ResourceFields().AllForTemplate(
-		resource.Type,
-		core.ResourceTemplateCode(resource.Template),
-	)
-
-	fieldValues, err := runtime.App().ResourceFieldValues().FindByResourceID(ctx, resource.ID)
+	data, err := c.reader.ReadByPath(ctx, runtime, resourcePath)
 	if err != nil {
 		return nil, err
 	}
 
 	return map[string]any{
-		"resource":          resource,
-		"registered_fields": resourceFieldDefinitionsResponse(registeredFields),
-		"field_values":      resourceFieldValuesResponse(fieldValues),
+		"resource":          data.Resource,
+		"registered_fields": resourceFieldDefinitionsResponse(data.Fields),
+		"field_values":      resourceFieldValuesResponse(data.Values),
 	}, nil
 }
 
