@@ -3,11 +3,12 @@ package core
 import "errors"
 
 type App struct {
-	cache     CacheManager
-	storage   FileStorageManager
-	events    EventBus
-	logger    Logger
-	resources ResourceRepository
+	cache               CacheManager
+	storage             FileStorageManager
+	events              EventBus
+	logger              Logger
+	resources           ResourceRepository
+	resourceFieldValues ResourceFieldValueRepository
 }
 
 func NewApp(
@@ -16,6 +17,7 @@ func NewApp(
 	events EventBus,
 	logger Logger,
 	resources ResourceRepository,
+	resourceFieldValues ResourceFieldValueRepository,
 ) (*App, error) {
 	if cache == nil {
 		return nil, errors.New("cache manager is nil")
@@ -37,12 +39,17 @@ func NewApp(
 		return nil, errors.New("resource repository is nil")
 	}
 
+	if resourceFieldValues == nil {
+		return nil, errors.New("resource field value repository is nil")
+	}
+
 	return &App{
-		cache:     cache,
-		storage:   storage,
-		events:    events,
-		logger:    logger,
-		resources: resources,
+		cache:               cache,
+		storage:             storage,
+		events:              events,
+		logger:              logger,
+		resources:           resources,
+		resourceFieldValues: resourceFieldValues,
 	}, nil
 }
 
@@ -64,4 +71,8 @@ func (a *App) Logger() Logger {
 
 func (a *App) Resources() ResourceRepository {
 	return a.resources
+}
+
+func (a *App) ResourceFieldValues() ResourceFieldValueRepository {
+	return a.resourceFieldValues
 }

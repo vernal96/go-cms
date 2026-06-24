@@ -18,12 +18,13 @@ type FileDiskRegistration struct {
 }
 
 type InfrastructureRegistry struct {
-	cacheStores []CacheStoreRegistration
-	cacheScopes []CacheScopeRegistration
-	fileDisks   []FileDiskRegistration
-	events      core.EventBus
-	logger      core.Logger
-	resources   core.ResourceRepository
+	cacheStores         []CacheStoreRegistration
+	cacheScopes         []CacheScopeRegistration
+	fileDisks           []FileDiskRegistration
+	events              core.EventBus
+	logger              core.Logger
+	resources           core.ResourceRepository
+	resourceFieldValues core.ResourceFieldValueRepository
 }
 
 func NewInfrastructureRegistry() *InfrastructureRegistry {
@@ -78,6 +79,16 @@ func (r *InfrastructureRegistry) UseResourceRepository(resources core.ResourceRe
 	r.resources = resources
 }
 
+func (r *InfrastructureRegistry) UseResourceFieldValueRepository(
+	resourceFieldValues core.ResourceFieldValueRepository,
+) {
+	if resourceFieldValues == nil {
+		return
+	}
+
+	r.resourceFieldValues = resourceFieldValues
+}
+
 func (r *InfrastructureRegistry) CacheStores() []CacheStoreRegistration {
 	return r.cacheStores
 }
@@ -100,4 +111,8 @@ func (r *InfrastructureRegistry) Logger() core.Logger {
 
 func (r *InfrastructureRegistry) ResourceRepository() core.ResourceRepository {
 	return r.resources
+}
+
+func (r *InfrastructureRegistry) ResourceFieldValueRepository() core.ResourceFieldValueRepository {
+	return r.resourceFieldValues
 }
