@@ -44,6 +44,7 @@ func (m *Module) Register(registry core.Registry) error {
 		Controllers: []core.Controller{
 			controllers.NewSiteController(),
 			controllers.NewResourceController(),
+			controllers.NewPageController(),
 		},
 	})
 }

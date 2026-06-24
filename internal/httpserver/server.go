@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/vernal96/go-cms/core"
 )
@@ -54,6 +55,9 @@ func (s *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) 
 
 	route, exists := findRoute(runtime, request.Method, request.URL.Path)
 	if !exists {
+		route, exists = findFallbackRoute(runtime, request.Method, request.URL.Path)
+	}
+	if !exists {
 		http.Error(response, "route not found", http.StatusNotFound)
 		return
 	}
@@ -69,7 +73,7 @@ func (s *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	writeJSON(ctx, response, result)
+	writeHandlerResult(ctx, response, result)
 }
 
 func findRoute(runtime *core.SiteRuntime, method string, path string) (core.Route, bool) {
@@ -88,6 +92,22 @@ func findRoute(runtime *core.SiteRuntime, method string, path string) (core.Rout
 	return core.Route{}, false
 }
 
+func findFallbackRoute(
+	runtime *core.SiteRuntime,
+	method string,
+	path string,
+) (core.Route, bool) {
+	if method != http.MethodGet {
+		return core.Route{}, false
+	}
+
+	if strings.HasPrefix(path, "/_cms/") {
+		return core.Route{}, false
+	}
+
+	return findRoute(runtime, http.MethodGet, "/")
+}
+
 func hostWithoutPort(host string) string {
 	if host == "" {
 		return ""
@@ -101,12 +121,38 @@ func hostWithoutPort(host string) string {
 	return host
 }
 
-func writeJSON(ctx context.Context, response http.ResponseWriter, value any) {
+func writeHandlerResult(
+	ctx context.Context,
+	response http.ResponseWriter,
+	result any,
+) {
 	if err := ctx.Err(); err != nil {
 		http.Error(response, err.Error(), http.StatusRequestTimeout)
 		return
 	}
 
+	if httpResponse, ok := result.(core.HTTPResponse); ok {
+		statusCode := httpResponse.StatusCode
+		if statusCode == 0 {
+			statusCode = http.StatusOK
+		}
+
+		contentType := httpResponse.ContentType
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+
+		response.Header().Set("Content-Type", contentType)
+		response.WriteHeader(statusCode)
+		_, _ = response.Write(httpResponse.Body)
+
+		return
+	}
+
+	writeJSON(response, result)
+}
+
+func writeJSON(response http.ResponseWriter, value any) {
 	payload, err := json.Marshal(value)
 	if err != nil {
 		http.Error(response, fmt.Sprintf("encode response: %v", err), http.StatusInternalServerError)
