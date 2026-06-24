@@ -280,6 +280,8 @@ func (r *readerResourceRepository) FindChildren(
 type readerResourceFieldValueRepository struct {
 	values     []ResourceFieldValue
 	resourceID ResourceID
+	saved      ResourceFieldValue
+	saveErr    error
 }
 
 func (r *readerResourceFieldValueRepository) FindByResourceID(
@@ -297,6 +299,18 @@ func (r *readerResourceFieldValueRepository) FindByResourceAndField(
 	field ResourceFieldCode,
 ) (ResourceFieldValue, error) {
 	return ResourceFieldValue{}, nil
+}
+
+func (r *readerResourceFieldValueRepository) Save(
+	ctx context.Context,
+	value ResourceFieldValue,
+) (ResourceFieldValue, error) {
+	r.saved = value
+	if r.saveErr != nil {
+		return ResourceFieldValue{}, r.saveErr
+	}
+
+	return value, nil
 }
 
 type readerSiteProfile struct{}

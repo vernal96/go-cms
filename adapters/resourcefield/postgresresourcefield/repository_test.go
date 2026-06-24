@@ -1,6 +1,7 @@
 package postgresresourcefield
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -16,6 +17,29 @@ func TestNewRepositoryRejectsNilPool(t *testing.T) {
 	if repository != nil {
 		t.Fatal("repository must be nil when pool is nil")
 	}
+}
+
+func TestSaveValidatesValue(t *testing.T) {
+	repository := &Repository{}
+
+	t.Run("resource id", func(t *testing.T) {
+		_, err := repository.Save(context.Background(), core.ResourceFieldValue{
+			Field: "content",
+		})
+		if err == nil ||
+			err.Error() != "resource field value resource id must be positive" {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("field", func(t *testing.T) {
+		_, err := repository.Save(context.Background(), core.ResourceFieldValue{
+			ResourceID: 1,
+		})
+		if err == nil || err.Error() != "resource field value field is empty" {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
 func TestScanResourceFieldValue(t *testing.T) {

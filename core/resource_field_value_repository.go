@@ -14,4 +14,5 @@ type ResourceFieldValueRepository interface {
 		resourceID ResourceID,
 		field ResourceFieldCode,
 	) (ResourceFieldValue, error)
+	Save(ctx context.Context, value ResourceFieldValue) (ResourceFieldValue, error)
 }

@@ -1,7 +1,9 @@
 package controllers
 
 import (
+	"bytes"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
@@ -15,23 +17,72 @@ func TestResourceControllerRoute(t *testing.T) {
 	if controller.reader == nil {
 		t.Fatal("resource controller reader is nil")
 	}
+	if controller.writer == nil {
+		t.Fatal("resource controller writer is nil")
+	}
 
 	routes := controller.Routes()
 
-	if len(routes) != 1 {
+	if len(routes) != 2 {
 		t.Fatalf("unexpected route count: %d", len(routes))
 	}
-	if routes[0].Method != core.RouteMethodGet {
-		t.Fatalf("unexpected route method: %q", routes[0].Method)
+
+	routesByPath := make(map[string]core.Route, len(routes))
+	for _, route := range routes {
+		routesByPath[route.Path] = route
 	}
-	if string(routes[0].Method) != http.MethodGet {
-		t.Fatalf("route method must be GET: %q", routes[0].Method)
+
+	resourceRoute, exists := routesByPath[ResourceRoutePath]
+	if !exists {
+		t.Fatal("resource route is not registered")
 	}
-	if routes[0].Path != ResourceRoutePath {
-		t.Fatalf("unexpected route path: %q", routes[0].Path)
+	if resourceRoute.Method != core.RouteMethodGet ||
+		string(resourceRoute.Method) != http.MethodGet {
+		t.Fatalf("unexpected resource route method: %q", resourceRoute.Method)
 	}
-	if routes[0].Handler == nil {
+	if resourceRoute.Handler == nil {
 		t.Fatal("resource route handler is nil")
+	}
+
+	fieldValueRoute, exists := routesByPath[ResourceFieldValueRoutePath]
+	if !exists {
+		t.Fatal("resource field value route is not registered")
+	}
+	if fieldValueRoute.Method != core.RouteMethodPost ||
+		string(fieldValueRoute.Method) != http.MethodPost {
+		t.Fatalf(
+			"unexpected resource field value route method: %q",
+			fieldValueRoute.Method,
+		)
+	}
+	if fieldValueRoute.Handler == nil {
+		t.Fatal("resource field value route handler is nil")
+	}
+}
+
+func TestDecodeSaveResourceFieldValueRequest(t *testing.T) {
+	request := httptest.NewRequest(
+		http.MethodPost,
+		ResourceFieldValueRoutePath,
+		bytes.NewBufferString(`{
+			"path": "/",
+			"field": "content",
+			"value": "Hello world"
+		}`),
+	)
+
+	input, err := decodeSaveResourceFieldValueRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := saveResourceFieldValueRequest{
+		Path:  "/",
+		Field: resources.PageContentFieldCode,
+		Value: "Hello world",
+	}
+	if !reflect.DeepEqual(input, expected) {
+		t.Fatalf("unexpected request: %#v", input)
 	}
 }
 
@@ -76,6 +127,26 @@ func TestResourceFieldValuesResponse(t *testing.T) {
 		},
 	}
 
+	if !reflect.DeepEqual(response, expected) {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+}
+
+func TestResourceFieldValueResponseFromValue(t *testing.T) {
+	value := map[string]any{
+		"text": "Hello",
+	}
+
+	response := resourceFieldValueResponseFromValue(core.ResourceFieldValue{
+		ResourceID: 10,
+		Field:      resources.PageContentFieldCode,
+		Value:      value,
+	})
+
+	expected := resourceFieldValueResponse{
+		Field: resources.PageContentFieldCode,
+		Value: value,
+	}
 	if !reflect.DeepEqual(response, expected) {
 		t.Fatalf("unexpected response: %#v", response)
 	}

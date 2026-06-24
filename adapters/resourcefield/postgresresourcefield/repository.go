@@ -95,6 +95,44 @@ LIMIT 1;
 	return value, nil
 }
 
+func (r *Repository) Save(
+	ctx context.Context,
+	value core.ResourceFieldValue,
+) (core.ResourceFieldValue, error) {
+	if value.ResourceID <= 0 {
+		return core.ResourceFieldValue{}, errors.New(
+			"resource field value resource id must be positive",
+		)
+	}
+	if value.Field == "" {
+		return core.ResourceFieldValue{}, errors.New("resource field value field is empty")
+	}
+
+	rawValue, err := json.Marshal(value.Value)
+	if err != nil {
+		return core.ResourceFieldValue{}, fmt.Errorf("marshal resource field value: %w", err)
+	}
+
+	savedValue, err := scanResourceFieldValue(r.pool.QueryRow(ctx, `
+INSERT INTO resource_field_values (resource_id, field, value)
+VALUES ($1, $2, $3::jsonb)
+ON CONFLICT (resource_id, field) DO UPDATE SET
+	value = EXCLUDED.value,
+	updated_at = now()
+RETURNING resource_id, field, value;
+`, value.ResourceID, value.Field, string(rawValue)))
+	if err != nil {
+		return core.ResourceFieldValue{}, fmt.Errorf(
+			"save field value %q for resource %d: %w",
+			value.Field,
+			value.ResourceID,
+			err,
+		)
+	}
+
+	return savedValue, nil
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }

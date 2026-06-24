@@ -46,3 +46,10 @@ func (*testResourceFieldValueRepository) FindByResourceAndField(
 ) (core.ResourceFieldValue, error) {
 	return core.ResourceFieldValue{}, nil
 }
+
+func (*testResourceFieldValueRepository) Save(
+	ctx context.Context,
+	value core.ResourceFieldValue,
+) (core.ResourceFieldValue, error) {
+	return value, nil
+}
