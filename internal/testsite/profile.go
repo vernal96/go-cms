@@ -1,11 +1,12 @@
 package testsite
 
 import (
-	"github.com/vernal96/go-cms/adapters/storage/memorystorage"
 	"github.com/vernal96/go-cms/core"
 	coremodule "github.com/vernal96/go-cms/core/modules/core"
 	"github.com/vernal96/go-cms/internal/testmodule"
 )
+
+const FileDiskTest core.FileDisk = "test"
 
 type Profile struct{}
 
@@ -22,7 +23,7 @@ func (p *Profile) Modules() []core.Module {
 		coremodule.New(coremodule.Config{}),
 		testmodule.New(testmodule.Config{
 			CacheScope: testmodule.CacheScopeDefault,
-			FileDisk:   memorystorage.DiskName,
+			FileDisk:   FileDiskTest,
 		}),
 	}
 }
