@@ -104,6 +104,65 @@ func TestResourceReaderReadByPath(t *testing.T) {
 	}
 }
 
+func TestResourceReaderRejectsUnregisteredResourceType(t *testing.T) {
+	resources := &readerResourceRepository{
+		resource: Resource{
+			ID:       21,
+			SiteID:   7,
+			Type:     "page",
+			Template: "default",
+			Path:     "/",
+		},
+	}
+	fieldValues := &readerResourceFieldValueRepository{}
+	runtime := newResourceReaderRuntimeWithRegistry(
+		t,
+		resources,
+		fieldValues,
+		NewRuntimeRegistry(),
+	)
+
+	_, err := NewResourceReader().ReadByPath(context.Background(), runtime, "/")
+	if err == nil || err.Error() != `resource type "page" is not registered` {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fieldValues.resourceID != 0 {
+		t.Fatal("field values must not be read for an unregistered resource type")
+	}
+}
+
+func TestResourceReaderRejectsUnregisteredResourceTemplate(t *testing.T) {
+	resources := &readerResourceRepository{
+		resource: Resource{
+			ID:       21,
+			SiteID:   7,
+			Type:     "page",
+			Template: "default",
+			Path:     "/",
+		},
+	}
+	fieldValues := &readerResourceFieldValueRepository{}
+	registry := NewRuntimeRegistry()
+	if err := registry.ResourceTypes().Register(readerResourceType{}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newResourceReaderRuntimeWithRegistry(
+		t,
+		resources,
+		fieldValues,
+		registry,
+	)
+
+	_, err := NewResourceReader().ReadByPath(context.Background(), runtime, "/")
+	if err == nil ||
+		err.Error() != `resource template "default" for resource type "page" is not registered` {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fieldValues.resourceID != 0 {
+		t.Fatal("field values must not be read for an unregistered resource template")
+	}
+}
+
 func newResourceReaderRuntime(t *testing.T) *SiteRuntime {
 	t.Helper()
 
@@ -121,6 +180,28 @@ func newResourceReaderRuntimeWithRepositories(
 ) *SiteRuntime {
 	t.Helper()
 
+	registry := NewRuntimeRegistry()
+	if err := registry.ResourceTypes().Register(readerResourceType{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.ResourceTemplates().Register(readerResourceTemplate{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.ResourceFields().Register(readerResourceField{}); err != nil {
+		t.Fatal(err)
+	}
+
+	return newResourceReaderRuntimeWithRegistry(t, resources, fieldValues, registry)
+}
+
+func newResourceReaderRuntimeWithRegistry(
+	t *testing.T,
+	resources ResourceRepository,
+	fieldValues ResourceFieldValueRepository,
+	registry Registry,
+) *SiteRuntime {
+	t.Helper()
+
 	app, err := NewApp(
 		readerCacheManager{},
 		readerFileStorageManager{},
@@ -130,17 +211,6 @@ func newResourceReaderRuntimeWithRepositories(
 		fieldValues,
 	)
 	if err != nil {
-		t.Fatal(err)
-	}
-
-	registry := NewRuntimeRegistry()
-	if err := registry.ResourceTypes().Register(readerResourceType{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.ResourceTemplates().Register(readerResourceTemplate{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.ResourceFields().Register(readerResourceField{}); err != nil {
 		t.Fatal(err)
 	}
 

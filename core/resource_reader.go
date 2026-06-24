@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -42,9 +43,25 @@ func (r *ResourceReader) ReadByPath(
 		return ResourceData{}, err
 	}
 
+	if _, exists := runtime.Registry().ResourceTypes().Get(resource.Type); !exists {
+		return ResourceData{}, fmt.Errorf("resource type %q is not registered", resource.Type)
+	}
+
+	resourceTemplate := ResourceTemplateCode(resource.Template)
+	if _, exists := runtime.Registry().ResourceTemplates().Get(
+		resource.Type,
+		resourceTemplate,
+	); !exists {
+		return ResourceData{}, fmt.Errorf(
+			"resource template %q for resource type %q is not registered",
+			resourceTemplate,
+			resource.Type,
+		)
+	}
+
 	fields := runtime.Registry().ResourceFields().AllForTemplate(
 		resource.Type,
-		ResourceTemplateCode(resource.Template),
+		resourceTemplate,
 	)
 
 	values, err := runtime.App().ResourceFieldValues().FindByResourceID(ctx, resource.ID)
