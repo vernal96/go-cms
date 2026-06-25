@@ -69,9 +69,15 @@ func (r *ResourceReader) ReadByPath(
 		return ResourceData{}, err
 	}
 
+	widgets, err := runtime.App().WidgetInstances().FindForResource(ctx, resource)
+	if err != nil {
+		return ResourceData{}, err
+	}
+
 	return ResourceData{
 		Resource: resource,
 		Fields:   fields,
 		Values:   values,
+		Widgets:  widgets,
 	}, nil
 }

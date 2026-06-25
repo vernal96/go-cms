@@ -43,6 +43,7 @@ func (m *Module) Register(registry core.Registry) error {
 		},
 		Widgets: []core.Widget{
 			widgets.NewSiteInfoWidget(),
+			widgets.NewTextWidget(),
 		},
 		Controllers: []core.Controller{
 			controllers.NewSiteController(),

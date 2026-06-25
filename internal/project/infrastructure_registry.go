@@ -25,6 +25,7 @@ type InfrastructureRegistry struct {
 	logger              core.Logger
 	resources           core.ResourceRepository
 	resourceFieldValues core.ResourceFieldValueRepository
+	widgetInstances     core.WidgetInstanceRepository
 }
 
 func NewInfrastructureRegistry() *InfrastructureRegistry {
@@ -89,6 +90,16 @@ func (r *InfrastructureRegistry) UseResourceFieldValueRepository(
 	r.resourceFieldValues = resourceFieldValues
 }
 
+func (r *InfrastructureRegistry) UseWidgetInstanceRepository(
+	widgetInstances core.WidgetInstanceRepository,
+) {
+	if widgetInstances == nil {
+		return
+	}
+
+	r.widgetInstances = widgetInstances
+}
+
 func (r *InfrastructureRegistry) CacheStores() []CacheStoreRegistration {
 	return r.cacheStores
 }
@@ -115,4 +126,8 @@ func (r *InfrastructureRegistry) ResourceRepository() core.ResourceRepository {
 
 func (r *InfrastructureRegistry) ResourceFieldValueRepository() core.ResourceFieldValueRepository {
 	return r.resourceFieldValues
+}
+
+func (r *InfrastructureRegistry) WidgetInstanceRepository() core.WidgetInstanceRepository {
+	return r.widgetInstances
 }

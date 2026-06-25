@@ -6,6 +6,7 @@ import (
 	"github.com/vernal96/go-cms/core"
 	modulefields "github.com/vernal96/go-cms/core/modules/core/fields"
 	"github.com/vernal96/go-cms/core/modules/core/resources"
+	"github.com/vernal96/go-cms/core/modules/core/widgets"
 )
 
 func TestModuleRegistersPageResourceTypeAndDefaultTemplate(t *testing.T) {
@@ -62,5 +63,11 @@ func TestModuleRegistersPageResourceTypeAndDefaultTemplate(t *testing.T) {
 	if renderer.ResourceType() != resources.PageResourceTypeCode ||
 		renderer.ResourceTemplate() != resources.PageDefaultTemplateCode {
 		t.Fatalf("unexpected page renderer: %#v", renderer)
+	}
+
+	if _, exists := registry.Widgets().Get(
+		core.WidgetCode(ModuleCode + "." + string(widgets.TextWidgetCode)),
+	); !exists {
+		t.Fatal("text widget is not registered")
 	}
 }

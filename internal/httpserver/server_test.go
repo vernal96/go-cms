@@ -109,6 +109,7 @@ func newRoutingRuntime(t *testing.T) *core.SiteRuntime {
 		core.NullLogger{},
 		routingResourceRepository{},
 		routingResourceFieldValueRepository{},
+		routingWidgetInstanceRepository{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -238,4 +239,13 @@ func (routingResourceFieldValueRepository) Save(
 	value core.ResourceFieldValue,
 ) (core.ResourceFieldValue, error) {
 	return value, nil
+}
+
+type routingWidgetInstanceRepository struct{}
+
+func (routingWidgetInstanceRepository) FindForResource(
+	ctx context.Context,
+	resource core.Resource,
+) ([]core.WidgetInstance, error) {
+	return nil, nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/vernal96/go-cms/adapters/resource/postgresresource"
 	"github.com/vernal96/go-cms/adapters/resourcefield/postgresresourcefield"
 	"github.com/vernal96/go-cms/adapters/site/postgressite"
+	"github.com/vernal96/go-cms/adapters/widgetinstance/postgreswidgetinstance"
 	"github.com/vernal96/go-cms/core"
 	"github.com/vernal96/go-cms/internal/httpserver"
 	"github.com/vernal96/go-cms/internal/project"
@@ -35,6 +36,11 @@ func main() {
 	}
 
 	siteRepository, err := postgressite.NewRepository(database.Pool())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	widgetInstanceRepository, err := postgreswidgetinstance.NewRepository(database.Pool())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -70,6 +76,7 @@ func main() {
 		log.Fatal(err)
 	}
 	infrastructureRegistry.UseResourceFieldValueRepository(resourceFieldValueRepository)
+	infrastructureRegistry.UseWidgetInstanceRepository(widgetInstanceRepository)
 
 	defer func() {
 		if err := devInfrastructure.Close(); err != nil {

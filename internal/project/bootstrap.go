@@ -25,6 +25,7 @@ func BootstrapApp(infrastructure *InfrastructureRegistry) (*core.App, error) {
 		infrastructure.Logger(),
 		infrastructure.ResourceRepository(),
 		infrastructure.ResourceFieldValueRepository(),
+		infrastructure.WidgetInstanceRepository(),
 	)
 	if err != nil {
 		return nil, err

@@ -20,14 +20,19 @@ const defaultPageHTML = `<!doctype html>
     <main>
         <h1>{{ .Title }}</h1>
         <div>{{ .Content }}</div>
+        <section>{{ .MainWidgets }}</section>
     </main>
 </body>
 </html>`
 
-type PageDefaultRenderer struct{}
+type PageDefaultRenderer struct {
+	widgetRenderer *core.WidgetRenderer
+}
 
 func NewPageDefaultRenderer() *PageDefaultRenderer {
-	return &PageDefaultRenderer{}
+	return &PageDefaultRenderer{
+		widgetRenderer: core.NewWidgetRenderer(),
+	}
 }
 
 func (r *PageDefaultRenderer) ResourceType() core.ResourceType {
@@ -65,6 +70,16 @@ func (r *PageDefaultRenderer) Render(
 		}
 	}
 
+	mainWidgets, err := r.widgetRenderer.RenderArea(
+		ctx,
+		runtime,
+		data,
+		core.WidgetArea("main"),
+	)
+	if err != nil {
+		return "", err
+	}
+
 	pageTemplate, err := template.New("page/default").Parse(defaultPageHTML)
 	if err != nil {
 		return "", fmt.Errorf("parse default page template: %w", err)
@@ -72,13 +87,15 @@ func (r *PageDefaultRenderer) Render(
 
 	var output bytes.Buffer
 	if err := pageTemplate.Execute(&output, struct {
-		Locale  string
-		Title   string
-		Content string
+		Locale      string
+		Title       string
+		Content     string
+		MainWidgets template.HTML
 	}{
-		Locale:  runtime.Locale(),
-		Title:   data.Resource.Title,
-		Content: content,
+		Locale:      runtime.Locale(),
+		Title:       data.Resource.Title,
+		Content:     content,
+		MainWidgets: template.HTML(mainWidgets),
 	}); err != nil {
 		return "", fmt.Errorf("render default page template: %w", err)
 	}

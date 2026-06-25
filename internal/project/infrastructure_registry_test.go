@@ -30,6 +30,29 @@ func TestInfrastructureRegistryIgnoresNilResourceFieldValueRepository(t *testing
 	}
 }
 
+func TestInfrastructureRegistryStoresWidgetInstanceRepository(t *testing.T) {
+	registry := NewInfrastructureRegistry()
+	repository := &testWidgetInstanceRepository{}
+
+	registry.UseWidgetInstanceRepository(repository)
+
+	if registry.WidgetInstanceRepository() != repository {
+		t.Fatal("registry returned a different widget instance repository")
+	}
+}
+
+func TestInfrastructureRegistryIgnoresNilWidgetInstanceRepository(t *testing.T) {
+	registry := NewInfrastructureRegistry()
+	repository := &testWidgetInstanceRepository{}
+	registry.UseWidgetInstanceRepository(repository)
+
+	registry.UseWidgetInstanceRepository(nil)
+
+	if registry.WidgetInstanceRepository() != repository {
+		t.Fatal("nil repository must not replace the registered repository")
+	}
+}
+
 type testResourceFieldValueRepository struct{}
 
 func (*testResourceFieldValueRepository) FindByResourceID(
@@ -52,4 +75,13 @@ func (*testResourceFieldValueRepository) Save(
 	value core.ResourceFieldValue,
 ) (core.ResourceFieldValue, error) {
 	return value, nil
+}
+
+type testWidgetInstanceRepository struct{}
+
+func (*testWidgetInstanceRepository) FindForResource(
+	ctx context.Context,
+	resource core.Resource,
+) ([]core.WidgetInstance, error) {
+	return nil, nil
 }

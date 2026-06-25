@@ -76,7 +76,28 @@ func TestResourceReaderReadByPath(t *testing.T) {
 	fieldValues := &readerResourceFieldValueRepository{
 		values: values,
 	}
-	runtime := newResourceReaderRuntimeWithRepositories(t, resources, fieldValues)
+	widgets := []WidgetInstance{
+		{
+			ID:         30,
+			Source:     WidgetInstanceSourceResource,
+			ResourceID: resource.ID,
+			Widget:     "core.text",
+			Area:       "main",
+			Params: WidgetParams{
+				"text": "Widget",
+			},
+		},
+	}
+	widgetInstances := &readerWidgetInstanceRepository{
+		instances: widgets,
+	}
+	runtime := newResourceReaderRuntimeWithDependencies(
+		t,
+		resources,
+		fieldValues,
+		widgetInstances,
+		newResourceReaderRegistry(t),
+	)
 
 	data, err := NewResourceReader().ReadByPath(context.Background(), runtime, "/")
 	if err != nil {
@@ -92,6 +113,9 @@ func TestResourceReaderReadByPath(t *testing.T) {
 	if !reflect.DeepEqual(data.Values, values) {
 		t.Fatalf("unexpected values: %#v", data.Values)
 	}
+	if !reflect.DeepEqual(data.Widgets, widgets) {
+		t.Fatalf("unexpected widgets: %#v", data.Widgets)
+	}
 	if resources.siteID != 7 || resources.path != "/" {
 		t.Fatalf(
 			"unexpected resource query: site id %d, path %q",
@@ -101,6 +125,9 @@ func TestResourceReaderReadByPath(t *testing.T) {
 	}
 	if fieldValues.resourceID != resource.ID {
 		t.Fatalf("unexpected field values resource id: %d", fieldValues.resourceID)
+	}
+	if !reflect.DeepEqual(widgetInstances.resource, resource) {
+		t.Fatalf("unexpected widget instance resource: %#v", widgetInstances.resource)
 	}
 }
 
@@ -180,6 +207,18 @@ func newResourceReaderRuntimeWithRepositories(
 ) *SiteRuntime {
 	t.Helper()
 
+	return newResourceReaderRuntimeWithDependencies(
+		t,
+		resources,
+		fieldValues,
+		&readerWidgetInstanceRepository{},
+		newResourceReaderRegistry(t),
+	)
+}
+
+func newResourceReaderRegistry(t *testing.T) *RuntimeRegistry {
+	t.Helper()
+
 	registry := NewRuntimeRegistry()
 	if err := registry.ResourceTypes().Register(readerResourceType{}); err != nil {
 		t.Fatal(err)
@@ -191,13 +230,31 @@ func newResourceReaderRuntimeWithRepositories(
 		t.Fatal(err)
 	}
 
-	return newResourceReaderRuntimeWithRegistry(t, resources, fieldValues, registry)
+	return registry
 }
 
 func newResourceReaderRuntimeWithRegistry(
 	t *testing.T,
 	resources ResourceRepository,
 	fieldValues ResourceFieldValueRepository,
+	registry Registry,
+) *SiteRuntime {
+	t.Helper()
+
+	return newResourceReaderRuntimeWithDependencies(
+		t,
+		resources,
+		fieldValues,
+		&readerWidgetInstanceRepository{},
+		registry,
+	)
+}
+
+func newResourceReaderRuntimeWithDependencies(
+	t *testing.T,
+	resources ResourceRepository,
+	fieldValues ResourceFieldValueRepository,
+	widgetInstances WidgetInstanceRepository,
 	registry Registry,
 ) *SiteRuntime {
 	t.Helper()
@@ -209,6 +266,7 @@ func newResourceReaderRuntimeWithRegistry(
 		NullLogger{},
 		resources,
 		fieldValues,
+		widgetInstances,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -311,6 +369,24 @@ func (r *readerResourceFieldValueRepository) Save(
 	}
 
 	return value, nil
+}
+
+type readerWidgetInstanceRepository struct {
+	instances []WidgetInstance
+	resource  Resource
+	err       error
+}
+
+func (r *readerWidgetInstanceRepository) FindForResource(
+	ctx context.Context,
+	resource Resource,
+) ([]WidgetInstance, error) {
+	r.resource = resource
+	if r.err != nil {
+		return nil, r.err
+	}
+
+	return r.instances, nil
 }
 
 type readerSiteProfile struct{}

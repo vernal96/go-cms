@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/vernal96/go-cms/core"
+	corewidgets "github.com/vernal96/go-cms/core/modules/core/widgets"
 )
 
 func TestPageDefaultRendererRendersTitleAndContent(t *testing.T) {
@@ -83,7 +84,58 @@ func TestPageDefaultRendererEscapesHTML(t *testing.T) {
 	}
 }
 
+func TestPageDefaultRendererRendersMainWidgets(t *testing.T) {
+	registry := core.NewRuntimeRegistry()
+	if err := registry.ForModule("core").Widgets().Register(
+		corewidgets.NewTextWidget(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	runtime := newPageRendererRuntimeWithRegistry(t, registry)
+
+	html, err := NewPageDefaultRenderer().Render(
+		context.Background(),
+		runtime,
+		core.ResourceData{
+			Resource: core.Resource{
+				ID:    1,
+				Title: "Home",
+			},
+			Widgets: []core.WidgetInstance{
+				{
+					ID:       10,
+					Widget:   "core.text",
+					Template: core.WidgetTemplateDefault,
+					Area:     "main",
+					Params: core.WidgetParams{
+						"text": "<strong>Widget</strong>",
+					},
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(
+		html,
+		"<section>&lt;strong&gt;Widget&lt;/strong&gt;</section>",
+	) {
+		t.Fatalf("rendered HTML does not contain widget area: %s", html)
+	}
+}
+
 func newPageRendererRuntime(t *testing.T) *core.SiteRuntime {
+	t.Helper()
+
+	return newPageRendererRuntimeWithRegistry(t, core.NewRuntimeRegistry())
+}
+
+func newPageRendererRuntimeWithRegistry(
+	t *testing.T,
+	registry core.Registry,
+) *core.SiteRuntime {
 	t.Helper()
 
 	app, err := core.NewApp(
@@ -93,6 +145,7 @@ func newPageRendererRuntime(t *testing.T) *core.SiteRuntime {
 		core.NullLogger{},
 		pageRendererResourceRepository{},
 		pageRendererResourceFieldValueRepository{},
+		pageRendererWidgetInstanceRepository{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +159,7 @@ func newPageRendererRuntime(t *testing.T) *core.SiteRuntime {
 			Locale:      "ru",
 		},
 		pageRendererSiteProfile{},
-		core.NewRuntimeRegistry(),
+		registry,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -183,6 +236,15 @@ func (pageRendererResourceFieldValueRepository) Save(
 	value core.ResourceFieldValue,
 ) (core.ResourceFieldValue, error) {
 	return value, nil
+}
+
+type pageRendererWidgetInstanceRepository struct{}
+
+func (pageRendererWidgetInstanceRepository) FindForResource(
+	ctx context.Context,
+	resource core.Resource,
+) ([]core.WidgetInstance, error) {
+	return nil, nil
 }
 
 type pageRendererSiteProfile struct{}

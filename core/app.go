@@ -9,6 +9,7 @@ type App struct {
 	logger              Logger
 	resources           ResourceRepository
 	resourceFieldValues ResourceFieldValueRepository
+	widgetInstances     WidgetInstanceRepository
 }
 
 func NewApp(
@@ -18,6 +19,7 @@ func NewApp(
 	logger Logger,
 	resources ResourceRepository,
 	resourceFieldValues ResourceFieldValueRepository,
+	widgetInstances WidgetInstanceRepository,
 ) (*App, error) {
 	if cache == nil {
 		return nil, errors.New("cache manager is nil")
@@ -43,6 +45,10 @@ func NewApp(
 		return nil, errors.New("resource field value repository is nil")
 	}
 
+	if widgetInstances == nil {
+		return nil, errors.New("widget instance repository is nil")
+	}
+
 	return &App{
 		cache:               cache,
 		storage:             storage,
@@ -50,6 +56,7 @@ func NewApp(
 		logger:              logger,
 		resources:           resources,
 		resourceFieldValues: resourceFieldValues,
+		widgetInstances:     widgetInstances,
 	}, nil
 }
 
@@ -75,4 +82,8 @@ func (a *App) Resources() ResourceRepository {
 
 func (a *App) ResourceFieldValues() ResourceFieldValueRepository {
 	return a.resourceFieldValues
+}
+
+func (a *App) WidgetInstances() WidgetInstanceRepository {
+	return a.widgetInstances
 }

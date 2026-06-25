@@ -13,6 +13,7 @@ func TestNewAppRequiresResourceFieldValueRepository(t *testing.T) {
 		NullLogger{},
 		testResourceRepository{},
 		nil,
+		testWidgetInstanceRepository{},
 	)
 	if err == nil {
 		t.Fatal("expected nil resource field value repository error")
@@ -32,6 +33,7 @@ func TestAppProvidesResourceFieldValueRepository(t *testing.T) {
 		NullLogger{},
 		testResourceRepository{},
 		resourceFieldValues,
+		testWidgetInstanceRepository{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -39,6 +41,45 @@ func TestAppProvidesResourceFieldValueRepository(t *testing.T) {
 
 	if app.ResourceFieldValues() != resourceFieldValues {
 		t.Fatal("app returned a different resource field value repository")
+	}
+}
+
+func TestNewAppRequiresWidgetInstanceRepository(t *testing.T) {
+	app, err := NewApp(
+		testCacheManager{},
+		testFileStorageManager{},
+		NullEventBus{},
+		NullLogger{},
+		testResourceRepository{},
+		&testResourceFieldValueRepository{},
+		nil,
+	)
+	if err == nil {
+		t.Fatal("expected nil widget instance repository error")
+	}
+	if app != nil {
+		t.Fatal("app must be nil when widget instance repository is nil")
+	}
+}
+
+func TestAppProvidesWidgetInstanceRepository(t *testing.T) {
+	widgetInstances := &testWidgetInstanceRepository{}
+
+	app, err := NewApp(
+		testCacheManager{},
+		testFileStorageManager{},
+		NullEventBus{},
+		NullLogger{},
+		testResourceRepository{},
+		&testResourceFieldValueRepository{},
+		widgetInstances,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if app.WidgetInstances() != widgetInstances {
+		t.Fatal("app returned a different widget instance repository")
 	}
 }
 
@@ -104,4 +145,13 @@ func (*testResourceFieldValueRepository) Save(
 	value ResourceFieldValue,
 ) (ResourceFieldValue, error) {
 	return value, nil
+}
+
+type testWidgetInstanceRepository struct{}
+
+func (testWidgetInstanceRepository) FindForResource(
+	ctx context.Context,
+	resource Resource,
+) ([]WidgetInstance, error) {
+	return nil, nil
 }

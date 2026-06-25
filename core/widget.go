@@ -22,6 +22,7 @@ type WidgetParams map[string]any
 
 type WidgetResult struct {
 	Data map[string]any
+	HTML string `json:"-"`
 }
 
 type WidgetTemplate interface {
