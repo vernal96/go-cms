@@ -2,16 +2,22 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/vernal96/go-cms/adapters/database/mysqldb"
 	"github.com/vernal96/go-cms/adapters/database/postgresdb"
+	"github.com/vernal96/go-cms/adapters/resource/mysqlresource"
 	"github.com/vernal96/go-cms/adapters/resource/postgresresource"
+	"github.com/vernal96/go-cms/adapters/resourcefield/mysqlresourcefield"
 	"github.com/vernal96/go-cms/adapters/resourcefield/postgresresourcefield"
+	"github.com/vernal96/go-cms/adapters/site/mysqlsite"
 	"github.com/vernal96/go-cms/adapters/site/postgressite"
+	"github.com/vernal96/go-cms/adapters/widgetinstance/mysqlwidgetinstance"
 	"github.com/vernal96/go-cms/adapters/widgetinstance/postgreswidgetinstance"
 	"github.com/vernal96/go-cms/core"
 	"github.com/vernal96/go-cms/internal/httpserver"
@@ -22,36 +28,17 @@ import (
 func main() {
 	ctx := context.Background()
 
-	database, err := postgresdb.Connect(
-		ctx,
-		env("GO_CMS_DATABASE_DSN", "postgres://go_cms:go_cms@localhost:5432/go_cms?sslmode=disable"),
-	)
+	repositories, err := buildDatabaseRepositories(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer database.Close()
+	defer func() {
+		if err := repositories.close(); err != nil {
+			log.Printf("close database: %v", err)
+		}
+	}()
 
-	if err := database.Migrate(ctx); err != nil {
-		log.Fatal(err)
-	}
-
-	siteRepository, err := postgressite.NewRepository(database.Pool())
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	widgetInstanceRepository, err := postgreswidgetinstance.NewRepository(database.Pool())
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	resourceRepository, err := postgresresource.NewRepository(database.Pool())
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	resourceFieldValueRepository, err := postgresresourcefield.NewRepository(database.Pool())
-	if err != nil {
+	if err := repositories.migrate(ctx); err != nil {
 		log.Fatal(err)
 	}
 
@@ -70,13 +57,13 @@ func main() {
 			KafkaTopic:    env("GO_CMS_KAFKA_TOPIC", "cms-events"),
 			KafkaGroupID:  env("GO_CMS_KAFKA_GROUP_ID", "go-cms"),
 		},
-		resourceRepository,
+		repositories.resources,
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
-	infrastructureRegistry.UseResourceFieldValueRepository(resourceFieldValueRepository)
-	infrastructureRegistry.UseWidgetInstanceRepository(widgetInstanceRepository)
+	infrastructureRegistry.UseResourceFieldValueRepository(repositories.resourceFieldValues)
+	infrastructureRegistry.UseWidgetInstanceRepository(repositories.widgetInstances)
 
 	defer func() {
 		if err := devInfrastructure.Close(); err != nil {
@@ -98,7 +85,7 @@ func main() {
 
 	runtimeFactory := core.NewSiteRuntimeFactory(app, profileManager)
 
-	if err := siteRepository.EnsureSite(ctx, core.Site{
+	if err := repositories.sites.EnsureSite(ctx, core.Site{
 		ProfileCode: "main",
 		Domain:      "localhost",
 		Locale:      "ru",
@@ -109,7 +96,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if err := siteRepository.EnsureSite(ctx, core.Site{
+	if err := repositories.sites.EnsureSite(ctx, core.Site{
 		ProfileCode: "main",
 		Domain:      "example.com",
 		Locale:      "ru",
@@ -120,12 +107,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	localSite, err := siteRepository.FindByDomain(ctx, "localhost")
+	localSite, err := repositories.sites.FindByDomain(ctx, "localhost")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if _, err := resourceRepository.EnsureResource(ctx, core.Resource{
+	if _, err := repositories.resources.EnsureResource(ctx, core.Resource{
 		SiteID:      localSite.ID,
 		Type:        "page",
 		Template:    "default",
@@ -141,7 +128,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	server, err := httpserver.New(siteRepository, runtimeFactory)
+	server, err := httpserver.New(repositories.sites, runtimeFactory)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -152,6 +139,131 @@ func main() {
 		Value: addr,
 	})
 	log.Fatal(http.ListenAndServe(addr, server))
+}
+
+const (
+	defaultPostgresDSN = "postgres://go_cms:go_cms@localhost:5432/go_cms?sslmode=disable"
+	defaultMySQLDSN    = "go_cms:go_cms@tcp(localhost:3306)/go_cms?parseTime=true&multiStatements=true&charset=utf8mb4&collation=utf8mb4_unicode_ci"
+)
+
+type siteRepository interface {
+	core.SiteRepository
+
+	EnsureSite(ctx context.Context, site core.Site) error
+}
+
+type resourceRepository interface {
+	core.ResourceRepository
+
+	EnsureResource(ctx context.Context, resource core.Resource) (core.Resource, error)
+}
+
+type databaseRepositories struct {
+	close               func() error
+	migrate             func(context.Context) error
+	sites               siteRepository
+	resources           resourceRepository
+	resourceFieldValues core.ResourceFieldValueRepository
+	widgetInstances     core.WidgetInstanceRepository
+}
+
+func buildDatabaseRepositories(ctx context.Context) (databaseRepositories, error) {
+	driver := strings.ToLower(strings.TrimSpace(env("GO_CMS_DATABASE_DRIVER", "postgres")))
+
+	switch driver {
+	case "postgres":
+		return buildPostgresRepositories(ctx)
+	case "mysql":
+		return buildMySQLRepositories(ctx)
+	default:
+		return databaseRepositories{}, fmt.Errorf(
+			"unsupported database driver %q",
+			driver,
+		)
+	}
+}
+
+func buildPostgresRepositories(ctx context.Context) (databaseRepositories, error) {
+	database, err := postgresdb.Connect(
+		ctx,
+		env("GO_CMS_DATABASE_DSN", defaultPostgresDSN),
+	)
+	if err != nil {
+		return databaseRepositories{}, err
+	}
+
+	sites, err := postgressite.NewRepository(database.Pool())
+	if err != nil {
+		database.Close()
+		return databaseRepositories{}, err
+	}
+	resources, err := postgresresource.NewRepository(database.Pool())
+	if err != nil {
+		database.Close()
+		return databaseRepositories{}, err
+	}
+	resourceFieldValues, err := postgresresourcefield.NewRepository(database.Pool())
+	if err != nil {
+		database.Close()
+		return databaseRepositories{}, err
+	}
+	widgetInstances, err := postgreswidgetinstance.NewRepository(database.Pool())
+	if err != nil {
+		database.Close()
+		return databaseRepositories{}, err
+	}
+
+	return databaseRepositories{
+		close: func() error {
+			database.Close()
+			return nil
+		},
+		migrate:             database.Migrate,
+		sites:               sites,
+		resources:           resources,
+		resourceFieldValues: resourceFieldValues,
+		widgetInstances:     widgetInstances,
+	}, nil
+}
+
+func buildMySQLRepositories(ctx context.Context) (databaseRepositories, error) {
+	database, err := mysqldb.Connect(
+		ctx,
+		env("GO_CMS_DATABASE_DSN", defaultMySQLDSN),
+	)
+	if err != nil {
+		return databaseRepositories{}, err
+	}
+
+	sites, err := mysqlsite.NewRepository(database.DB())
+	if err != nil {
+		_ = database.Close()
+		return databaseRepositories{}, err
+	}
+	resources, err := mysqlresource.NewRepository(database.DB())
+	if err != nil {
+		_ = database.Close()
+		return databaseRepositories{}, err
+	}
+	resourceFieldValues, err := mysqlresourcefield.NewRepository(database.DB())
+	if err != nil {
+		_ = database.Close()
+		return databaseRepositories{}, err
+	}
+	widgetInstances, err := mysqlwidgetinstance.NewRepository(database.DB())
+	if err != nil {
+		_ = database.Close()
+		return databaseRepositories{}, err
+	}
+
+	return databaseRepositories{
+		close:               database.Close,
+		migrate:             database.Migrate,
+		sites:               sites,
+		resources:           resources,
+		resourceFieldValues: resourceFieldValues,
+		widgetInstances:     widgetInstances,
+	}, nil
 }
 
 func env(name string, fallback string) string {
