@@ -23,6 +23,8 @@ func NewRepository(sites []site.Site) *Repository {
 }
 
 func (r *Repository) FindByDomain(ctx context.Context, domain string) (site.Site, bool, error) {
+	_ = ctx
+
 	foundSite, exists := r.sitesByDomain[domain]
 	return foundSite, exists, nil
 }
