@@ -1,4 +1,4 @@
-package kernal
+package kernel
 
 type ProfileCode string
 

@@ -1,4 +1,4 @@
-package kernal
+package kernel
 
 type Registry interface {
 	ForModule(moduleCode ModuleCode) Registry
