@@ -13,7 +13,7 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Host            string        `envconfig:"SERVER_HOST" default:""`
+	Host            string        `envconfig:"SERVER_HOST" default:"localhost"`
 	Port            int           `envconfig:"SERVER_PORT" default:"8080"`
 	ReadTimeout     time.Duration `envconfig:"SERVER_READ_TIMEOUT" default:"5s"`
 	WriteTimeout    time.Duration `envconfig:"SERVER_WRITE_TIMEOUT" default:"10s"`

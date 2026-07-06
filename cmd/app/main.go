@@ -2,15 +2,22 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"os/signal"
+	"syscall"
 
 	"github.com/vernal96/go-cms/internal/bootstrap"
-	"github.com/vernal96/go-cms/internal/profiles/dev"
-	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/internal/config"
+	serverhttp "github.com/vernal96/go-cms/internal/server/http"
 )
 
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	cfg, err := config.Load()
+	if err != nil {
+		panic(err)
+	}
 
 	app, err := bootstrap.NewApp()
 	if err != nil {
@@ -22,17 +29,19 @@ func main() {
 		panic(err)
 	}
 
-	profile, exists := profiles.Get(dev.ProfileCode)
-	if !exists {
-		panic("profile not found")
-	}
-
-	runtimeFactory := kernel.NewSiteRuntimeFactory(app)
-
-	runtime, err := runtimeFactory.Make(ctx, profile)
+	runtimeResolver, err := bootstrap.NewRuntimeResolver(app, profiles, cfg)
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Println("runtime created for profile:", runtime.Profile().Code())
+	handler, err := serverhttp.NewHandler(runtimeResolver)
+	if err != nil {
+		panic(err)
+	}
+
+	server := serverhttp.NewServer(cfg.Server, handler)
+
+	if err := server.Run(ctx); err != nil {
+		panic(err)
+	}
 }
