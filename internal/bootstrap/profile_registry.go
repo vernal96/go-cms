@@ -5,11 +5,17 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 )
 
+var projectProfiles = []kernel.Profile{
+	dev.Profile{},
+}
+
 func NewProfileRegistry() (*kernel.ProfileRegistryManager, error) {
 	profiles := kernel.NewProfileRegistryManager()
 
-	if err := profiles.Register(dev.Profile{}); err != nil {
-		return nil, err
+	for _, profile := range projectProfiles {
+		if err := profiles.Register(profile); err != nil {
+			return nil, err
+		}
 	}
 
 	return profiles, nil
