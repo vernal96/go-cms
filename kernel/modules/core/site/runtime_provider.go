@@ -8,25 +8,32 @@ import (
 )
 
 type RuntimeProvider struct {
-	domainResolver      DomainResolver
-	siteRuntimeProvider *kernel.SiteRuntimeProvider
+	domainResolver DomainResolver
+	profiles       kernel.ProfileRegistry
+	runtimeFactory *kernel.SiteRuntimeFactory
 }
 
 func NewRuntimeProvider(
 	domainResolver DomainResolver,
-	siteRuntimeProvider *kernel.SiteRuntimeProvider,
+	profiles kernel.ProfileRegistry,
+	runtimeFactory *kernel.SiteRuntimeFactory,
 ) (*RuntimeProvider, error) {
 	if domainResolver == nil {
 		return nil, fmt.Errorf("domain resolver is nil")
 	}
 
-	if siteRuntimeProvider == nil {
-		return nil, fmt.Errorf("site runtime provider is nil")
+	if profiles == nil {
+		return nil, fmt.Errorf("profile registry is nil")
+	}
+
+	if runtimeFactory == nil {
+		return nil, fmt.Errorf("site runtime factory is nil")
 	}
 
 	return &RuntimeProvider{
-		domainResolver:      domainResolver,
-		siteRuntimeProvider: siteRuntimeProvider,
+		domainResolver: domainResolver,
+		profiles:       profiles,
+		runtimeFactory: runtimeFactory,
 	}, nil
 }
 
@@ -40,7 +47,12 @@ func (p *RuntimeProvider) RuntimeByDomain(ctx context.Context, domain string) (*
 		return nil, false, nil
 	}
 
-	runtime, err := p.siteRuntimeProvider.RuntimeByProfileCode(ctx, foundSite.ProfileCode)
+	profile, exists := p.profiles.Get(foundSite.ProfileCode)
+	if !exists {
+		return nil, false, fmt.Errorf("profile %q not found", foundSite.ProfileCode)
+	}
+
+	runtime, err := p.runtimeFactory.Make(ctx, profile)
 	if err != nil {
 		return nil, false, err
 	}
