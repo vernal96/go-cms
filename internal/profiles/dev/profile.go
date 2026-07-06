@@ -1,4 +1,4 @@
-package main
+package dev
 
 import (
 	"github.com/vernal96/go-cms/kernel"
@@ -8,7 +8,7 @@ import (
 type Profile struct{}
 
 func (p Profile) Code() kernel.ProfileCode {
-	return "main"
+	return "dev"
 }
 
 func (p Profile) Modules() []kernel.Module {
