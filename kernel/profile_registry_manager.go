@@ -5,17 +5,17 @@ import (
 	"fmt"
 )
 
-type ProfileRegistryMap struct {
+type ProfileRegistryManager struct {
 	profiles map[ProfileCode]Profile
 }
 
-func NewProfileRegistryMap() *ProfileRegistryMap {
-	return &ProfileRegistryMap{
+func NewProfileRegistryManager() *ProfileRegistryManager {
+	return &ProfileRegistryManager{
 		profiles: make(map[ProfileCode]Profile),
 	}
 }
 
-func (r *ProfileRegistryMap) Register(profile Profile) error {
+func (r *ProfileRegistryManager) Register(profile Profile) error {
 	if profile == nil {
 		return errors.New("profile is nil")
 	}
@@ -34,9 +34,9 @@ func (r *ProfileRegistryMap) Register(profile Profile) error {
 	return nil
 }
 
-func (r *ProfileRegistryMap) Get(code ProfileCode) (Profile, bool) {
+func (r *ProfileRegistryManager) Get(code ProfileCode) (Profile, bool) {
 	profile, exists := r.profiles[code]
 	return profile, exists
 }
 
-var _ ProfileRegistry = (*ProfileRegistryMap)(nil)
+var _ ProfileRegistry = (*ProfileRegistryManager)(nil)

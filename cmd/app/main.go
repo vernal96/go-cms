@@ -13,13 +13,13 @@ func main() {
 
 	app := kernel.NewApp(kernel.AppConfig{})
 
-	profiles := kernel.NewProfileRegistryMap()
+	profiles := kernel.NewProfileRegistryManager()
 
 	if err := profiles.Register(dev.Profile{}); err != nil {
 		panic(err)
 	}
 
-	profile, exists := profiles.Get("dev")
+	profile, exists := profiles.Get(dev.ProfileCode)
 	if !exists {
 		panic("profile not found")
 	}

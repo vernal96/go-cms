@@ -5,10 +5,12 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core"
 )
 
+const ProfileCode kernel.ProfileCode = "dev"
+
 type Profile struct{}
 
 func (p Profile) Code() kernel.ProfileCode {
-	return "dev"
+	return ProfileCode
 }
 
 func (p Profile) Modules() []kernel.Module {
