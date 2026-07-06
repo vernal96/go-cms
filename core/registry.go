@@ -5,7 +5,7 @@ type Registry interface {
 }
 
 type RuntimeRegistry struct {
-	ModuleCode ModuleCode
+	moduleCode ModuleCode
 }
 
 func NewRuntimeRegistry() *RuntimeRegistry {
@@ -14,6 +14,6 @@ func NewRuntimeRegistry() *RuntimeRegistry {
 
 func (r *RuntimeRegistry) ForModule(moduleCode ModuleCode) Registry {
 	return &RuntimeRegistry{
-		ModuleCode: moduleCode,
+		moduleCode: moduleCode,
 	}
 }
