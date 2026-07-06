@@ -2,8 +2,10 @@ package core
 
 import "context"
 
+type ModuleCode string
+
 type Module interface {
-	Code() string
-	Register() error
+	Code() ModuleCode
+	Register(registry Registry) error
 	Boot(ctx context.Context, app *App) error
 }
