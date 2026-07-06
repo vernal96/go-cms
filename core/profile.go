@@ -1,5 +1,8 @@
 package core
 
+type ProfileCode string
+
 type Profile interface {
-	Code() string
+	Code() ProfileCode
+	Modules() []Module
 }
