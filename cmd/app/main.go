@@ -12,7 +12,10 @@ import (
 func main() {
 	ctx := context.Background()
 
-	app := kernel.NewApp(kernel.AppConfig{})
+	app, err := bootstrap.NewApp()
+	if err != nil {
+		panic(err)
+	}
 
 	profiles, err := bootstrap.NewProfileRegistry()
 	if err != nil {
