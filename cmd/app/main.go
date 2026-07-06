@@ -13,7 +13,16 @@ func main() {
 
 	app := kernel.NewApp(kernel.AppConfig{})
 
-	profile := dev.Profile{}
+	profiles := kernel.NewProfileRegistryMap()
+
+	if err := profiles.Register(dev.Profile{}); err != nil {
+		panic(err)
+	}
+
+	profile, exists := profiles.Get("dev")
+	if !exists {
+		panic("profile not found")
+	}
 
 	runtimeFactory := kernel.NewSiteRuntimeFactory(app)
 
