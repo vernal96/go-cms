@@ -1,4 +1,4 @@
-package core
+package kernal
 
 type SiteRuntime struct {
 	app      *App

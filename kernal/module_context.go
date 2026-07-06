@@ -1,4 +1,4 @@
-package core
+package kernal
 
 type ModuleContext struct {
 	app *App
