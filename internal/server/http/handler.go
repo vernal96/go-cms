@@ -11,18 +11,18 @@ type Handler struct {
 	runtimeProvider *site.RuntimeProvider
 }
 
-func NewHandler(runtimeResolver *site.RuntimeProvider) (*Handler, error) {
-	if runtimeResolver == nil {
-		return nil, fmt.Errorf("runtime resolver is nil")
+func NewHandler(runtimeProvider *site.RuntimeProvider) (*Handler, error) {
+	if runtimeProvider == nil {
+		return nil, fmt.Errorf("runtime provider is nil")
 	}
 
 	return &Handler{
-		runtimeProvider: runtimeResolver,
+		runtimeProvider: runtimeProvider,
 	}, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	runtime, exists, err := h.runtimeProvider.ResolveByDomain(r.Context(), r.Host)
+	runtime, exists, err := h.runtimeProvider.RuntimeByDomain(r.Context(), r.Host)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
