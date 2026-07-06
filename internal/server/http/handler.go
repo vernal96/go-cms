@@ -34,6 +34,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, _ = fmt.Fprintf(w, "runtime created for profile: %s", runtime.Profile().Code())
-
-	var _ http.Handler = (*Handler)(nil)
 }
+
+var _ http.Handler = (*Handler)(nil)
