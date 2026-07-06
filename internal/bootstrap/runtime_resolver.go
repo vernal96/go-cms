@@ -8,11 +8,11 @@ import (
 	sitememory "github.com/vernal96/go-cms/kernel/modules/core/site/adapters/memory"
 )
 
-func NewRuntimeResolver(
+func NewRuntimeProvider(
 	app *kernel.App,
 	profiles kernel.ProfileRegistry,
 	cfg *config.Config,
-) (*coresite.RuntimeResolver, error) {
+) (*coresite.RuntimeProvider, error) {
 	siteRepository := sitememory.NewRepository([]coresite.Site{
 		{
 			ID:          1,
@@ -23,14 +23,14 @@ func NewRuntimeResolver(
 		},
 	})
 
-	siteResolver, err := coresite.NewRepositoryResolver(siteRepository)
+	siteResolver, err := coresite.RepositoryDomainResolver(siteRepository)
 	if err != nil {
 		return nil, err
 	}
 
 	runtimeFactory := kernel.NewSiteRuntimeFactory(app)
 
-	return coresite.NewRuntimeResolver(
+	return coresite.NewRuntimeProvider(
 		siteResolver,
 		profiles,
 		runtimeFactory,

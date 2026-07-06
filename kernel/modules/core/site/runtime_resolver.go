@@ -7,17 +7,17 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 )
 
-type RuntimeResolver struct {
-	siteResolver   Resolver
+type RuntimeProvider struct {
+	siteResolver   DomainResolver
 	profiles       kernel.ProfileRegistry
 	runtimeFactory *kernel.SiteRuntimeFactory
 }
 
-func NewRuntimeResolver(
-	siteResolver Resolver,
+func NewRuntimeProvider(
+	siteResolver DomainResolver,
 	profiles kernel.ProfileRegistry,
 	runtimeFactory *kernel.SiteRuntimeFactory,
-) (*RuntimeResolver, error) {
+) (*RuntimeProvider, error) {
 	if siteResolver == nil {
 		return nil, fmt.Errorf("site resolver is nil")
 	}
@@ -30,14 +30,14 @@ func NewRuntimeResolver(
 		return nil, fmt.Errorf("site runtime factory is nil")
 	}
 
-	return &RuntimeResolver{
+	return &RuntimeProvider{
 		siteResolver:   siteResolver,
 		profiles:       profiles,
 		runtimeFactory: runtimeFactory,
 	}, nil
 }
 
-func (r *RuntimeResolver) ResolveByDomain(ctx context.Context, domain string) (*kernel.SiteRuntime, bool, error) {
+func (r *RuntimeProvider) ResolveByDomain(ctx context.Context, domain string) (*kernel.SiteRuntime, bool, error) {
 	foundSite, exists, err := r.siteResolver.ResolveByDomain(ctx, domain)
 	if err != nil {
 		return nil, false, err

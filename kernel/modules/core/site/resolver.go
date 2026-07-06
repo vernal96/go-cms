@@ -5,7 +5,7 @@ import (
 	"errors"
 )
 
-type Resolver interface {
+type DomainResolver interface {
 	ResolveByDomain(ctx context.Context, domain string) (Site, bool, error)
 }
 
@@ -13,7 +13,7 @@ type RepositoryResolver struct {
 	repository Repository
 }
 
-func NewRepositoryResolver(repository Repository) (*RepositoryResolver, error) {
+func RepositoryDomainResolver(repository Repository) (*RepositoryResolver, error) {
 	if repository == nil {
 		return nil, errors.New("site repository is nil")
 	}
@@ -30,4 +30,4 @@ func (r *RepositoryResolver) ResolveByDomain(ctx context.Context, domain string)
 	return r.repository.FindByDomain(ctx, domain)
 }
 
-var _ Resolver = (*RepositoryResolver)(nil)
+var _ DomainResolver = (*RepositoryResolver)(nil)

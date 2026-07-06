@@ -29,7 +29,7 @@ func main() {
 		panic(err)
 	}
 
-	runtimeResolver, err := bootstrap.NewRuntimeResolver(app, profiles, cfg)
+	runtimeResolver, err := bootstrap.NewRuntimeProvider(app, profiles, cfg)
 	if err != nil {
 		panic(err)
 	}
