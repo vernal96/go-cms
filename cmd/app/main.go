@@ -29,12 +29,12 @@ func main() {
 		panic(err)
 	}
 
-	runtimeResolver, err := bootstrap.NewRuntimeProvider(app, profiles, cfg)
+	runtimeProvider, err := bootstrap.NewRuntimeProvider(app, profiles, cfg)
 	if err != nil {
 		panic(err)
 	}
 
-	handler, err := serverhttp.NewHandler(runtimeResolver)
+	handler, err := serverhttp.NewHandler(runtimeProvider)
 	if err != nil {
 		panic(err)
 	}
