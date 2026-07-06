@@ -1,11 +1,11 @@
-package coremodule
+package site
 
 import "github.com/vernal96/go-cms/core"
 
-type SiteID int64
+type ID int64
 
 type Site struct {
-	ID          SiteID
+	ID          ID
 	ProfileCode core.ProfileCode
 	Domain      string
 	Locale      string
