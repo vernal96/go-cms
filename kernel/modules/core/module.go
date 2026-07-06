@@ -6,10 +6,12 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 )
 
+const ModuleCode kernel.ModuleCode = "core"
+
 type Module struct{}
 
 func (m Module) Code() kernel.ModuleCode {
-	return "core"
+	return ModuleCode
 }
 
 func (m Module) Register(registry kernel.Registry) error {
