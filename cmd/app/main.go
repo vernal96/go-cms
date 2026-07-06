@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/vernal96/go-cms/internal/bootstrap"
 	"github.com/vernal96/go-cms/internal/profiles/dev"
 	"github.com/vernal96/go-cms/kernel"
 )
@@ -13,9 +14,8 @@ func main() {
 
 	app := kernel.NewApp(kernel.AppConfig{})
 
-	profiles := kernel.NewProfileRegistryManager()
-
-	if err := profiles.Register(dev.Profile{}); err != nil {
+	profiles, err := bootstrap.NewProfileRegistry()
+	if err != nil {
 		panic(err)
 	}
 
