@@ -30,13 +30,9 @@ func NewRuntimeProvider(
 
 	runtimeFactory := kernel.NewSiteRuntimeFactory(app)
 
-	siteRuntimeProvider, err := kernel.NewSiteRuntimeProvider(profiles, runtimeFactory)
-	if err != nil {
-		return nil, err
-	}
-
 	return coresite.NewRuntimeProvider(
 		domainResolver,
-		siteRuntimeProvider,
+		profiles,
+		runtimeFactory,
 	)
 }
