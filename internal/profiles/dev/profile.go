@@ -13,9 +13,12 @@ func (p Profile) Code() kernel.ProfileCode {
 	return ProfileCode
 }
 
-func (p Profile) Modules() []kernel.Module {
-	return []kernel.Module{
-		core.Module{},
+func (p Profile) Modules() []kernel.ProfileModule {
+	return []kernel.ProfileModule{
+		{
+			Module: core.Module{},
+			Config: nil,
+		},
 	}
 }
 

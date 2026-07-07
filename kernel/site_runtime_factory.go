@@ -16,7 +16,8 @@ func NewSiteRuntimeFactory(app *App) *SiteRuntimeFactory {
 func (f *SiteRuntimeFactory) Make(ctx context.Context, profile Profile) (*SiteRuntime, error) {
 	registry := NewRuntimeRegistry()
 
-	for _, module := range profile.Modules() {
+	for _, profileModule := range profile.Modules() {
+		module := profileModule.Module
 		moduleRegistry := registry.ForModule(module.Code())
 
 		if err := module.Register(moduleRegistry); err != nil {
@@ -25,9 +26,11 @@ func (f *SiteRuntimeFactory) Make(ctx context.Context, profile Profile) (*SiteRu
 	}
 
 	runtime := NewSiteRuntime(f.app, profile, registry)
-	moduleContext := NewModuleContext(f.app)
 
-	for _, module := range profile.Modules() {
+	for _, profileModule := range profile.Modules() {
+		module := profileModule.Module
+		moduleContext := NewModuleContext(f.app, runtime, profileModule.Config)
+
 		if err := module.Boot(ctx, moduleContext); err != nil {
 			return nil, fmt.Errorf("boot module %q: %w", module.Code(), err)
 		}
