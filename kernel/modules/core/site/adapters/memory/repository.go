@@ -3,8 +3,11 @@ package memory
 import (
 	"context"
 
+	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 )
+
+const AdapterCode kernel.AdapterCode = "memory"
 
 type Repository struct {
 	sitesByDomain map[string]site.Site
