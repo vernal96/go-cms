@@ -5,109 +5,52 @@ import (
 	"reflect"
 )
 
-func ConfigFrom[T any](moduleContext ModuleContext) (T, error) {
-	var config T
+func ModuleConfigFrom[T any](moduleContext ModuleContext) (T, error) {
+	var moduleConfig T
 
-	if err := applyConfigDefaults(&config); err != nil {
-		return config, err
+	rawModuleConfig := moduleContext.ModuleConfig()
+	if rawModuleConfig == nil {
+		return moduleConfig, nil
 	}
 
-	rawConfig := moduleContext.Config()
-	if rawConfig == nil {
-		return config, nil
+	if err := mergeModuleConfig(&moduleConfig, rawModuleConfig); err != nil {
+		return moduleConfig, err
 	}
 
-	if err := mergeConfig(&config, rawConfig); err != nil {
-		return config, err
-	}
-
-	return config, nil
+	return moduleConfig, nil
 }
 
-func applyConfigDefaults(target any) error {
-	value := reflect.ValueOf(target)
-	if value.Kind() != reflect.Pointer || value.IsNil() {
-		return fmt.Errorf("config target must be a non-nil pointer")
-	}
-
-	return applyDefaultsToValue(value.Elem())
-}
-
-func applyDefaultsToValue(value reflect.Value) error {
-	if value.Kind() != reflect.Struct {
-		return nil
-	}
-
-	valueType := value.Type()
-
-	for i := 0; i < value.NumField(); i++ {
-		field := value.Field(i)
-		structField := valueType.Field(i)
-
-		if !field.CanSet() {
-			continue
-		}
-
-		if field.Kind() == reflect.Struct {
-			if err := applyDefaultsToValue(field); err != nil {
-				return err
-			}
-		}
-
-		defaultValue := structField.Tag.Get("default")
-		if defaultValue == "" {
-			continue
-		}
-
-		if !field.IsZero() {
-			continue
-		}
-
-		switch field.Kind() {
-		case reflect.String:
-			field.SetString(defaultValue)
-
-		default:
-			return fmt.Errorf("unsupported default field type %s for field %s",
-				field.Kind(),
-				structField.Name)
-		}
-	}
-
-	return nil
-}
-
-func mergeConfig(target any, source any) error {
+func mergeModuleConfig(target any, source any) error {
 	targetValue := reflect.ValueOf(target)
 	if targetValue.Kind() != reflect.Pointer || targetValue.IsNil() {
-		return fmt.Errorf("target must be a non-nil pointer")
+		return fmt.Errorf("module config target must be a non-nil pointer")
 	}
 
 	sourceValue := reflect.ValueOf(source)
-	if sourceValue.Kind() != reflect.Pointer {
+	if sourceValue.Kind() == reflect.Pointer {
 		if sourceValue.IsNil() {
-			return fmt.Errorf("config source is nil")
+			return fmt.Errorf("module config source is nil")
 		}
 
 		sourceValue = sourceValue.Elem()
 	}
 
-	targetElem := targetValue.Elem()
+	targetElement := targetValue.Elem()
 
-	if sourceValue.Type() != targetElem.Type() {
+	if sourceValue.Type() != targetElement.Type() {
 		return fmt.Errorf(
-			"invalid config type %s, expected %s",
+			"invalid module config type %s, expected %s",
 			sourceValue.Type(),
-			targetElem.Type(),
+			targetElement.Type(),
 		)
 	}
 
-	mergeStructValues(targetElem, sourceValue)
+	mergeModuleConfigValues(targetElement, sourceValue)
 
 	return nil
 }
 
-func mergeStructValues(target reflect.Value, source reflect.Value) {
+func mergeModuleConfigValues(target reflect.Value, source reflect.Value) {
 	for i := 0; i < source.NumField(); i++ {
 		sourceField := source.Field(i)
 		targetField := target.Field(i)
@@ -117,7 +60,7 @@ func mergeStructValues(target reflect.Value, source reflect.Value) {
 		}
 
 		if sourceField.Kind() == reflect.Struct && targetField.Kind() == reflect.Struct {
-			mergeStructValues(targetField, sourceField)
+			mergeModuleConfigValues(targetField, sourceField)
 			continue
 		}
 
