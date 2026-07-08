@@ -26,10 +26,16 @@ func (f *SiteRuntimeFactory) Make(ctx context.Context, profile Profile) (*SiteRu
 	}
 
 	runtime := NewSiteRuntime(f.app, profile, registry)
+	adapterDefaults := ResolveAdapterDefaults(f.app.AdapterDefaults(), profile.AdapterDefaults())
 
 	for _, profileModule := range profile.Modules() {
 		module := profileModule.Module
-		moduleContext := NewModuleContext(f.app, runtime, profileModule.Config)
+		moduleContext := NewModuleContext(
+			f.app,
+			runtime,
+			profileModule.ModuleConfig,
+			adapterDefaults,
+		)
 
 		if err := module.Boot(ctx, moduleContext); err != nil {
 			return nil, fmt.Errorf("boot module %q: %w", module.Code(), err)
