@@ -27,7 +27,7 @@ func (m Module) Boot(ctx context.Context, moduleContext kernel.ModuleContext) er
 	siteAdapterDefaults := kernel.ResolveAdapterDefaults(
 		moduleContext.AdapterDefaults(),
 		moduleConfig.AdapterDefaults,
-		moduleConfig.Site.RepositoryAdapter,
+		moduleConfig.Site.AdapterDefaults,
 	)
 
 	_ = siteAdapterDefaults
