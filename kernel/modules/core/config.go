@@ -7,5 +7,5 @@ type Config struct {
 }
 
 type SiteConfig struct {
-	RepositoryAdapter kernel.AdapterCode
+	RepositoryAdapter kernel.AdapterCode `default:"postgres"`
 }
