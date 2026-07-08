@@ -8,5 +8,5 @@ type Config struct {
 }
 
 type SiteConfig struct {
-	RepositoryAdapter kernel.AdapterDefaults
+	AdapterDefaults kernel.AdapterDefaults
 }
