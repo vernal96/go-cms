@@ -19,6 +19,18 @@ func (m Module) Register(registry kernel.Registry) error {
 }
 
 func (m Module) Boot(ctx context.Context, moduleContext kernel.ModuleContext) error {
+	moduleConfig, err := kernel.ModuleConfigFrom[Config](moduleContext)
+	if err != nil {
+		return err
+	}
+
+	siteAdapterDefaults := kernel.ResolveAdapterDefaults(
+		moduleContext.AdapterDefaults(),
+		moduleConfig.AdapterDefaults,
+		moduleConfig.Site.RepositoryAdapter,
+	)
+
+	_ = siteAdapterDefaults
 
 	return ctx.Err()
 }
