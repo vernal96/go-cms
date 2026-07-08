@@ -6,8 +6,6 @@ import (
 	"fmt"
 )
 
-type AdapterCode string
-
 type MigrationProviderCode string
 
 type MigrationDirection string
@@ -70,7 +68,7 @@ func (r *DefaultMigrationRegistry) Provider(code MigrationProviderCode) (Migrati
 }
 
 func (r *DefaultMigrationRegistry) Providers() []MigrationProvider {
-	providers := make([]MigrationProvider, len(r.providerCodes))
+	providers := make([]MigrationProvider, 0, len(r.providerCodes))
 
 	for _, code := range r.providerCodes {
 		providers = append(providers, r.providers[code])
