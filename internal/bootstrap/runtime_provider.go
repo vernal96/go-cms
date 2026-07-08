@@ -13,7 +13,7 @@ func NewRuntimeProvider(
 	profiles kernel.ProfileRegistry,
 	cfg *config.Config,
 ) (*coresite.RuntimeProvider, error) {
-	siteRepository := sitememory.NewRepository([]coresite.Site{
+	memorySiteRepository := sitememory.NewRepository([]coresite.Site{
 		{
 			ID:          1,
 			ProfileCode: dev.ProfileCode,
@@ -22,6 +22,31 @@ func NewRuntimeProvider(
 			Settings:    map[string]any{},
 		},
 	})
+
+	if err := app.Adapters().Add(
+		coresite.RepositoryAdapterContract,
+		kernel.AdapterDefault,
+		memorySiteRepository,
+	); err != nil {
+		return nil, err
+	}
+
+	if err := app.Adapters().Add(
+		coresite.RepositoryAdapterContract,
+		sitememory.AdapterCode,
+		memorySiteRepository,
+	); err != nil {
+		return nil, err
+	}
+
+	siteRepository, err := kernel.AdapterAs[coresite.Repository](
+		app.Adapters(),
+		coresite.RepositoryAdapterContract,
+		app.AdapterDefaults().RepositoryAdapter,
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	domainResolver, err := coresite.NewRepositoryDomainResolver(siteRepository)
 	if err != nil {
