@@ -5,12 +5,14 @@ type AppConfig struct {
 }
 
 type App struct {
-	config AppConfig
+	config   AppConfig
+	adapters AdapterRegistry
 }
 
 func NewApp(config AppConfig) *App {
 	return &App{
-		config: config,
+		config:   config,
+		adapters: NewAdapterRegistry(),
 	}
 }
 
@@ -20,4 +22,8 @@ func (a *App) Config() AppConfig {
 
 func (a *App) AdapterDefaults() AdapterDefaults {
 	return ResolveAdapterDefaults(a.config.AdapterDefaults)
+}
+
+func (a *App) Adapters() AdapterRegistry {
+	return a.adapters
 }
