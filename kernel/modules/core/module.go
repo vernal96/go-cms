@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/modules/core/site"
 )
 
 const ModuleCode kernel.ModuleCode = "core"
@@ -24,13 +25,16 @@ func (m Module) Boot(ctx context.Context, moduleContext kernel.ModuleContext) er
 		return err
 	}
 
-	siteAdapterDefaults := kernel.ResolveAdapterDefaults(
-		moduleContext.AdapterDefaults(),
-		moduleConfig.AdapterDefaults,
-		moduleConfig.Site.AdapterDefaults,
+	siteRepository, err := kernel.AdapterAs[site.Repository](
+		moduleContext.App().Adapters(),
+		site.RepositoryAdapterContract,
+		moduleConfig.Site.RepositoryAdapter,
 	)
+	if err != nil {
+		return err
+	}
 
-	_ = siteAdapterDefaults
+	_ = siteRepository
 
 	return ctx.Err()
 }
