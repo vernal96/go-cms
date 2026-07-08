@@ -8,15 +8,5 @@ type Config struct {
 }
 
 type SiteConfig struct {
-	RepositoryAdapter kernel.AdapterCode
-}
-
-func (c Config) SiteAdapterDefaults(parent kernel.AdapterDefaults) kernel.AdapterDefaults {
-	return kernel.ResolveAdapterDefaults(
-		parent,
-		c.AdapterDefaults,
-		kernel.AdapterDefaults{
-			RepositoryAdapter: c.Site.RepositoryAdapter,
-		},
-	)
+	RepositoryAdapter kernel.AdapterDefaults
 }

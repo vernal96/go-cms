@@ -19,6 +19,7 @@ func (m Module) Register(registry kernel.Registry) error {
 }
 
 func (m Module) Boot(ctx context.Context, moduleContext kernel.ModuleContext) error {
+
 	return ctx.Err()
 }
 
