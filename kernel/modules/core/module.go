@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
@@ -23,6 +24,10 @@ func (m Module) Boot(ctx context.Context, moduleContext kernel.ModuleContext) er
 	moduleConfig, err := kernel.ModuleConfigFrom[Config](moduleContext)
 	if err != nil {
 		return err
+	}
+
+	if moduleConfig.Site.RepositoryAdapter == "" {
+		return fmt.Errorf("core site repository adapter is not configured")
 	}
 
 	siteRepository, err := kernel.AdapterAs[site.Repository](
