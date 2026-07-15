@@ -72,4 +72,3 @@ func TestModuleConfigFrom_ReturnsErrorForNilPointer(t *testing.T) {
 		t.Fatal("expected nil module config error")
 	}
 }
-
