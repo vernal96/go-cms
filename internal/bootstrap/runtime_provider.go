@@ -25,14 +25,6 @@ func NewRuntimeProvider(
 
 	if err := app.Adapters().Add(
 		coresite.RepositoryAdapterContract,
-		kernel.AdapterDefault,
-		memorySiteRepository,
-	); err != nil {
-		return nil, err
-	}
-
-	if err := app.Adapters().Add(
-		coresite.RepositoryAdapterContract,
 		sitememory.AdapterCode,
 		memorySiteRepository,
 	); err != nil {
@@ -42,7 +34,7 @@ func NewRuntimeProvider(
 	siteRepository, err := kernel.AdapterAs[coresite.Repository](
 		app.Adapters(),
 		coresite.RepositoryAdapterContract,
-		app.AdapterDefaults().RepositoryAdapter,
+		sitememory.AdapterCode,
 	)
 	if err != nil {
 		return nil, err
