@@ -9,6 +9,5 @@ type ProfileModule struct {
 
 type Profile interface {
 	Code() ProfileCode
-	AdapterDefaults() AdapterDefaults
 	Modules() []ProfileModule
 }
