@@ -2,6 +2,8 @@ package kernel
 
 import "fmt"
 
+type AdapterCode string
+
 type AdapterContractCode string
 
 type AdapterRegistry interface {
