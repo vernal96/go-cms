@@ -1,8 +1,6 @@
 package kernel
 
-type AppConfig struct {
-	AdapterDefaults AdapterDefaults
-}
+type AppConfig struct{}
 
 type App struct {
 	config   AppConfig
@@ -18,10 +16,6 @@ func NewApp(config AppConfig) *App {
 
 func (a *App) Config() AppConfig {
 	return a.config
-}
-
-func (a *App) AdapterDefaults() AdapterDefaults {
-	return ResolveAdapterDefaults(a.config.AdapterDefaults)
 }
 
 func (a *App) Adapters() AdapterRegistry {
