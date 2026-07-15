@@ -65,10 +65,10 @@ func TestNewRuntimeProvider_ValidatesDependencies(t *testing.T) {
 	factory := kernel.NewSiteRuntimeFactory(kernel.NewApp(kernel.AppConfig{}))
 
 	tests := []struct {
-		name            string
-		resolver        site.DomainResolver
-		profiles        kernel.ProfileRegistry
-		runtimeFactory  *kernel.SiteRuntimeFactory
+		name           string
+		resolver       site.DomainResolver
+		profiles       kernel.ProfileRegistry
+		runtimeFactory *kernel.SiteRuntimeFactory
 	}{
 		{
 			name:           "nil domain resolver",
@@ -281,4 +281,3 @@ func TestRuntimeProvider_RuntimeByDomainBuildsRuntimeForSiteProfile(t *testing.T
 		t.Fatalf("unexpected module config: got %#v, want %#v", module.bootConfig, wantConfig)
 	}
 }
-

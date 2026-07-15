@@ -119,4 +119,3 @@ func TestRepositoryDomainResolver_ReturnsRepositoryError(t *testing.T) {
 		t.Fatalf("expected repository error, got %v", err)
 	}
 }
-

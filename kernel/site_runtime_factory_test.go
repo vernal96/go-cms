@@ -244,4 +244,3 @@ func TestSiteRuntimeFactory_MakeStopsWhenBootFails(t *testing.T) {
 		t.Fatalf("unexpected module lifecycle: got %v, want %v", events, wantEvents)
 	}
 }
-

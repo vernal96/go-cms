@@ -51,4 +51,3 @@ func TestRepository_FindByDomainReturnsNotFound(t *testing.T) {
 		t.Fatalf("expected zero site, got %#v", foundSite)
 	}
 }
-
