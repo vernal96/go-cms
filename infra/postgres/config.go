@@ -14,7 +14,3 @@ type Config struct {
 	ConnMaxLifetime time.Duration `envconfig:"POSTGRES_CONN_MAX_LIFETIME" default:"30m"`
 	ConnectTimeout  time.Duration `envconfig:"POSTGRES_CONNECT_TIMEOUT" default:"5s"`
 }
-
-func (c Config) DSN() string {
-	
-}
