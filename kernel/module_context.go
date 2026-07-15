@@ -1,23 +1,16 @@
 package kernel
 
 type ModuleContext struct {
-	app             *App
-	runtime         *SiteRuntime
-	moduleConfig    any
-	adapterDefaults AdapterDefaults
+	app          *App
+	runtime      *SiteRuntime
+	moduleConfig any
 }
 
-func NewModuleContext(
-	app *App,
-	runtime *SiteRuntime,
-	moduleConfig any,
-	adapterDefaults AdapterDefaults,
-) ModuleContext {
+func NewModuleContext(app *App, runtime *SiteRuntime, moduleConfig any) ModuleContext {
 	return ModuleContext{
-		app:             app,
-		runtime:         runtime,
-		moduleConfig:    moduleConfig,
-		adapterDefaults: adapterDefaults,
+		app:          app,
+		runtime:      runtime,
+		moduleConfig: moduleConfig,
 	}
 }
 
@@ -31,8 +24,4 @@ func (c ModuleContext) Runtime() *SiteRuntime {
 
 func (c ModuleContext) ModuleConfig() any {
 	return c.moduleConfig
-}
-
-func (c ModuleContext) AdapterDefaults() AdapterDefaults {
-	return c.adapterDefaults
 }
