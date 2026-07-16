@@ -8,7 +8,9 @@ import (
 
 const ModuleCode kernel.ModuleCode = "core"
 
-type Module struct{}
+type Module struct {
+	database Database
+}
 
 func (m Module) Code() kernel.ModuleCode {
 	return ModuleCode

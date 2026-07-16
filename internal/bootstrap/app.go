@@ -1,9 +1,30 @@
 package bootstrap
 
-import "github.com/vernal96/go-cms/kernel"
+import (
+	"context"
+	"fmt"
 
-func NewApp() (*kernel.App, error) {
-	app := kernel.NewApp(kernel.AppConfig{})
+	"github.com/vernal96/go-cms/internal/config"
+	"github.com/vernal96/go-cms/kernel"
 
-	return app, nil
+	connectormemory "github.com/vernal96/go-cms/connectors/memory"
+)
+
+func NewApp(
+	ctx context.Context,
+	cfg *config.Config,
+) (_ *kernel.App, err error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("project config is nil")
+	}
+
+	mainDB := connectormemory.New()
+
+	defer func() {
+		if err != nil {
+			_ = mainDB.Close()
+		}
+	}()
+
+	coreDatabase, err :=
 }

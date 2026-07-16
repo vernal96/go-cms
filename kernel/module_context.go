@@ -2,11 +2,15 @@ package kernel
 
 type ModuleContext struct {
 	app          *App
-	runtime      *SiteRuntime
+	runtime      *ProfileRuntime
 	moduleConfig any
 }
 
-func NewModuleContext(app *App, runtime *SiteRuntime, moduleConfig any) ModuleContext {
+func NewModuleContext(
+	app *App,
+	runtime *ProfileRuntime,
+	moduleConfig any,
+) ModuleContext {
 	return ModuleContext{
 		app:          app,
 		runtime:      runtime,
@@ -18,7 +22,7 @@ func (c ModuleContext) App() *App {
 	return c.app
 }
 
-func (c ModuleContext) Runtime() *SiteRuntime {
+func (c ModuleContext) Runtime() *ProfileRuntime {
 	return c.runtime
 }
 

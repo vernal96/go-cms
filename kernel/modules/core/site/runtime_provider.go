@@ -9,36 +9,35 @@ import (
 
 type RuntimeProvider struct {
 	domainResolver DomainResolver
-	profiles       kernel.ProfileRegistry
-	runtimeFactory *kernel.SiteRuntimeFactory
+	app            *kernel.App
 }
 
 func NewRuntimeProvider(
 	domainResolver DomainResolver,
-	profiles kernel.ProfileRegistry,
-	runtimeFactory *kernel.SiteRuntimeFactory,
+	app *kernel.App,
 ) (*RuntimeProvider, error) {
 	if domainResolver == nil {
 		return nil, fmt.Errorf("domain resolver is nil")
 	}
 
-	if profiles == nil {
-		return nil, fmt.Errorf("profile registry is nil")
-	}
-
-	if runtimeFactory == nil {
-		return nil, fmt.Errorf("site runtime factory is nil")
+	if app == nil {
+		return nil, fmt.Errorf("app is nil")
 	}
 
 	return &RuntimeProvider{
 		domainResolver: domainResolver,
-		profiles:       profiles,
-		runtimeFactory: runtimeFactory,
+		app:            app,
 	}, nil
 }
 
-func (p *RuntimeProvider) RuntimeByDomain(ctx context.Context, domain string) (*kernel.SiteRuntime, bool, error) {
-	foundSite, exists, err := p.domainResolver.ResolveByDomain(ctx, domain)
+func (p *RuntimeProvider) RuntimeByDomain(
+	ctx context.Context,
+	domain string,
+) (*Runtime, bool, error) {
+	foundSite, exists, err := p.domainResolver.ResolveByDomain(
+		ctx,
+		domain,
+	)
 	if err != nil {
 		return nil, false, err
 	}
@@ -47,12 +46,20 @@ func (p *RuntimeProvider) RuntimeByDomain(ctx context.Context, domain string) (*
 		return nil, false, nil
 	}
 
-	profile, exists := p.profiles.Get(foundSite.ProfileCode)
+	profileRuntime, exists := p.app.ProfileRuntime(
+		foundSite.ProfileCode,
+	)
 	if !exists {
-		return nil, false, fmt.Errorf("profile %q not found", foundSite.ProfileCode)
+		return nil, false, fmt.Errorf(
+			"profile runtime %q not found",
+			foundSite.ProfileCode,
+		)
 	}
 
-	runtime, err := p.runtimeFactory.Make(ctx, profile)
+	runtime, err := NewSiteRuntime(
+		foundSite,
+		profileRuntime,
+	)
 	if err != nil {
 		return nil, false, err
 	}

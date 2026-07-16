@@ -11,7 +11,11 @@ import (
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		syscall.SIGINT,
+		syscall.SIGTERM,
+	)
 	defer stop()
 
 	cfg, err := config.Load()
@@ -19,22 +23,15 @@ func main() {
 		panic(err)
 	}
 
-	app, err := bootstrap.NewApp()
+	app, err := bootstrap.NewApp(ctx, cfg)
 	if err != nil {
 		panic(err)
 	}
+	defer func() {
+		_ = app.Close()
+	}()
 
-	profiles, err := bootstrap.NewProfileRegistry()
-	if err != nil {
-		panic(err)
-	}
-
-	runtimeProvider, err := bootstrap.NewRuntimeProvider(app, profiles, cfg)
-	if err != nil {
-		panic(err)
-	}
-
-	handler, err := serverhttp.NewHandler(runtimeProvider)
+	handler, err := serverhttp.NewHandler(app)
 	if err != nil {
 		panic(err)
 	}
