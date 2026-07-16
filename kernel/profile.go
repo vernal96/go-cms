@@ -2,12 +2,10 @@ package kernel
 
 type ProfileCode string
 
-type ProfileModule struct {
-	Module       Module
-	ModuleConfig any
+type ProfileConfig struct {
 }
 
 type Profile interface {
 	Code() ProfileCode
-	Modules() []ProfileModule
+	Modules() []Module
 }

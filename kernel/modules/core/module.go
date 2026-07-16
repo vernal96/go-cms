@@ -1,27 +1,15 @@
 package core
 
-import (
-	"context"
-
-	"github.com/vernal96/go-cms/kernel"
-)
+import "github.com/vernal96/go-cms/kernel"
 
 const ModuleCode kernel.ModuleCode = "core"
 
 type Module struct {
-	database Database
+	Config Config
 }
 
 func (m Module) Code() kernel.ModuleCode {
 	return ModuleCode
 }
 
-func (m Module) Register(registry kernel.Registry) error {
-	return nil
-}
-
-func (m Module) Boot(ctx context.Context, moduleContext kernel.ModuleContext) error {
-	return nil
-}
-
-var _ kernel.Module = Module{}
+var _ kernel.Module = (*Module)(nil)
