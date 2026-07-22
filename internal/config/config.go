@@ -5,42 +5,40 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/kelseyhightower/envconfig"
 	"github.com/vernal96/go-cms/internal/connectors/mainpostgres"
+	"github.com/vernal96/go-cms/internal/profiles/dev"
+	"github.com/vernal96/go-cms/kernel"
+	appkernel "github.com/vernal96/go-cms/kernel/app"
+	corepostgres "github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres"
 )
 
 type Config struct {
-	Server   ServerConfig
-	Postgres mainpostgres.Config
+	Server   ServerConfig        `envconfig:"SERVER"`
+	Postgres mainpostgres.Config `envconfig:"POSTGRES"`
 }
 
 type ServerConfig struct {
-	Host            string        `envconfig:"SERVER_HOST" default:"localhost"`
-	Port            int           `envconfig:"SERVER_PORT" default:"8080"`
-	ReadTimeout     time.Duration `envconfig:"SERVER_READ_TIMEOUT" default:"5s"`
-	WriteTimeout    time.Duration `envconfig:"SERVER_WRITE_TIMEOUT" default:"10s"`
-	IdleTimeout     time.Duration `envconfig:"SERVER_IDLE_TIMEOUT" default:"120s"`
-	ShutdownTimeout time.Duration `envconfig:"SERVER_SHUTDOWN_TIMEOUT" default:"5s"`
+	Host            string        `envconfig:"HOST" default:"localhost"`
+	Port            int           `envconfig:"PORT" default:"8080"`
+	ReadTimeout     time.Duration `envconfig:"READ_TIMEOUT" default:"5s"`
+	WriteTimeout    time.Duration `envconfig:"WRITE_TIMEOUT" default:"10s"`
+	IdleTimeout     time.Duration `envconfig:"IDLE_TIMEOUT" default:"120s"`
+	ShutdownTimeout time.Duration `envconfig:"SHUTDOWN_TIMEOUT" default:"5s"`
 }
 
 func (c ServerConfig) Address() string {
 	return net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
 }
 
-func Load() (*Config, error) {
-	var server ServerConfig
-
-	if err := envconfig.Process("", &server); err != nil {
-		return nil, err
+// Application is a declarative description of this application instance.
+func (c Config) Application() appkernel.Definition {
+	return appkernel.Definition{
+		MainDatabase: appkernel.DatabaseDefinition{
+			Connector: mainpostgres.Factory(c.Postgres),
+			Adapters: []kernel.ModuleDatabaseFactory{
+				corepostgres.DatabaseFactory{},
+			},
+		},
+		Profiles: []kernel.Profile{dev.Profile},
 	}
-
-	postgres, err := mainpostgres.Load()
-	if err != nil {
-		return nil, err
-	}
-
-	return &Config{
-		Server:   server,
-		Postgres: *postgres,
-	}, nil
 }

@@ -6,9 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/vernal96/go-cms/app"
 	httpserver "github.com/vernal96/go-cms/internal/server/http"
 	"github.com/vernal96/go-cms/kernel"
+	appkernel "github.com/vernal96/go-cms/kernel/app"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 )
@@ -18,6 +18,13 @@ type connector struct{}
 func (connector) Code() kernel.ConnectionCode { return "test" }
 func (connector) Ping(context.Context) error  { return nil }
 func (connector) Close() error                { return nil }
+
+type connectorFactory struct{}
+
+func (connectorFactory) Code() kernel.ConnectionCode { return "test" }
+func (connectorFactory) Open(context.Context) (kernel.DBConnector, error) {
+	return connector{}, nil
+}
 
 type repository struct{}
 
@@ -37,24 +44,33 @@ type database struct{}
 func (database) ModuleCode() kernel.ModuleCode { return core.ModuleCode }
 func (database) Sites() site.Repository        { return repository{} }
 
+type databaseFactory struct{}
+
+func (databaseFactory) ModuleCode() kernel.ModuleCode { return core.ModuleCode }
+func (databaseFactory) Build(kernel.DBConnector) (kernel.ModuleDatabase, error) {
+	return database{}, nil
+}
+
 func TestHandlerLooksUpCompiledRuntimeByRequestHost(t *testing.T) {
-	runtimeApp, err := app.New(context.Background(), app.AppConfig{
-		MainDatabase: app.DatabaseBinding{
-			Connector: connector{},
-			Adapters:  []kernel.ModuleDatabase{database{}},
+	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
+		MainDatabase: appkernel.DatabaseDefinition{
+			Connector: connectorFactory{},
+			Adapters:  []kernel.ModuleDatabaseFactory{databaseFactory{}},
 		},
-	}, []kernel.Profile{
-		{
+		Profiles: []kernel.Profile{{
 			Code: "dev",
 			Modules: []kernel.ProfileModule{
 				{Module: core.Module{}},
 			},
-		},
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = runtimeApp.Close() }()
+	if err := runtimeApp.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 
 	handler, err := httpserver.NewHandler(runtimeApp)
 	if err != nil {

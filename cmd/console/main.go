@@ -3,13 +3,15 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"os/signal"
 	"syscall"
 
 	projectconfig "github.com/vernal96/go-cms/internal/config"
-	httpserver "github.com/vernal96/go-cms/internal/server/http"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
 	configloader "github.com/vernal96/go-cms/kernel/config"
+	"github.com/vernal96/go-cms/kernel/console"
 )
 
 func main() {
@@ -20,36 +22,25 @@ func main() {
 	)
 	defer stop()
 
+	if err := run(ctx, os.Args[1:]); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, args []string) (resultErr error) {
 	projectConfig, err := configloader.Load[projectconfig.Config]("")
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	application, err := appkernel.New(ctx, projectConfig.Application())
 	if err != nil {
-		panic(err)
+		return err
 	}
 	defer func() {
-		if closeErr := application.Close(); closeErr != nil {
-			panic(errors.Join(err, closeErr))
-		}
+		resultErr = errors.Join(resultErr, application.Close())
 	}()
 
-	if err := application.Boot(ctx); err != nil {
-		panic(err)
-	}
-
-	handler, err := httpserver.NewHandler(application)
-	if err != nil {
-		panic(err)
-	}
-
-	server := httpserver.NewServer(
-		projectConfig.Server,
-		handler,
-	)
-
-	if err := server.Run(ctx); err != nil {
-		panic(err)
-	}
+	return application.Console().Run(ctx, args, console.StandardIO())
 }

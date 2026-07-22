@@ -49,6 +49,20 @@ type Connector struct {
 	closeOnce sync.Once
 }
 
+type Factory struct {
+	Config Config
+}
+
+func (f Factory) Code() kernel.ConnectionCode {
+	return f.Config.Code
+}
+
+func (f Factory) Open(
+	ctx context.Context,
+) (kernel.DBConnector, error) {
+	return New(ctx, f.Config)
+}
+
 func New(
 	ctx context.Context,
 	config Config,
@@ -256,4 +270,5 @@ func validateConfig(config Config) error {
 }
 
 var _ kernel.DBConnector = (*Connector)(nil)
+var _ kernel.ConnectorFactory = Factory{}
 var _ migrations.Target = (*Connector)(nil)

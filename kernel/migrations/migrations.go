@@ -55,10 +55,16 @@ type Status struct {
 	Migrations        []MigrationStatus `json:"migrations"`
 }
 
-type Manager struct{}
+type Manager struct {
+	historyTable string
+}
 
 func NewManager() *Manager {
-	return &Manager{}
+	return NewManagerWithHistoryTable(DefaultHistoryTable)
+}
+
+func NewManagerWithHistoryTable(historyTable string) *Manager {
+	return &Manager{historyTable: historyTable}
 }
 
 func (m *Manager) Up(
@@ -272,10 +278,15 @@ func (m *Manager) withInstance(
 		return fmt.Errorf("create migration source: %w", err)
 	}
 
+	historyTable := m.historyTable
+	if historyTable == "" {
+		historyTable = DefaultHistoryTable
+	}
+
 	databaseDriver, err := plan.Target.OpenMigrationDriver(
 		ctx,
 		plan.Source.Schema,
-		DefaultHistoryTable,
+		historyTable,
 	)
 	if err != nil {
 		_ = sourceDriver.Close()

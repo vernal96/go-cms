@@ -10,25 +10,24 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 )
 
-type SiteRepository struct {
+type Repository struct {
 	connector *connectorpostgres.Connector
 }
 
-func NewSiteRepository(
+func NewRepository(
 	connector *connectorpostgres.Connector,
-) (*SiteRepository, error) {
+) (*Repository, error) {
 	if connector == nil {
 		return nil, errors.New("postgres connector is nil")
 	}
-
 	if connector.Pool() == nil {
 		return nil, errors.New("postgres pool is nil")
 	}
 
-	return &SiteRepository{connector: connector}, nil
+	return &Repository{connector: connector}, nil
 }
 
-func (r *SiteRepository) List(
+func (r *Repository) List(
 	ctx context.Context,
 ) ([]site.Site, error) {
 	if ctx == nil {
@@ -51,7 +50,6 @@ ORDER BY id;
 	defer rows.Close()
 
 	sites := make([]site.Site, 0)
-
 	for rows.Next() {
 		var item site.Site
 		var rawSettings []byte
@@ -67,7 +65,6 @@ ORDER BY id;
 		}
 
 		item.Settings = make(map[string]any)
-
 		if len(rawSettings) > 0 {
 			if err := json.Unmarshal(rawSettings, &item.Settings); err != nil {
 				return nil, fmt.Errorf(
@@ -88,4 +85,4 @@ ORDER BY id;
 	return sites, nil
 }
 
-var _ site.Repository = (*SiteRepository)(nil)
+var _ site.Repository = (*Repository)(nil)

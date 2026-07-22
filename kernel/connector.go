@@ -10,8 +10,18 @@ type DBConnector interface {
 	Close() error
 }
 
+type ConnectorFactory interface {
+	Code() ConnectionCode
+	Open(context.Context) (DBConnector, error)
+}
+
 type ModuleDatabase interface {
 	ModuleCode() ModuleCode
+}
+
+type ModuleDatabaseFactory interface {
+	ModuleCode() ModuleCode
+	Build(DBConnector) (ModuleDatabase, error)
 }
 
 type DatabaseResolver interface {

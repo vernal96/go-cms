@@ -6,11 +6,13 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/migrations"
+	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
 func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
@@ -106,20 +108,35 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	}
 
 	domain := "integration-test.example.com"
-	if _, err := connector.Pool().Exec(
-		ctx,
-		"DELETE FROM core.sites WHERE domain = $1",
-		domain,
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = connector.Pool().Exec(ctx, `
+	seedPlan := seeds.Plan{
+		Connection: string(connector.Code()),
+		Target:     connector,
+		Source: seeds.Source{
+			ID:     "core",
+			Schema: "core",
+			FS: fstest.MapFS{
+				"000001_integration_site.up.sql": {
+					Data: []byte(`
 INSERT INTO core.sites (profile_code, domain, locale, settings)
-VALUES ('dev', $1, 'en-US', '{"enabled":true}'::jsonb)
-`, domain)
-	if err != nil {
-		t.Fatal(err)
+VALUES ('dev', 'integration-test.example.com', 'en-US', '{"enabled":true}'::jsonb)
+ON CONFLICT DO NOTHING;
+`),
+				},
+				"000001_integration_site.down.sql": {
+					Data: []byte(`
+DELETE FROM core.sites WHERE domain = 'integration-test.example.com';
+`),
+				},
+			},
+			Path: ".",
+		},
+	}
+	seedManager := seeds.NewManager()
+	if err := seedManager.Down(ctx, seedPlan, 1); err != nil {
+		t.Fatalf("prepare seed state: %v", err)
+	}
+	if err := seedManager.Up(ctx, seedPlan); err != nil {
+		t.Fatalf("seed up: %v", err)
 	}
 
 	sites, err := database.Sites().List(ctx)
@@ -146,12 +163,8 @@ VALUES ('dev', $1, 'en-US', '{"enabled":true}'::jsonb)
 		t.Fatal("inserted site was not loaded")
 	}
 
-	if _, err := connector.Pool().Exec(
-		ctx,
-		"DELETE FROM core.sites WHERE domain = $1",
-		domain,
-	); err != nil {
-		t.Fatal(err)
+	if err := seedManager.Down(ctx, seedPlan, 1); err != nil {
+		t.Fatalf("seed down: %v", err)
 	}
 
 	restoreMigration = true
@@ -161,11 +174,13 @@ VALUES ('dev', $1, 'en-US', '{"enabled":true}'::jsonb)
 
 	var schemaName *string
 	var historyTable *string
+	var seedHistoryTable *string
 	if err := connector.Pool().QueryRow(ctx, `
 SELECT
     to_regnamespace('core')::text,
-    to_regclass('core.schema_migrations')::text;
-`).Scan(&schemaName, &historyTable); err != nil {
+    to_regclass('core.schema_migrations')::text,
+    to_regclass('core.schema_seeds')::text;
+`).Scan(&schemaName, &historyTable, &seedHistoryTable); err != nil {
 		t.Fatal(err)
 	}
 	if schemaName == nil || *schemaName != "core" {
@@ -173,6 +188,9 @@ SELECT
 	}
 	if historyTable == nil || *historyTable != "core.schema_migrations" {
 		t.Fatalf("migration history was removed: %#v", historyTable)
+	}
+	if seedHistoryTable == nil || *seedHistoryTable != "core.schema_seeds" {
+		t.Fatalf("seed history was removed: %#v", seedHistoryTable)
 	}
 
 	if err := manager.Up(ctx, plan); err != nil {

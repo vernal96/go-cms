@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/vernal96/go-cms/app"
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/app"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 )
 
