@@ -1,15 +1,59 @@
 package core
 
-import "github.com/vernal96/go-cms/kernel"
+import (
+	"context"
+	"errors"
+
+	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/modules/core/site"
+)
 
 const ModuleCode kernel.ModuleCode = "core"
 
-type Module struct {
-	Config Config
+// Database is the persistence boundary required by the core module.
+// Its concrete implementation is selected by the main application binding.
+type Database interface {
+	kernel.ModuleDatabase
+	Sites() site.Repository
 }
 
-func (m Module) Code() kernel.ModuleCode {
+type Module struct{}
+
+func (Module) Code() kernel.ModuleCode {
 	return ModuleCode
 }
 
-var _ kernel.Module = (*Module)(nil)
+func (Module) Build(
+	_ context.Context,
+	ctx kernel.ModuleContext,
+) (kernel.ModuleRuntime, error) {
+	database, err := kernel.ModuleDatabaseFrom[Database](
+		ctx,
+		"",
+		ModuleCode,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if database.Sites() == nil {
+		return nil, errors.New("core site repository is nil")
+	}
+
+	return &Runtime{database: database}, nil
+}
+
+type Runtime struct {
+	database Database
+}
+
+func (r *Runtime) ModuleCode() kernel.ModuleCode {
+	return ModuleCode
+}
+
+func (r *Runtime) Database() Database {
+	return r.database
+}
+
+var _ kernel.Module = Module{}
+var _ kernel.ModuleRuntime = (*Runtime)(nil)

@@ -2,21 +2,19 @@ package kernel
 
 import "context"
 
-type DriverCode string
-
-type ConnectorCode string
-
-const (
-	MemoryDriverCode   DriverCode = "memory"
-	PostgresDriverCode DriverCode = "postgres"
-)
-
-type Connector interface {
-	Code() DriverCode
-	Close(ctx context.Context) error
-}
+type ConnectionCode string
 
 type DBConnector interface {
-	Connector
+	Code() ConnectionCode
 	Ping(ctx context.Context) error
+	Close() error
+}
+
+type ModuleDatabase interface {
+	ModuleCode() ModuleCode
+}
+
+type DatabaseResolver interface {
+	MainModuleDatabase(ModuleCode) (ModuleDatabase, bool)
+	ModuleDatabase(ConnectionCode, ModuleCode) (ModuleDatabase, bool)
 }

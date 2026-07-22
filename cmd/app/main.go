@@ -1,26 +1,50 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"errors"
+	"os/signal"
+	"syscall"
 
-	"github.com/vernal96/go-cms/connectors/postgres"
-	"github.com/vernal96/go-cms/internal/profiles/main"
-	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/internal/bootstrap"
+	"github.com/vernal96/go-cms/internal/config"
+	httpserver "github.com/vernal96/go-cms/internal/server/http"
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		syscall.SIGINT,
+		syscall.SIGTERM,
+	)
+	defer stop()
 
-	connectorManager := kernel.NewConnectorManager()
+	projectConfig, err := config.Load()
+	if err != nil {
+		panic(err)
+	}
 
-	connectorManager.DB.Register(postgres.Connector)
+	app, err := bootstrap.NewApp(ctx, projectConfig)
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		if closeErr := app.Close(); closeErr != nil {
+			panic(errors.Join(err, closeErr))
+		}
+	}()
 
-	app := kernel.NewApp(
-		[]kernel.Profile{
-			main_profile.Profile{},
-		},
-		connectorManager,
+	handler, err := httpserver.NewHandler(app)
+	if err != nil {
+		panic(err)
+	}
+
+	server := httpserver.NewServer(
+		projectConfig.Server,
+		handler,
 	)
 
-	fmt.Println(app)
-
+	if err := server.Run(ctx); err != nil {
+		panic(err)
+	}
 }
