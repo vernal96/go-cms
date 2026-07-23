@@ -42,6 +42,26 @@ type Disk interface {
 	Close() error
 }
 
+// OverwriteDisk is an optional capability for infrastructure that needs
+// atomic replace semantics. The core file service intentionally continues to
+// use Disk.PutNew so uploaded files can never be overwritten.
+type OverwriteDisk interface {
+	Put(context.Context, string, io.Reader, string) error
+}
+
+type KeyDistribution string
+
+const (
+	KeyDistributionHierarchical KeyDistribution = "hierarchical"
+	KeyDistributionSelfManaged  KeyDistribution = "self_managed"
+)
+
+// KeyDistributionProvider lets higher-level infrastructure choose an
+// efficient object-key layout without identifying the concrete disk driver.
+type KeyDistributionProvider interface {
+	KeyDistribution() KeyDistribution
+}
+
 // TemporaryURLVerifier is implemented by disks whose temporary URLs are
 // delivered by this application (currently localstorage).
 type TemporaryURLVerifier interface {

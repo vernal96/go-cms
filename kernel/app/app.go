@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/console"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/migrations"
@@ -46,6 +47,7 @@ type Definition struct {
 	MainDatabase        DatabaseDefinition
 	AdditionalDatabases []DatabaseDefinition
 	Filesystems         []filesystem.Factory
+	Caches              []cache.Factory
 	Profiles            []kernel.Profile
 }
 
@@ -61,6 +63,7 @@ type App struct {
 	additional    map[kernel.ConnectionCode]*bindingRuntime
 	connectors    []kernel.DBConnector
 	filesystems   *filesystem.Manager
+	caches        *cache.Manager
 	coreDatabase  core.Database
 	migrationPlan []migrations.Plan
 	seedPlan      []seeds.Plan
@@ -121,6 +124,16 @@ func New(
 		return nil, err
 	}
 	application.filesystems = filesystems
+
+	caches, err := cache.NewManager(
+		ctx,
+		definition.Caches,
+		cache.Dependencies{Filesystems: filesystems},
+	)
+	if err != nil {
+		return nil, err
+	}
+	application.caches = caches
 
 	definitions := make(
 		[]DatabaseDefinition,
@@ -304,6 +317,7 @@ func (a *App) boot(ctx context.Context) error {
 			Users:         userService,
 			Groups:        groupService,
 			Authorization: accessService,
+			Caches:        a.caches,
 		},
 	)
 	if err != nil {
@@ -336,8 +350,16 @@ func (a *App) boot(ctx context.Context) error {
 		profileRuntimes[profile.Code] = runtime
 	}
 
+	runtimeCoreDatabase, err := sharedCoreDatabase(
+		a.definition.Profiles,
+		profileRuntimes,
+	)
+	if err != nil {
+		return err
+	}
+
 	catalog, err := site.NewCatalog(
-		a.coreDatabase.Sites(),
+		runtimeCoreDatabase.Sites(),
 		profileResolver(profileRuntimes),
 		accessService,
 	)
@@ -350,7 +372,7 @@ func (a *App) boot(ctx context.Context) error {
 	}
 
 	resourceService, err := resource.NewService(
-		a.coreDatabase.Resources(),
+		runtimeCoreDatabase.Resources(),
 		catalog,
 		mediaService,
 		accessService,
@@ -1459,6 +1481,11 @@ func (a *App) Close() error {
 				))
 			}
 		}
+		if a.caches != nil {
+			if err := a.caches.Close(); err != nil {
+				closeErrors = append(closeErrors, err)
+			}
+		}
 		if a.filesystems != nil {
 			if err := a.filesystems.Close(); err != nil {
 				closeErrors = append(closeErrors, err)
@@ -1669,6 +1696,62 @@ func (r profileResolver) ProfileRuntime(
 	return runtime, exists
 }
 
+func sharedCoreDatabase(
+	profiles []kernel.Profile,
+	runtimes map[kernel.ProfileCode]*kernel.ProfileRuntime,
+) (core.Database, error) {
+	var (
+		selected    core.Database
+		expected    core.RepositoryCacheDescriptor
+		hasExpected bool
+		initialized bool
+	)
+
+	for _, profile := range profiles {
+		runtime := runtimes[profile.Code]
+		if runtime == nil {
+			return nil, fmt.Errorf(
+				"profile runtime %q is nil",
+				profile.Code,
+			)
+		}
+		moduleRuntime, exists := runtime.Registry().Module(core.ModuleCode)
+		if !exists {
+			return nil, fmt.Errorf(
+				"profile %q does not contain required module %q",
+				profile.Code,
+				core.ModuleCode,
+			)
+		}
+		coreRuntime, ok := moduleRuntime.(*core.Runtime)
+		if !ok {
+			return nil, fmt.Errorf(
+				"profile %q core runtime has type %T",
+				profile.Code,
+				moduleRuntime,
+			)
+		}
+		current, hasCurrent := coreRuntime.RepositoryCache()
+		if !initialized {
+			selected = coreRuntime.Database()
+			expected = current
+			hasExpected = hasCurrent
+			initialized = true
+			continue
+		}
+		if hasExpected != hasCurrent ||
+			(hasExpected && expected != current) {
+			return nil, errors.New(
+				"all profiles must use the same core repository cache store, namespace, and TTL",
+			)
+		}
+	}
+	if !initialized || selected == nil {
+		return nil, errors.New("core runtime database is unavailable")
+	}
+	return selected, nil
+}
+
 func migrationPlans(
 	connector kernel.DBConnector,
 	moduleCode kernel.ModuleCode,
@@ -1844,6 +1927,33 @@ func validateDefinition(definition Definition) error {
 		filesystemCodes[code] = struct{}{}
 	}
 
+	cacheCodes := make(
+		map[cache.Code]struct{},
+		len(definition.Caches),
+	)
+	for index, factory := range definition.Caches {
+		if factory == nil {
+			return fmt.Errorf(
+				"cache factory at index %d is nil",
+				index,
+			)
+		}
+		code := factory.Code()
+		if code == "" {
+			return fmt.Errorf(
+				"cache factory at index %d has empty code",
+				index,
+			)
+		}
+		if _, exists := cacheCodes[code]; exists {
+			return fmt.Errorf(
+				"cache store %q is defined more than once",
+				code,
+			)
+		}
+		cacheCodes[code] = struct{}{}
+	}
+
 	definitions := make(
 		[]DatabaseDefinition,
 		0,
@@ -1952,6 +2062,10 @@ func cloneDefinition(definition Definition) Definition {
 		[]filesystem.Factory(nil),
 		definition.Filesystems...,
 	)
+	definition.Caches = append(
+		[]cache.Factory(nil),
+		definition.Caches...,
+	)
 	definition.MainDatabase.Adapters = append(
 		[]ModuleDatabaseFactory(nil),
 		definition.MainDatabase.Adapters...,
@@ -1973,6 +2087,12 @@ func cloneDefinition(definition Definition) Definition {
 			[]kernel.ProfileModule(nil),
 			definition.Profiles[index].Modules...,
 		)
+		for moduleIndex := range definition.Profiles[index].Modules {
+			definition.Profiles[index].Modules[moduleIndex].Caches = append(
+				[]cache.Binding(nil),
+				definition.Profiles[index].Modules[moduleIndex].Caches...,
+			)
+		}
 		definition.Profiles[index].Params = field.CloneDefinitions(
 			definition.Profiles[index].Params,
 		)

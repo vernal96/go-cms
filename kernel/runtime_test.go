@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
@@ -131,6 +132,94 @@ type fileAwareModule struct {
 	expectedAuthorization security.Authorizer
 }
 
+type cacheAwareModule struct{}
+
+func (*cacheAwareModule) Code() kernel.ModuleCode {
+	return "cache-aware"
+}
+
+func (m *cacheAwareModule) Build(
+	_ context.Context,
+	ctx kernel.ModuleContext,
+) (kernel.ModuleRuntime, error) {
+	if ctx.Caches() == nil {
+		return nil, errors.New("module cache manager is nil")
+	}
+	fast, fastExists := ctx.Caches().Store("fast")
+	large, largeExists := ctx.Caches().Store("large")
+	if !fastExists || !largeExists {
+		return nil, errors.New("module cache aliases are missing")
+	}
+	if fast.Code() != "redis" || large.Code() != "files" {
+		return nil, errors.New("module cache aliases resolved wrong stores")
+	}
+	binding, exists := ctx.Caches().Binding("fast")
+	if !exists || binding.Namespace != "shared/fast" {
+		return nil, errors.New("module cache binding is unavailable")
+	}
+	if _, exists := ctx.Caches().Store("not-bound"); exists {
+		return nil, errors.New("module can resolve an unbound cache")
+	}
+	return registryRuntime{code: m.Code()}, nil
+}
+
+type cacheResolver map[cache.Code]cache.Store
+
+func (r cacheResolver) Store(code cache.Code) (cache.Store, bool) {
+	store, exists := r[code]
+	return store, exists
+}
+
+type runtimeCacheStore struct {
+	code cache.Code
+}
+
+func (s runtimeCacheStore) Code() cache.Code {
+	return s.code
+}
+
+func (runtimeCacheStore) Ping(context.Context) error {
+	return nil
+}
+
+func (runtimeCacheStore) Get(
+	context.Context,
+	string,
+) ([]byte, error) {
+	return nil, cache.ErrMiss
+}
+
+func (runtimeCacheStore) Set(
+	context.Context,
+	string,
+	[]byte,
+	cache.SetOptions,
+) error {
+	return nil
+}
+
+func (runtimeCacheStore) Exists(
+	context.Context,
+	string,
+) (bool, error) {
+	return false, nil
+}
+
+func (runtimeCacheStore) Delete(context.Context, string) error {
+	return nil
+}
+
+func (runtimeCacheStore) InvalidateTag(
+	context.Context,
+	cache.Tag,
+) error {
+	return nil
+}
+
+func (runtimeCacheStore) Close() error {
+	return nil
+}
+
 func (*fileAwareModule) Code() kernel.ModuleCode {
 	return "file-aware"
 }
@@ -191,6 +280,39 @@ func TestProfileRuntimeInjectsCoreServicePorts(t *testing.T) {
 			{Module: module},
 		},
 	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProfileRuntimeInjectsOnlyBoundCacheAliases(t *testing.T) {
+	resolver := cacheResolver{
+		"redis": runtimeCacheStore{code: "redis"},
+		"files": runtimeCacheStore{code: "files"},
+	}
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		kernel.RuntimeServices{Caches: resolver},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := factory.Make(
+		context.Background(),
+		kernel.Profile{
+			Code: "cached",
+			Modules: []kernel.ProfileModule{{
+				Module: &cacheAwareModule{},
+				Caches: []cache.Binding{
+					{
+						Alias:     "fast",
+						Code:      "redis",
+						Namespace: "shared/fast",
+					},
+					{Alias: "large", Code: "files"},
+				},
+			}},
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 }

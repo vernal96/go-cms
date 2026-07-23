@@ -1,0 +1,207 @@
+package cache
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+type scopedManager struct {
+	stores   map[Alias]Store
+	bindings map[Alias]Binding
+}
+
+func NewModuleManager(
+	resolver Resolver,
+	profileCode string,
+	moduleCode string,
+	bindings []Binding,
+) (ModuleManager, error) {
+	manager := &scopedManager{
+		stores:   make(map[Alias]Store, len(bindings)),
+		bindings: make(map[Alias]Binding, len(bindings)),
+	}
+
+	for index, binding := range bindings {
+		if binding.Alias == "" {
+			return nil, fmt.Errorf(
+				"cache binding at index %d has empty alias",
+				index,
+			)
+		}
+		if binding.Code == "" {
+			return nil, fmt.Errorf(
+				"cache binding %q has empty store code",
+				binding.Alias,
+			)
+		}
+		if _, exists := manager.stores[binding.Alias]; exists {
+			return nil, fmt.Errorf(
+				"cache alias %q is configured more than once",
+				binding.Alias,
+			)
+		}
+		if resolver == nil {
+			return nil, fmt.Errorf(
+				"resolve cache alias %q: %w: %q",
+				binding.Alias,
+				ErrStoreNotFound,
+				binding.Code,
+			)
+		}
+		store, exists := resolver.Store(binding.Code)
+		if !exists {
+			return nil, fmt.Errorf(
+				"resolve cache alias %q: %w: %q",
+				binding.Alias,
+				ErrStoreNotFound,
+				binding.Code,
+			)
+		}
+
+		namespace := strings.TrimSpace(binding.Namespace)
+		if namespace == "" {
+			namespace = fmt.Sprintf(
+				"profiles/%s/modules/%s/caches/%s",
+				profileCode,
+				moduleCode,
+				binding.Alias,
+			)
+		}
+		if err := validateNamespace(namespace); err != nil {
+			return nil, fmt.Errorf(
+				"cache alias %q namespace: %w",
+				binding.Alias,
+				err,
+			)
+		}
+
+		binding.Namespace = namespace
+		manager.bindings[binding.Alias] = binding
+		manager.stores[binding.Alias] = &scopedStore{
+			store:     store,
+			namespace: namespace,
+		}
+	}
+
+	return manager, nil
+}
+
+func (m *scopedManager) Store(alias Alias) (Store, bool) {
+	if m == nil {
+		return nil, false
+	}
+	store, exists := m.stores[alias]
+	return store, exists
+}
+
+func (m *scopedManager) Binding(alias Alias) (Binding, bool) {
+	if m == nil {
+		return Binding{}, false
+	}
+	binding, exists := m.bindings[alias]
+	return binding, exists
+}
+
+type scopedStore struct {
+	store     Store
+	namespace string
+}
+
+func (s *scopedStore) Code() Code {
+	return s.store.Code()
+}
+
+func (s *scopedStore) Ping(ctx context.Context) error {
+	return s.store.Ping(ctx)
+}
+
+func (s *scopedStore) Get(
+	ctx context.Context,
+	key string,
+) ([]byte, error) {
+	if key == "" {
+		return nil, errors.New("cache key is empty")
+	}
+	return s.store.Get(ctx, scopedValue(s.namespace, key))
+}
+
+func (s *scopedStore) Set(
+	ctx context.Context,
+	key string,
+	value []byte,
+	options SetOptions,
+) error {
+	if key == "" {
+		return errors.New("cache key is empty")
+	}
+	tags := make([]Tag, len(options.Tags))
+	for index, tag := range options.Tags {
+		if tag == "" {
+			return errors.New("cache tag is empty")
+		}
+		tags[index] = Tag(scopedValue(s.namespace, string(tag)))
+	}
+	options.Tags = tags
+	return s.store.Set(
+		ctx,
+		scopedValue(s.namespace, key),
+		value,
+		options,
+	)
+}
+
+func (s *scopedStore) Exists(
+	ctx context.Context,
+	key string,
+) (bool, error) {
+	if key == "" {
+		return false, errors.New("cache key is empty")
+	}
+	return s.store.Exists(ctx, scopedValue(s.namespace, key))
+}
+
+func (s *scopedStore) Delete(
+	ctx context.Context,
+	key string,
+) error {
+	if key == "" {
+		return errors.New("cache key is empty")
+	}
+	return s.store.Delete(ctx, scopedValue(s.namespace, key))
+}
+
+func (s *scopedStore) InvalidateTag(
+	ctx context.Context,
+	tag Tag,
+) error {
+	if tag == "" {
+		return errors.New("cache tag is empty")
+	}
+	return s.store.InvalidateTag(
+		ctx,
+		Tag(scopedValue(s.namespace, string(tag))),
+	)
+}
+
+// A module-scoped store borrows the global store. Module code must not be
+// able to close application-owned infrastructure.
+func (*scopedStore) Close() error {
+	return nil
+}
+
+func validateNamespace(value string) error {
+	if strings.ContainsRune(value, '\x00') {
+		return errors.New("contains NUL")
+	}
+	return nil
+}
+
+func scopedValue(namespace, value string) string {
+	return strconv.Itoa(len(namespace)) + ":" + namespace + value
+}
+
+var _ ModuleManager = (*scopedManager)(nil)
+var _ Store = (*scopedStore)(nil)

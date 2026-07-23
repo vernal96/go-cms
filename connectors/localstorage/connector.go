@@ -114,6 +114,10 @@ func (c *Connector) Visibility() filesystem.Visibility {
 	return c.visibility
 }
 
+func (*Connector) KeyDistribution() filesystem.KeyDistribution {
+	return filesystem.KeyDistributionHierarchical
+}
+
 func (c *Connector) Ping(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("localstorage ping context is nil")
@@ -136,6 +140,24 @@ func (c *Connector) PutNew(
 	key string,
 	source io.Reader,
 	_ string,
+) error {
+	return c.put(ctx, key, source, false)
+}
+
+func (c *Connector) Put(
+	ctx context.Context,
+	key string,
+	source io.Reader,
+	_ string,
+) error {
+	return c.put(ctx, key, source, true)
+}
+
+func (c *Connector) put(
+	ctx context.Context,
+	key string,
+	source io.Reader,
+	overwrite bool,
 ) error {
 	if ctx == nil {
 		return errors.New("localstorage put context is nil")
@@ -181,16 +203,24 @@ func (c *Connector) PutNew(
 		return fmt.Errorf("close localstorage object: %w", err)
 	}
 
-	// A hard link publishes the completed temporary file atomically and fails
-	// instead of replacing an existing object.
-	if err := os.Link(tempName, target); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return filesystem.ErrConflict
+	if overwrite {
+		if err := os.Rename(tempName, target); err != nil {
+			return fmt.Errorf("replace localstorage object: %w", err)
 		}
-		return fmt.Errorf("publish localstorage object: %w", err)
+	} else {
+		// A hard link publishes the completed temporary file atomically and
+		// fails instead of replacing an existing object.
+		if err := os.Link(tempName, target); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return filesystem.ErrConflict
+			}
+			return fmt.Errorf("publish localstorage object: %w", err)
+		}
 	}
 	if err := os.Chmod(target, 0o600); err != nil {
-		_ = os.Remove(target)
+		if !overwrite {
+			_ = os.Remove(target)
+		}
 		return fmt.Errorf("protect localstorage object: %w", err)
 	}
 	return nil
@@ -385,5 +415,7 @@ func (r *contextReader) Read(target []byte) (int, error) {
 }
 
 var _ filesystem.Disk = (*Connector)(nil)
+var _ filesystem.OverwriteDisk = (*Connector)(nil)
+var _ filesystem.KeyDistributionProvider = (*Connector)(nil)
 var _ filesystem.Factory = Factory{}
 var _ filesystem.TemporaryURLVerifier = (*Connector)(nil)

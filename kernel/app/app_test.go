@@ -10,11 +10,13 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	migratedb "github.com/golang-migrate/migrate/v4/database"
 	"github.com/golang-migrate/migrate/v4/database/stub"
 	"github.com/vernal96/go-cms/kernel"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
+	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/console"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
@@ -41,6 +43,76 @@ type fakeConnector struct {
 	drivers map[string]*stub.Stub
 	pings   atomic.Int32
 	closes  atomic.Int32
+}
+
+type fakeCacheFactory struct {
+	store cache.Store
+}
+
+func (f fakeCacheFactory) Code() cache.Code {
+	return f.store.Code()
+}
+
+func (f fakeCacheFactory) Open(
+	context.Context,
+	cache.Dependencies,
+) (cache.Store, error) {
+	return f.store, nil
+}
+
+type fakeCacheStore struct {
+	code    cache.Code
+	pingErr error
+	pings   atomic.Int32
+	closes  atomic.Int32
+}
+
+func (s *fakeCacheStore) Code() cache.Code {
+	return s.code
+}
+
+func (s *fakeCacheStore) Ping(context.Context) error {
+	s.pings.Add(1)
+	return s.pingErr
+}
+
+func (*fakeCacheStore) Get(
+	context.Context,
+	string,
+) ([]byte, error) {
+	return nil, cache.ErrMiss
+}
+
+func (*fakeCacheStore) Set(
+	context.Context,
+	string,
+	[]byte,
+	cache.SetOptions,
+) error {
+	return nil
+}
+
+func (*fakeCacheStore) Exists(
+	context.Context,
+	string,
+) (bool, error) {
+	return false, nil
+}
+
+func (*fakeCacheStore) Delete(context.Context, string) error {
+	return nil
+}
+
+func (*fakeCacheStore) InvalidateTag(
+	context.Context,
+	cache.Tag,
+) error {
+	return nil
+}
+
+func (s *fakeCacheStore) Close() error {
+	s.closes.Add(1)
+	return nil
 }
 
 func newFakeConnector(code kernel.ConnectionCode) *fakeConnector {
@@ -1348,6 +1420,113 @@ func TestNewClosesPreviouslyOpenedConnectorOnFactoryError(t *testing.T) {
 			mainConnector.closes.Load(),
 			brokenConnector.closes.Load(),
 		)
+	}
+}
+
+func TestAppNewRequiresCachePingAndClosesFailedStore(t *testing.T) {
+	cacheStore := &fakeCacheStore{
+		code:    "required",
+		pingErr: errors.New("cache unavailable"),
+	}
+	_, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{
+			MainDatabase: appkernel.DatabaseDefinition{
+				Connector: &fakeConnectorFactory{
+					connector: newFakeConnector("main"),
+				},
+				Adapters: []kernel.ModuleDatabaseFactory{
+					&fakeDatabaseFactory{
+						code: core.ModuleCode,
+						database: &fakeCoreDatabase{
+							repository: &fakeSiteRepository{},
+						},
+					},
+				},
+			},
+			Caches: []cache.Factory{
+				fakeCacheFactory{store: cacheStore},
+			},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "cache unavailable") {
+		t.Fatalf("New error = %v", err)
+	}
+	if cacheStore.pings.Load() != 1 || cacheStore.closes.Load() != 1 {
+		t.Fatalf(
+			"cache lifecycle = pings:%d closes:%d",
+			cacheStore.pings.Load(),
+			cacheStore.closes.Load(),
+		)
+	}
+}
+
+func TestAppBootRejectsDifferentCoreRepositoryCachesAcrossProfiles(
+	t *testing.T,
+) {
+	cacheStore := &fakeCacheStore{code: "shared"}
+	application, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{
+			MainDatabase: appkernel.DatabaseDefinition{
+				Connector: &fakeConnectorFactory{
+					connector: newFakeConnector("main"),
+				},
+				Adapters: []kernel.ModuleDatabaseFactory{
+					&fakeDatabaseFactory{
+						code: core.ModuleCode,
+						database: &fakeCoreDatabase{
+							repository: &fakeSiteRepository{},
+						},
+					},
+				},
+			},
+			Caches: []cache.Factory{
+				fakeCacheFactory{store: cacheStore},
+			},
+			Profiles: []kernel.Profile{
+				{
+					Code: "first",
+					Modules: []kernel.ProfileModule{{
+						Module: core.Module{},
+						Config: core.Config{
+							RepositoryCacheTTL: time.Minute,
+						},
+						Caches: []cache.Binding{{
+							Alias:     core.RepositoryCacheAlias,
+							Code:      cacheStore.code,
+							Namespace: "core/first",
+						}},
+					}},
+				},
+				{
+					Code: "second",
+					Modules: []kernel.ProfileModule{{
+						Module: core.Module{},
+						Config: core.Config{
+							RepositoryCacheTTL: time.Minute,
+						},
+						Caches: []cache.Binding{{
+							Alias:     core.RepositoryCacheAlias,
+							Code:      cacheStore.code,
+							Namespace: "core/second",
+						}},
+					}},
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = application.Close() }()
+
+	err = application.Boot(context.Background())
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"all profiles must use the same core repository cache",
+	) {
+		t.Fatalf("Boot error = %v", err)
 	}
 }
 

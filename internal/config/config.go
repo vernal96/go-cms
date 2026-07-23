@@ -5,19 +5,22 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/vernal96/go-cms/internal/connectors/corecache"
 	"github.com/vernal96/go-cms/internal/connectors/corefiles"
 	"github.com/vernal96/go-cms/internal/connectors/mainpostgres"
 	"github.com/vernal96/go-cms/internal/profiles/dev"
 	"github.com/vernal96/go-cms/kernel"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
+	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	corepostgres "github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres"
 )
 
 type Config struct {
-	Server   ServerConfig        `envconfig:"SERVER"`
-	Postgres mainpostgres.Config `envconfig:"POSTGRES"`
-	Files    FilesConfig         `envconfig:"FILES"`
+	Server    ServerConfig        `envconfig:"SERVER"`
+	Postgres  mainpostgres.Config `envconfig:"POSTGRES"`
+	Files     FilesConfig         `envconfig:"FILES"`
+	CoreCache corecache.Config    `envconfig:"CORE_CACHE"`
 }
 
 type FilesConfig struct {
@@ -50,6 +53,9 @@ func (c Config) Application() appkernel.Definition {
 		Filesystems: []filesystem.Factory{
 			corefiles.PublicFactory(c.Files.Public),
 			corefiles.PrivateFactory(c.Files.Private),
+		},
+		Caches: []cache.Factory{
+			corecache.NewFactory(c.CoreCache),
 		},
 		Profiles: []kernel.Profile{dev.Profile},
 	}

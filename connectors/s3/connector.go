@@ -164,6 +164,10 @@ func (c *Connector) Visibility() filesystem.Visibility {
 	return c.visibility
 }
 
+func (*Connector) KeyDistribution() filesystem.KeyDistribution {
+	return filesystem.KeyDistributionSelfManaged
+}
+
 func (c *Connector) Ping(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("s3 ping context is nil")
@@ -183,6 +187,25 @@ func (c *Connector) PutNew(
 	source io.Reader,
 	contentType string,
 ) error {
+	return c.put(ctx, key, source, contentType, true)
+}
+
+func (c *Connector) Put(
+	ctx context.Context,
+	key string,
+	source io.Reader,
+	contentType string,
+) error {
+	return c.put(ctx, key, source, contentType, false)
+}
+
+func (c *Connector) put(
+	ctx context.Context,
+	key string,
+	source io.Reader,
+	contentType string,
+	putNew bool,
+) error {
 	if ctx == nil {
 		return errors.New("s3 put context is nil")
 	}
@@ -194,16 +217,19 @@ func (c *Connector) PutNew(
 		return err
 	}
 	input := &awss3.PutObjectInput{
-		Bucket:      aws.String(c.bucket),
-		Key:         aws.String(key),
-		Body:        source,
-		IfNoneMatch: aws.String("*"),
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+		Body:   source,
+	}
+	if putNew {
+		input.IfNoneMatch = aws.String("*")
 	}
 	if contentType != "" {
 		input.ContentType = aws.String(contentType)
 	}
 	if _, err := c.client.PutObject(ctx, input); err != nil {
-		if apiErrorCode(err, "PreconditionFailed", "ConditionalRequestConflict") {
+		if putNew &&
+			apiErrorCode(err, "PreconditionFailed", "ConditionalRequestConflict") {
 			return filesystem.ErrConflict
 		}
 		return fmt.Errorf("put s3 object %q: %w", key, err)
@@ -365,4 +391,6 @@ func apiErrorCode(err error, codes ...string) bool {
 }
 
 var _ filesystem.Disk = (*Connector)(nil)
+var _ filesystem.OverwriteDisk = (*Connector)(nil)
+var _ filesystem.KeyDistributionProvider = (*Connector)(nil)
 var _ filesystem.Factory = Factory{}

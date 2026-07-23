@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/group"
@@ -30,6 +31,7 @@ type Profile struct {
 type ProfileModule struct {
 	Module Module
 	Config any
+	Caches []cache.Binding
 }
 
 type Module interface {
@@ -222,6 +224,7 @@ type ModuleContext struct {
 	users         user.Service
 	groups        group.Service
 	authorization security.Authorizer
+	caches        cache.ModuleManager
 }
 
 func newModuleContext(
@@ -230,6 +233,7 @@ func newModuleContext(
 	registry Registry,
 	config any,
 	services RuntimeServices,
+	caches cache.ModuleManager,
 ) ModuleContext {
 	return ModuleContext{
 		resolver:      resolver,
@@ -241,6 +245,7 @@ func newModuleContext(
 		users:         services.Users,
 		groups:        services.Groups,
 		authorization: services.Authorization,
+		caches:        caches,
 	}
 }
 
@@ -278,6 +283,11 @@ func (c ModuleContext) Groups() group.Service {
 
 func (c ModuleContext) Authorization() security.Authorizer {
 	return c.authorization
+}
+
+// Caches exposes only aliases explicitly bound to this module.
+func (c ModuleContext) Caches() cache.ModuleManager {
+	return c.caches
 }
 
 func ModuleConfigFrom[T any](ctx ModuleContext) (T, error) {
@@ -411,6 +421,7 @@ type RuntimeServices struct {
 	Users         user.Service
 	Groups        group.Service
 	Authorization security.Authorizer
+	Caches        cache.Resolver
 }
 
 func NewProfileRuntimeFactory(
@@ -561,12 +572,28 @@ func (f *ProfileRuntimeFactory) Make(
 	for _, profileModule := range profile.Modules {
 		module := profileModule.Module
 
+		moduleCaches, err := cache.NewModuleManager(
+			f.services.Caches,
+			string(profile.Code),
+			string(module.Code()),
+			profileModule.Caches,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"configure caches for module %q in profile %q: %w",
+				module.Code(),
+				profile.Code,
+				err,
+			)
+		}
+
 		moduleContext := newModuleContext(
 			f.resolver,
 			profile,
 			registry,
 			profileModule.Config,
 			f.services,
+			moduleCaches,
 		)
 
 		runtime, err := module.Build(ctx, moduleContext)
@@ -612,6 +639,12 @@ func cloneProfile(profile Profile) Profile {
 		[]ProfileModule(nil),
 		profile.Modules...,
 	)
+	for index := range profile.Modules {
+		profile.Modules[index].Caches = append(
+			[]cache.Binding(nil),
+			profile.Modules[index].Caches...,
+		)
+	}
 	profile.Params = field.CloneDefinitions(profile.Params)
 	profile.Templates = template.CloneDefinitions(profile.Templates)
 

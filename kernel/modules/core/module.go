@@ -3,8 +3,10 @@ package core
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
@@ -18,6 +20,20 @@ import (
 )
 
 const ModuleCode kernel.ModuleCode = "core"
+
+const RepositoryCacheAlias cache.Alias = "repository"
+
+const defaultRepositoryCacheTTL = 5 * time.Minute
+
+type Config struct {
+	RepositoryCacheTTL time.Duration
+}
+
+type RepositoryCacheDescriptor struct {
+	Code      cache.Code
+	Namespace string
+	TTL       time.Duration
+}
 
 // Database is the persistence boundary required by the core module.
 // Its concrete implementation is selected by the main application binding.
@@ -88,11 +104,49 @@ func (Module) Build(
 		return nil, errors.New("core access repository is nil")
 	}
 
-	return &Runtime{database: database}, nil
+	config, err := kernel.ModuleConfigFrom[Config](ctx)
+	if err != nil {
+		return nil, err
+	}
+	if config.RepositoryCacheTTL == 0 {
+		config.RepositoryCacheTTL = defaultRepositoryCacheTTL
+	}
+	if config.RepositoryCacheTTL < 0 {
+		return nil, errors.New("core repository cache TTL is invalid")
+	}
+
+	var descriptor *RepositoryCacheDescriptor
+	if caches := ctx.Caches(); caches != nil {
+		store, exists := caches.Store(RepositoryCacheAlias)
+		if exists {
+			binding, bindingExists := caches.Binding(RepositoryCacheAlias)
+			if !bindingExists {
+				return nil, errors.New(
+					"core repository cache binding is unavailable",
+				)
+			}
+			database = newCachedDatabase(
+				database,
+				store,
+				config.RepositoryCacheTTL,
+			)
+			descriptor = &RepositoryCacheDescriptor{
+				Code:      binding.Code,
+				Namespace: binding.Namespace,
+				TTL:       config.RepositoryCacheTTL,
+			}
+		}
+	}
+
+	return &Runtime{
+		database:        database,
+		repositoryCache: descriptor,
+	}, nil
 }
 
 type Runtime struct {
-	database Database
+	database        Database
+	repositoryCache *RepositoryCacheDescriptor
 }
 
 func (r *Runtime) ModuleCode() kernel.ModuleCode {
@@ -101,6 +155,16 @@ func (r *Runtime) ModuleCode() kernel.ModuleCode {
 
 func (r *Runtime) Database() Database {
 	return r.database
+}
+
+func (r *Runtime) RepositoryCache() (
+	RepositoryCacheDescriptor,
+	bool,
+) {
+	if r == nil || r.repositoryCache == nil {
+		return RepositoryCacheDescriptor{}, false
+	}
+	return *r.repositoryCache, true
 }
 
 var _ kernel.Module = Module{}

@@ -51,6 +51,23 @@ func TestConnectorStoresWithoutOverwriteAndDeletesIdempotently(t *testing.T) {
 	if err != nil || string(content) != "hello" {
 		t.Fatalf("stored content = %q, %v", content, err)
 	}
+	if err := connector.Put(
+		context.Background(),
+		"objects/2026/item",
+		strings.NewReader("replacement"),
+		"text/plain",
+	); err != nil {
+		t.Fatal(err)
+	}
+	body, err = connector.Open(context.Background(), "objects/2026/item")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err = io.ReadAll(body)
+	_ = body.Close()
+	if err != nil || string(content) != "replacement" {
+		t.Fatalf("replaced content = %q, %v", content, err)
+	}
 	if _, err := connector.Open(
 		context.Background(),
 		"../escape",

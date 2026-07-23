@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	projectconfig "github.com/vernal96/go-cms/internal/config"
+	"github.com/vernal96/go-cms/internal/connectors/corecache"
 	"github.com/vernal96/go-cms/internal/connectors/mainpostgres"
 	configloader "github.com/vernal96/go-cms/kernel/config"
 	"github.com/vernal96/go-cms/kernel/filesystem"
@@ -23,6 +24,9 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	t.Setenv("FILES_PRIVATE_DRIVER", "s3")
 	t.Setenv("FILES_PRIVATE_S3_REGION", "us-east-1")
 	t.Setenv("FILES_PRIVATE_S3_BUCKET", "cms-private")
+	t.Setenv("CORE_CACHE_DRIVER", "redis")
+	t.Setenv("CORE_CACHE_REDIS_ADDRS", "redis-one:6379,redis-two:6379")
+	t.Setenv("CORE_CACHE_REDIS_MASTER_NAME", "cms-primary")
 
 	config, err := configloader.Load[projectconfig.Config]("")
 	if err != nil {
@@ -33,6 +37,11 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	}
 	if config.Postgres.Host != "database" || config.Postgres.Database != "cms" {
 		t.Fatalf("postgres config = %#v", config.Postgres)
+	}
+	if config.CoreCache.Driver != "redis" ||
+		len(config.CoreCache.Redis.Addrs) != 2 ||
+		config.CoreCache.Redis.MasterName != "cms-primary" {
+		t.Fatalf("core cache config = %#v", config.CoreCache)
 	}
 
 	definition := config.Application()
@@ -50,5 +59,17 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		definition.Filesystems[0].Code() != filesystem.Code("public") ||
 		definition.Filesystems[1].Code() != filesystem.Code("private") {
 		t.Fatalf("filesystem factories = %#v", definition.Filesystems)
+	}
+	if len(definition.Caches) != 1 ||
+		definition.Caches[0].Code() != corecache.Code {
+		t.Fatalf("cache factories = %#v", definition.Caches)
+	}
+	if len(definition.Profiles[0].Modules) != 1 ||
+		len(definition.Profiles[0].Modules[0].Caches) != 1 ||
+		definition.Profiles[0].Modules[0].Caches[0].Code != corecache.Code {
+		t.Fatalf(
+			"core cache bindings = %#v",
+			definition.Profiles[0].Modules,
+		)
 	}
 }

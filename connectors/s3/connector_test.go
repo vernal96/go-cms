@@ -104,6 +104,17 @@ func TestConnectorShapesObjectKeysAndURLs(t *testing.T) {
 		*client.put.IfNoneMatch != "*" {
 		t.Fatalf("put input = %#v", client.put)
 	}
+	if err := public.Put(
+		context.Background(),
+		"objects/item",
+		strings.NewReader("replacement"),
+		"text/plain",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if client.put == nil || client.put.IfNoneMatch != nil {
+		t.Fatalf("overwrite put input = %#v", client.put)
+	}
 	rawURL, err := public.URL(
 		context.Background(),
 		filesystem.Reference{ID: "1", Path: "objects/item"},
