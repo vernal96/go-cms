@@ -3,17 +3,44 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"strconv"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/migrations"
+	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
+
+func TestDevSiteSeedSource(t *testing.T) {
+	sources := (&Database{}).SeedSources()
+	if len(sources) != 1 {
+		t.Fatalf("seed sources = %#v", sources)
+	}
+
+	source := sources[0]
+	if source.ID != "sites_dev" ||
+		len(source.Tags) != 1 ||
+		source.Tags[0] != "dev" ||
+		source.Schema != "core" {
+		t.Fatalf("dev site source = %#v", source)
+	}
+	if err := seeds.ValidateSource(source); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := fs.ReadDir(source.FS, source.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("dev seed files = %#v", entries)
+	}
+}
 
 func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	host := os.Getenv("CMS_TEST_POSTGRES_HOST")
@@ -107,64 +134,67 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 		t.Fatalf("core.sites = %#v", sitesTable)
 	}
 
-	domain := "integration-test.example.com"
 	seedPlan := seeds.Plan{
 		Connection: string(connector.Code()),
+		Module:     core.ModuleCode,
 		Target:     connector,
-		Source: seeds.Source{
-			ID:     "core",
-			Schema: "core",
-			FS: fstest.MapFS{
-				"000001_integration_site.up.sql": {
-					Data: []byte(`
-INSERT INTO core.sites (profile_code, domain, locale, settings)
-VALUES ('dev', 'integration-test.example.com', 'en-US', '{"enabled":true}'::jsonb)
-ON CONFLICT DO NOTHING;
-`),
-				},
-				"000001_integration_site.down.sql": {
-					Data: []byte(`
-DELETE FROM core.sites WHERE domain = 'integration-test.example.com';
-`),
-				},
-			},
-			Path: ".",
-		},
+		Source:     database.SeedSources()[0],
 	}
 	seedManager := seeds.NewManager()
-	if err := seedManager.Down(ctx, seedPlan, 1); err != nil {
+	if err := seedManager.Force(ctx, seedPlan, -1); err != nil {
 		t.Fatalf("prepare seed state: %v", err)
+	}
+	if _, err := connector.Pool().Exec(ctx, `
+DELETE
+FROM core.sites
+WHERE profile_code = 'dev'
+  AND domain IN ('localhost', 'example.com');
+`); err != nil {
+		t.Fatalf("clean seeded sites: %v", err)
 	}
 	if err := seedManager.Up(ctx, seedPlan); err != nil {
 		t.Fatalf("seed up: %v", err)
 	}
 
-	sites, err := database.Sites().List(ctx)
+	loadedSites, err := database.Sites().List(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	found := false
-	for _, item := range sites {
-		if item.Domain != domain {
+	found := make(map[string]bool, 2)
+	for _, item := range loadedSites {
+		if item.Domain != "localhost" && item.Domain != "example.com" {
 			continue
 		}
 
-		found = true
+		found[item.Domain] = true
+		if item.ProfileCode != "dev" || item.Locale != "ru-RU" {
+			t.Fatalf("seeded site = %#v", item)
+		}
 		rawSettings, err := json.Marshal(item.Settings)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(rawSettings) != `{"enabled":true}` {
+		if string(rawSettings) != `{}` {
 			t.Fatalf("settings = %s", rawSettings)
 		}
 	}
-	if !found {
-		t.Fatal("inserted site was not loaded")
+	if !found["localhost"] || !found["example.com"] {
+		t.Fatalf("seeded domains = %#v", found)
 	}
 
 	if err := seedManager.Down(ctx, seedPlan, 1); err != nil {
 		t.Fatalf("seed down: %v", err)
+	}
+	loadedSites, err = database.Sites().List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range loadedSites {
+		if item.ProfileCode == "dev" &&
+			(item.Domain == "localhost" || item.Domain == "example.com") {
+			t.Fatalf("seed down kept site %#v", item)
+		}
 	}
 
 	restoreMigration = true
@@ -174,13 +204,17 @@ DELETE FROM core.sites WHERE domain = 'integration-test.example.com';
 
 	var schemaName *string
 	var historyTable *string
-	var seedHistoryTable *string
+	var devSeedHistoryTable *string
 	if err := connector.Pool().QueryRow(ctx, `
 SELECT
     to_regnamespace('core')::text,
     to_regclass('core.schema_migrations')::text,
-    to_regclass('core.schema_seeds')::text;
-`).Scan(&schemaName, &historyTable, &seedHistoryTable); err != nil {
+    to_regclass('core.schema_seeds_sites_dev')::text;
+`).Scan(
+		&schemaName,
+		&historyTable,
+		&devSeedHistoryTable,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if schemaName == nil || *schemaName != "core" {
@@ -189,8 +223,12 @@ SELECT
 	if historyTable == nil || *historyTable != "core.schema_migrations" {
 		t.Fatalf("migration history was removed: %#v", historyTable)
 	}
-	if seedHistoryTable == nil || *seedHistoryTable != "core.schema_seeds" {
-		t.Fatalf("seed history was removed: %#v", seedHistoryTable)
+	if devSeedHistoryTable == nil ||
+		*devSeedHistoryTable != "core.schema_seeds_sites_dev" {
+		t.Fatalf(
+			"seed history was removed: %#v",
+			devSeedHistoryTable,
+		)
 	}
 
 	if err := manager.Up(ctx, plan); err != nil {

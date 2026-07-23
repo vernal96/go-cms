@@ -7,12 +7,17 @@ import (
 
 	migratedb "github.com/golang-migrate/migrate/v4/database"
 	"github.com/golang-migrate/migrate/v4/database/stub"
+	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
 type target struct {
-	driver       *stub.Stub
-	historyTable string
+	drivers map[string]*stub.Stub
+}
+
+func newTarget() *target {
+	return &target{drivers: make(map[string]*stub.Stub)}
 }
 
 func (t *target) OpenMigrationDriver(
@@ -20,22 +25,31 @@ func (t *target) OpenMigrationDriver(
 	_ string,
 	historyTable string,
 ) (migratedb.Driver, error) {
-	t.historyTable = historyTable
-	return t.driver, nil
-}
-
-func TestSeedManagerUsesIndependentHistory(t *testing.T) {
-	driver, err := stub.WithInstance(nil, &stub.Config{})
-	if err != nil {
-		t.Fatal(err)
+	if driver, exists := t.drivers[historyTable]; exists {
+		return driver, nil
 	}
 
-	target := &target{driver: driver.(*stub.Stub)}
-	plan := seeds.Plan{
+	driver, err := stub.WithInstance(nil, &stub.Config{})
+	if err != nil {
+		return nil, err
+	}
+
+	t.drivers[historyTable] = driver.(*stub.Stub)
+	return driver, nil
+}
+
+func seedPlan(
+	target seeds.Target,
+	id string,
+	tag seeds.Tag,
+) seeds.Plan {
+	return seeds.Plan{
 		Connection: "main",
+		Module:     kernel.ModuleCode("core"),
 		Target:     target,
 		Source: seeds.Source{
-			ID:     "core",
+			ID:     id,
+			Tags:   []seeds.Tag{tag},
 			Schema: "core",
 			FS: fstest.MapFS{
 				"000001_defaults.up.sql": {
@@ -48,29 +62,112 @@ func TestSeedManagerUsesIndependentHistory(t *testing.T) {
 			Path: ".",
 		},
 	}
+}
 
+func TestSeedSourcesUseIndependentHistory(t *testing.T) {
+	target := newTarget()
+	devPlan := seedPlan(target, "sites_dev", "dev")
+	prodPlan := seedPlan(target, "sites_prod", "prod")
 	manager := seeds.NewManager()
-	if err := manager.Up(context.Background(), plan); err != nil {
+	ctx := context.Background()
+
+	if err := manager.Up(ctx, devPlan); err != nil {
 		t.Fatal(err)
 	}
-	if target.historyTable != seeds.DefaultHistoryTable {
-		t.Fatalf("history table = %q", target.historyTable)
+	if _, exists := target.drivers[seeds.HistoryTable("sites_dev")]; !exists {
+		t.Fatalf("dev history tables = %#v", target.drivers)
+	}
+	if _, exists := target.drivers[migrations.DefaultHistoryTable]; exists {
+		t.Fatal("seed manager used migration history")
 	}
 
-	version, hasVersion, dirty, err := manager.Version(context.Background(), plan)
+	_, hasVersion, _, err := manager.Version(ctx, prodPlan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != 1 || !hasVersion || dirty {
-		t.Fatalf(
-			"version = %d, hasVersion = %t, dirty = %t",
-			version,
-			hasVersion,
-			dirty,
-		)
+	if hasVersion {
+		t.Fatal("dev source marked prod source as applied")
 	}
 
-	if err := manager.Down(context.Background(), plan, 1); err != nil {
+	if err := manager.Up(ctx, prodPlan); err != nil {
 		t.Fatal(err)
+	}
+	if _, exists := target.drivers[seeds.HistoryTable("sites_prod")]; !exists {
+		t.Fatalf("prod history tables = %#v", target.drivers)
+	}
+
+	statuses, err := manager.StatusAll(ctx, []seeds.Plan{devPlan, prodPlan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 2 ||
+		!statuses[0].HasCurrentVersion ||
+		!statuses[1].HasCurrentVersion {
+		t.Fatalf("statuses = %#v", statuses)
+	}
+	if statuses[0].Module != "core" ||
+		statuses[0].Source != "sites_dev" ||
+		len(statuses[0].Tags) != 1 ||
+		statuses[0].Tags[0] != "dev" {
+		t.Fatalf("dev status = %#v", statuses[0])
+	}
+
+	if err := manager.Down(ctx, prodPlan, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Down(ctx, devPlan, 1); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateSourceRejectsInvalidIdentityAndTags(t *testing.T) {
+	valid := seedPlan(newTarget(), "sites_dev", "dev").Source
+
+	tests := []struct {
+		name   string
+		mutate func(*seeds.Source)
+	}{
+		{
+			name: "non lower snake id",
+			mutate: func(source *seeds.Source) {
+				source.ID = "sites-dev"
+			},
+		},
+		{
+			name: "no tags",
+			mutate: func(source *seeds.Source) {
+				source.Tags = nil
+			},
+		},
+		{
+			name: "empty tag",
+			mutate: func(source *seeds.Source) {
+				source.Tags = []seeds.Tag{""}
+			},
+		},
+		{
+			name: "duplicate tag",
+			mutate: func(source *seeds.Source) {
+				source.Tags = []seeds.Tag{"dev", "dev"}
+			},
+		},
+		{
+			name: "tag containing separator",
+			mutate: func(source *seeds.Source) {
+				source.Tags = []seeds.Tag{"dev,prod"}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := valid
+			source.Tags = append([]seeds.Tag(nil), valid.Tags...)
+			test.mutate(&source)
+
+			if err := seeds.ValidateSource(source); err == nil {
+				t.Fatalf("ValidateSource(%#v) succeeded", source)
+			}
+		})
 	}
 }

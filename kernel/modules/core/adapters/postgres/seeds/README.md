@@ -1,5 +1,5 @@
 # Core seeds
 
-Core currently has no mandatory data shared by every application instance.
-Add paired `*.up.sql` and `*.down.sql` files here when such data appears, then
-expose the directory through `seeds.Provider` on the PostgreSQL database adapter.
+Each subdirectory is an independent versioned seed source exposed through
+`seeds.Provider`. The `dev` source creates the local development sites and is
+selected with `console seeds up -tags=dev`.

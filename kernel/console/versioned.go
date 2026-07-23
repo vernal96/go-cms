@@ -9,7 +9,6 @@ import (
 	"strconv"
 
 	"github.com/vernal96/go-cms/kernel/migrations"
-	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
 type versionedManager interface {
@@ -32,17 +31,6 @@ func newMigrationsCommand(application Application) Command {
 		description: "manage database schema migrations",
 		plans:       application.MigrationPlans,
 		manager:     migrations.NewManager(),
-	}
-}
-
-func newSeedsCommand(application Application) Command {
-	return &versionedCommand{
-		name:        "seeds",
-		description: "manage versioned database seeds",
-		plans: func() []migrations.Plan {
-			return application.SeedPlans()
-		},
-		manager: seeds.NewManager(),
 	}
 }
 

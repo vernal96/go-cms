@@ -295,7 +295,15 @@ func (a *App) SeedPlans() []seeds.Plan {
 		return nil
 	}
 
-	return append([]seeds.Plan(nil), a.seedPlan...)
+	plans := append([]seeds.Plan(nil), a.seedPlan...)
+	for index := range plans {
+		plans[index].Source.Tags = append(
+			[]seeds.Tag(nil),
+			plans[index].Source.Tags...,
+		)
+	}
+
+	return plans
 }
 
 func (a *App) CommandProviders() []console.Provider {
@@ -411,6 +419,7 @@ func (a *App) openBinding(
 	}
 	migrationSourceIDs := make(map[string]struct{})
 	seedSourceIDs := make(map[string]struct{})
+	seedHistories := make(map[string]string)
 
 	for _, factory := range definition.Adapters {
 		database, err := factory.Build(connector)
@@ -459,6 +468,7 @@ func (a *App) openBinding(
 				moduleCode,
 				provider.SeedSources(),
 				seedSourceIDs,
+				seedHistories,
 			)
 			if err != nil {
 				return nil, err
@@ -564,6 +574,7 @@ func seedPlans(
 	moduleCode kernel.ModuleCode,
 	sources []seeds.Source,
 	used map[string]struct{},
+	histories map[string]string,
 ) ([]seeds.Plan, error) {
 	if len(sources) == 0 {
 		return nil, nil
@@ -580,18 +591,68 @@ func seedPlans(
 
 	plans := make([]seeds.Plan, 0, len(sources))
 	for _, source := range sources {
-		if err := validateSource(connector.Code(), moduleCode, source.ID, used); err != nil {
+		if err := validateSeedSource(
+			connector.Code(),
+			moduleCode,
+			source,
+			used,
+			histories,
+		); err != nil {
 			return nil, err
 		}
 
+		source.Tags = append([]seeds.Tag(nil), source.Tags...)
 		plans = append(plans, seeds.Plan{
 			Connection: string(connector.Code()),
+			Module:     moduleCode,
 			Target:     target,
 			Source:     source,
 		})
 	}
 
 	return plans, nil
+}
+
+func validateSeedSource(
+	connectionCode kernel.ConnectionCode,
+	moduleCode kernel.ModuleCode,
+	source seeds.Source,
+	used map[string]struct{},
+	histories map[string]string,
+) error {
+	if err := seeds.ValidateSource(source); err != nil {
+		return fmt.Errorf(
+			"database binding %q module %q: %w",
+			connectionCode,
+			moduleCode,
+			err,
+		)
+	}
+
+	sourceKey := string(moduleCode) + "/" + source.ID
+	if _, exists := used[sourceKey]; exists {
+		return fmt.Errorf(
+			"database binding %q module %q contains duplicate seed source %q",
+			connectionCode,
+			moduleCode,
+			source.ID,
+		)
+	}
+
+	historyKey := source.Schema + "/" + seeds.HistoryTable(source.ID)
+	if existing, exists := histories[historyKey]; exists {
+		return fmt.Errorf(
+			"database binding %q seed sources %q and %q share history %q",
+			connectionCode,
+			existing,
+			sourceKey,
+			historyKey,
+		)
+	}
+
+	used[sourceKey] = struct{}{}
+	histories[historyKey] = sourceKey
+	return nil
 }
 
 func validateSource(

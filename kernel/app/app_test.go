@@ -138,7 +138,8 @@ func (r *fakeSiteRepository) callCount() int {
 }
 
 type fakeCoreDatabase struct {
-	repository site.Repository
+	repository  site.Repository
+	seedSources []seeds.Source
 }
 
 func (*fakeCoreDatabase) ModuleCode() kernel.ModuleCode { return core.ModuleCode }
@@ -148,16 +149,25 @@ func (*fakeCoreDatabase) MigrationSources() []migrations.Source {
 	return []migrations.Source{versionedSource("migration")}
 }
 
-func (*fakeCoreDatabase) SeedSources() []seeds.Source {
-	return []seeds.Source{versionedSource("seed")}
+func (d *fakeCoreDatabase) SeedSources() []seeds.Source {
+	if d.seedSources != nil {
+		return d.seedSources
+	}
+
+	return []seeds.Source{seedSource("defaults", "dev", "seed")}
 }
 
 type fakeFeatureDatabase struct {
-	name string
+	name        string
+	seedSources []seeds.Source
 }
 
 func (*fakeFeatureDatabase) ModuleCode() kernel.ModuleCode {
 	return featureModuleCode
+}
+
+func (d *fakeFeatureDatabase) SeedSources() []seeds.Source {
+	return d.seedSources
 }
 
 type fakeDatabaseFactory struct {
@@ -244,6 +254,22 @@ func versionedSource(contents string) migrations.Source {
 			},
 		},
 		Path: ".",
+	}
+}
+
+func seedSource(
+	id string,
+	tag seeds.Tag,
+	contents string,
+) seeds.Source {
+	source := versionedSource(contents)
+
+	return seeds.Source{
+		ID:     id,
+		Tags:   []seeds.Tag{tag},
+		Schema: source.Schema,
+		FS:     source.FS,
+		Path:   source.Path,
 	}
 }
 
@@ -336,7 +362,9 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	if _, exists := mainConnector.version(migrations.DefaultHistoryTable); exists {
 		t.Fatal("New applied migrations")
 	}
-	if _, exists := mainConnector.version(seeds.DefaultHistoryTable); exists {
+	if _, exists := mainConnector.version(
+		seeds.HistoryTable("defaults"),
+	); exists {
 		t.Fatal("New applied seeds")
 	}
 	consoleDatabase, exists := application.Console().Application().ModuleDatabase(
@@ -425,12 +453,14 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	consoleOutput.Reset()
 	if err := application.Console().Run(
 		ctx,
-		[]string{"seeds", "up"},
+		[]string{"seeds", "up", "-tags=dev"},
 		console.IO{Out: &consoleOutput},
 	); err != nil {
 		t.Fatal(err)
 	}
-	seedVersion, exists := mainConnector.version(seeds.DefaultHistoryTable)
+	seedVersion, exists := mainConnector.version(
+		seeds.HistoryTable("defaults"),
+	)
 	if !exists || seedVersion != 1 {
 		t.Fatalf("seed version = %d, exists = %t", seedVersion, exists)
 	}
@@ -504,6 +534,152 @@ func TestNewClosesPreviouslyOpenedConnectorOnFactoryError(t *testing.T) {
 			mainConnector.closes.Load(),
 			brokenConnector.closes.Load(),
 		)
+	}
+}
+
+func TestAppCollectsSeedSourcesAcrossConnectionsAndClonesTags(t *testing.T) {
+	mainConnector := newFakeConnector("main")
+	logsConnector := newFakeConnector("logs")
+	coreDatabase := &fakeCoreDatabase{
+		repository: &fakeSiteRepository{},
+		seedSources: []seeds.Source{
+			seedSource("sites_dev", "dev", "core dev"),
+		},
+	}
+	mainFeature := &fakeFeatureDatabase{
+		name: "main",
+		seedSources: []seeds.Source{
+			{
+				ID:     "feature_shared",
+				Tags:   []seeds.Tag{"dev", "prod"},
+				Schema: "feature",
+				FS:     versionedSource("feature shared").FS,
+				Path:   ".",
+			},
+		},
+	}
+	logsFeature := &fakeFeatureDatabase{
+		name: "logs",
+		seedSources: []seeds.Source{
+			{
+				ID:     "audit_prod",
+				Tags:   []seeds.Tag{"prod"},
+				Schema: "feature",
+				FS:     versionedSource("audit prod").FS,
+				Path:   ".",
+			},
+		},
+	}
+
+	application, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{
+			MainDatabase: appkernel.DatabaseDefinition{
+				Connector: &fakeConnectorFactory{connector: mainConnector},
+				Adapters: []kernel.ModuleDatabaseFactory{
+					&fakeDatabaseFactory{
+						code:     core.ModuleCode,
+						database: coreDatabase,
+					},
+					&fakeDatabaseFactory{
+						code:     featureModuleCode,
+						database: mainFeature,
+					},
+				},
+			},
+			AdditionalDatabases: []appkernel.DatabaseDefinition{
+				{
+					Connector: &fakeConnectorFactory{
+						connector: logsConnector,
+					},
+					Adapters: []kernel.ModuleDatabaseFactory{
+						&fakeDatabaseFactory{
+							code:     featureModuleCode,
+							database: logsFeature,
+						},
+					},
+				},
+			},
+			Profiles: []kernel.Profile{
+				{
+					Code: "dev",
+					Modules: []kernel.ProfileModule{
+						{Module: core.Module{}},
+					},
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = application.Close() }()
+
+	plans := application.SeedPlans()
+	if len(plans) != 3 {
+		t.Fatalf("seed plans = %#v", plans)
+	}
+	got := []string{
+		plans[0].Connection + "/" +
+			string(plans[0].Module) + "/" +
+			plans[0].Source.ID,
+		plans[1].Connection + "/" +
+			string(plans[1].Module) + "/" +
+			plans[1].Source.ID,
+		plans[2].Connection + "/" +
+			string(plans[2].Module) + "/" +
+			plans[2].Source.ID,
+	}
+	want := []string{
+		"main/core/sites_dev",
+		"main/feature/feature_shared",
+		"logs/feature/audit_prod",
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("plan order = %#v", got)
+		}
+	}
+
+	plans[1].Source.Tags[0] = "changed"
+	fresh := application.SeedPlans()
+	if fresh[1].Source.Tags[0] != "dev" {
+		t.Fatalf("seed plan tags were not cloned: %#v", fresh[1].Source.Tags)
+	}
+}
+
+func TestAppRejectsSeedHistoryCollision(t *testing.T) {
+	connector := newFakeConnector("main")
+	coreSource := seedSource("shared", "dev", "core")
+	coreSource.Schema = "shared"
+	featureSource := seedSource("shared", "prod", "feature")
+	featureSource.Schema = "shared"
+
+	_, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{
+			MainDatabase: appkernel.DatabaseDefinition{
+				Connector: &fakeConnectorFactory{connector: connector},
+				Adapters: []kernel.ModuleDatabaseFactory{
+					&fakeDatabaseFactory{
+						code: core.ModuleCode,
+						database: &fakeCoreDatabase{
+							repository:  &fakeSiteRepository{},
+							seedSources: []seeds.Source{coreSource},
+						},
+					},
+					&fakeDatabaseFactory{
+						code: featureModuleCode,
+						database: &fakeFeatureDatabase{
+							seedSources: []seeds.Source{featureSource},
+						},
+					},
+				},
+			},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "share history") {
+		t.Fatalf("history collision error = %v", err)
 	}
 }
 

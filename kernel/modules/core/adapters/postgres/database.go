@@ -10,10 +10,14 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	sitepostgres "github.com/vernal96/go-cms/kernel/modules/core/site/adapters/postgres"
+	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
+
+//go:embed seeds/dev/*.sql
+var seedFiles embed.FS
 
 type Database struct {
 	sites site.Repository
@@ -72,6 +76,19 @@ func (d *Database) MigrationSources() []migrations.Source {
 	}
 }
 
+func (d *Database) SeedSources() []seeds.Source {
+	return []seeds.Source{
+		{
+			ID:     "sites_dev",
+			Tags:   []seeds.Tag{"dev"},
+			Schema: "core",
+			FS:     seedFiles,
+			Path:   "seeds/dev",
+		},
+	}
+}
+
 var _ core.Database = (*Database)(nil)
 var _ kernel.ModuleDatabaseFactory = DatabaseFactory{}
 var _ migrations.Provider = (*Database)(nil)
+var _ seeds.Provider = (*Database)(nil)
