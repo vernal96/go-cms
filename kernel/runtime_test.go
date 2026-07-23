@@ -10,8 +10,13 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
+	coregroup "github.com/vernal96/go-cms/kernel/modules/core/group"
+	coremedia "github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/permission"
+	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type emptyDatabaseResolver struct{}
@@ -33,8 +38,10 @@ type registryModule struct {
 	code               kernel.ModuleCode
 	fieldTypes         []field.Type
 	resourceTypes      []resourcetype.Type
+	permissionEntities []permission.Entity
 	expectType         field.TypeCode
 	expectResourceType resourcetype.Code
+	expectPermission   permission.Code
 }
 
 func (m registryModule) Code() kernel.ModuleCode {
@@ -47,6 +54,10 @@ func (m registryModule) Registry() kernel.ModuleRegistry {
 		ResourceTypes: append(
 			[]resourcetype.Type(nil),
 			m.resourceTypes...,
+		),
+		PermissionEntities: append(
+			[]permission.Entity(nil),
+			m.permissionEntities...,
 		),
 	}
 }
@@ -69,6 +80,15 @@ func (m registryModule) Build(
 			)
 		}
 	}
+	if m.expectPermission != "" {
+		if _, exists := ctx.Registry().Permission(
+			m.expectPermission,
+		); !exists {
+			return nil, errors.New(
+				"expected permission is not registered",
+			)
+		}
+	}
 
 	return registryRuntime{code: m.code}, nil
 }
@@ -81,8 +101,34 @@ type markerFileService struct {
 	corefile.Service
 }
 
+type markerMediaService struct {
+	coremedia.Service
+}
+
+type markerUserService struct {
+	coreuser.Service
+}
+
+type markerGroupService struct {
+	coregroup.Service
+}
+
+type markerAuthorizer struct{}
+
+func (*markerAuthorizer) Check(
+	context.Context,
+	security.Actor,
+	permission.Code,
+) error {
+	return nil
+}
+
 type fileAwareModule struct {
-	expected corefile.Service
+	expectedFiles         corefile.Service
+	expectedMedia         coremedia.Service
+	expectedUsers         coreuser.Service
+	expectedGroups        coregroup.Service
+	expectedAuthorization security.Authorizer
 }
 
 func (*fileAwareModule) Code() kernel.ModuleCode {
@@ -93,22 +139,52 @@ func (m *fileAwareModule) Build(
 	_ context.Context,
 	ctx kernel.ModuleContext,
 ) (kernel.ModuleRuntime, error) {
-	if ctx.Files() != m.expected {
+	if ctx.Files() != m.expectedFiles {
 		return nil, errors.New("module did not receive configured file service")
+	}
+	if ctx.Media() != m.expectedMedia {
+		return nil, errors.New("module did not receive configured media service")
+	}
+	if ctx.Users() != m.expectedUsers {
+		return nil, errors.New("module did not receive configured user service")
+	}
+	if ctx.Groups() != m.expectedGroups {
+		return nil, errors.New("module did not receive configured group service")
+	}
+	if ctx.Authorization() != m.expectedAuthorization {
+		return nil, errors.New(
+			"module did not receive configured authorizer",
+		)
 	}
 	return registryRuntime{code: m.Code()}, nil
 }
 
-func TestProfileRuntimeInjectsOnlyFileServicePort(t *testing.T) {
+func TestProfileRuntimeInjectsCoreServicePorts(t *testing.T) {
 	files := &markerFileService{}
+	media := &markerMediaService{}
+	users := &markerUserService{}
+	groups := &markerGroupService{}
+	authorization := &markerAuthorizer{}
 	factory, err := kernel.NewProfileRuntimeFactory(
 		emptyDatabaseResolver{},
-		files,
+		kernel.RuntimeServices{
+			Files:         files,
+			Media:         media,
+			Users:         users,
+			Groups:        groups,
+			Authorization: authorization,
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	module := &fileAwareModule{expected: files}
+	module := &fileAwareModule{
+		expectedFiles:         files,
+		expectedMedia:         media,
+		expectedUsers:         users,
+		expectedGroups:        groups,
+		expectedAuthorization: authorization,
+	}
 	if _, err := factory.Make(context.Background(), kernel.Profile{
 		Code: "files",
 		Modules: []kernel.ProfileModule{
@@ -231,6 +307,50 @@ func TestProfileRuntimeCollectsFieldTypesBeforeModuleBuild(t *testing.T) {
 	profile.Params[0].Rules = []string{"max=1"}
 	if len(runtime.Profile().Params[0].Rules) != 0 {
 		t.Fatal("runtime profile params share caller memory")
+	}
+}
+
+func TestProfileRuntimeCollectsDeclaredPermissionsBeforeBuild(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := permission.MustCode(
+		"provider",
+		"widget",
+		permission.Read,
+	)
+	runtime, err := factory.Make(
+		context.Background(),
+		kernel.Profile{
+			Code: "permissions",
+			Modules: []kernel.ProfileModule{
+				{
+					Module: registryModule{
+						code:             "consumer",
+						expectPermission: code,
+					},
+				},
+				{
+					Module: registryModule{
+						code: "provider",
+						permissionEntities: []permission.Entity{
+							{Code: "widget"},
+						},
+					},
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := runtime.Registry().Permission(code); !exists {
+		t.Fatalf("permission %q missing from runtime registry", code)
 	}
 }
 

@@ -11,9 +11,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
+	"github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres/medialock"
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type Repository struct {
@@ -35,12 +38,61 @@ func NewRepository(
 
 func (r *Repository) Create(
 	ctx context.Context,
+	actorID *security.UserID,
 	item resource.Resource,
-) (resource.Resource, error) {
+	validate resource.ValidateImageMedia,
+) (_ resource.Resource, resultErr error) {
 	if ctx == nil {
 		return resource.Resource{}, errors.New(
 			"create resource context is nil",
 		)
+	}
+
+	transaction, err := r.connector.Pool().BeginTx(
+		ctx,
+		pgx.TxOptions{},
+	)
+	if err != nil {
+		return resource.Resource{}, fmt.Errorf(
+			"begin resource create: %w",
+			err,
+		)
+	}
+	defer func() {
+		if resultErr == nil {
+			return
+		}
+		rollbackErr := transaction.Rollback(context.Background())
+		if rollbackErr != nil &&
+			!errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			resultErr = errors.Join(resultErr, rollbackErr)
+		}
+	}()
+
+	if item.ImageMediaID != nil {
+		if validate == nil {
+			return resource.Resource{}, errors.New(
+				"resource image media validator is nil",
+			)
+		}
+		if err := medialock.Lock(
+			ctx,
+			transaction,
+			*item.ImageMediaID,
+		); err != nil {
+			return resource.Resource{}, err
+		}
+		if err := ensureMediaAvailable(
+			ctx,
+			transaction,
+			*item.ImageMediaID,
+			0,
+		); err != nil {
+			return resource.Resource{}, err
+		}
+		if err := validate(ctx, *item.ImageMediaID); err != nil {
+			return resource.Resource{}, err
+		}
 	}
 
 	rawSettings, err := json.Marshal(item.Settings)
@@ -51,7 +103,7 @@ func (r *Repository) Create(
 		)
 	}
 
-	result, err := scanResource(r.connector.Pool().QueryRow(ctx, `
+	result, err := scanResource(transaction.QueryRow(ctx, `
 INSERT INTO core.resources
 (
     site_id,
@@ -64,6 +116,7 @@ INSERT INTO core.resources
     slug,
     path,
     content,
+    image_media_id,
     target_resource_id,
     external_url,
     is_public,
@@ -73,20 +126,23 @@ INSERT INTO core.resources
     sort,
     published_at,
     unpublished_at,
-    settings
+    settings,
+    created_by,
+    updated_by
 )
 VALUES
 (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
     $11, $12, $13, $14, $15, $16, $17, $18, $19,
-    $20::jsonb
+    $20, $21::jsonb, $22, $22
 )
 RETURNING
     id, site_id, parent_id, type, template, content_type,
-    title, menu_title, slug, path, content, target_resource_id,
+    title, menu_title, slug, path, content, image_media_id,
+    target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
     sort, published_at, unpublished_at, settings, created_at,
-    updated_at;
+    updated_at, created_by, updated_by;
 `,
 		item.SiteID,
 		item.ParentID,
@@ -98,6 +154,7 @@ RETURNING
 		item.Slug,
 		item.Path,
 		item.Content,
+		item.ImageMediaID,
 		item.TargetResourceID,
 		item.ExternalURL,
 		item.IsPublic,
@@ -108,11 +165,15 @@ RETURNING
 		item.PublishedAt,
 		item.UnpublishedAt,
 		string(rawSettings),
+		actorID,
 	))
 	if err != nil {
 		return resource.Resource{}, translateError(err)
 	}
 
+	if err := transaction.Commit(ctx); err != nil {
+		return resource.Resource{}, translateError(err)
+	}
 	return result, nil
 }
 
@@ -129,10 +190,11 @@ func (r *Repository) ByID(
 	result, err := scanResource(r.connector.Pool().QueryRow(ctx, `
 SELECT
     id, site_id, parent_id, type, template, content_type,
-    title, menu_title, slug, path, content, target_resource_id,
+    title, menu_title, slug, path, content, image_media_id,
+    target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
     sort, published_at, unpublished_at, settings, created_at,
-    updated_at
+    updated_at, created_by, updated_by
 FROM core.resources
 WHERE id = $1;
 `, id))
@@ -164,10 +226,11 @@ func (r *Repository) ByPath(
 	result, err := scanResource(r.connector.Pool().QueryRow(ctx, `
 SELECT
     id, site_id, parent_id, type, template, content_type,
-    title, menu_title, slug, path, content, target_resource_id,
+    title, menu_title, slug, path, content, image_media_id,
+    target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
     sort, published_at, unpublished_at, settings, created_at,
-    updated_at
+    updated_at, created_by, updated_by
 FROM core.resources
 WHERE site_id = $1
   AND path = $2;
@@ -197,10 +260,11 @@ func (r *Repository) ListBySite(
 	rows, err := r.connector.Pool().Query(ctx, `
 SELECT
     id, site_id, parent_id, type, template, content_type,
-    title, menu_title, slug, path, content, target_resource_id,
+    title, menu_title, slug, path, content, image_media_id,
+    target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
     sort, published_at, unpublished_at, settings, created_at,
-    updated_at
+    updated_at, created_by, updated_by
 FROM core.resources
 WHERE site_id = $1
 ORDER BY parent_id NULLS FIRST, sort, id;
@@ -227,7 +291,10 @@ ORDER BY parent_id NULLS FIRST, sort, id;
 
 func (r *Repository) Update(
 	ctx context.Context,
+	actorID *security.UserID,
+	current resource.Resource,
 	item resource.Resource,
+	validate resource.ValidateImageMedia,
 ) (_ resource.Resource, resultErr error) {
 	if ctx == nil {
 		return resource.Resource{}, errors.New(
@@ -257,13 +324,34 @@ func (r *Repository) Update(
 		}
 	}()
 
-	var currentSiteID site.ID
+	if current.ID != item.ID {
+		return resource.Resource{}, resource.ErrInvalidReference
+	}
+
+	mediaIDs := make([]media.ID, 0, 2)
+	if current.ImageMediaID != nil {
+		mediaIDs = append(mediaIDs, *current.ImageMediaID)
+	}
+	if item.ImageMediaID != nil {
+		mediaIDs = append(mediaIDs, *item.ImageMediaID)
+	}
+	if err := medialock.Lock(ctx, transaction, mediaIDs...); err != nil {
+		return resource.Resource{}, err
+	}
+
+	var (
+		currentSiteID       site.ID
+		currentImageMediaID *int64
+	)
 	if err := transaction.QueryRow(ctx, `
-SELECT site_id
+SELECT site_id, image_media_id
 FROM core.resources
 WHERE id = $1
 FOR UPDATE;
-`, item.ID).Scan(&currentSiteID); errors.Is(err, pgx.ErrNoRows) {
+`, item.ID).Scan(
+		&currentSiteID,
+		&currentImageMediaID,
+	); errors.Is(err, pgx.ErrNoRows) {
 		return resource.Resource{}, resource.ErrNotFound
 	} else if err != nil {
 		return resource.Resource{}, fmt.Errorf(
@@ -274,6 +362,28 @@ FOR UPDATE;
 	}
 	if currentSiteID != item.SiteID {
 		return resource.Resource{}, resource.ErrInvalidReference
+	}
+	if !equalMediaID(current.ImageMediaID, currentImageMediaID) {
+		return resource.Resource{}, resource.ErrConflict
+	}
+
+	if item.ImageMediaID != nil {
+		if validate == nil {
+			return resource.Resource{}, errors.New(
+				"resource image media validator is nil",
+			)
+		}
+		if err := ensureMediaAvailable(
+			ctx,
+			transaction,
+			*item.ImageMediaID,
+			item.ID,
+		); err != nil {
+			return resource.Resource{}, err
+		}
+		if err := validate(ctx, *item.ImageMediaID); err != nil {
+			return resource.Resource{}, err
+		}
 	}
 
 	var parent *resource.Resource
@@ -350,24 +460,27 @@ SET
     slug = $8,
     path = $9,
     content = $10,
-    target_resource_id = $11,
-    external_url = $12,
-    is_public = $13,
-    is_searchable = $14,
-    in_menu = $15,
-    in_sitemap = $16,
-    sort = $17,
-    published_at = $18,
-    unpublished_at = $19,
-    settings = $20::jsonb,
-    updated_at = now()
+    image_media_id = $11,
+    target_resource_id = $12,
+    external_url = $13,
+    is_public = $14,
+    is_searchable = $15,
+    in_menu = $16,
+    in_sitemap = $17,
+    sort = $18,
+    published_at = $19,
+    unpublished_at = $20,
+    settings = $21::jsonb,
+    updated_at = now(),
+    updated_by = $22
 WHERE id = $1
 RETURNING
     id, site_id, parent_id, type, template, content_type,
-    title, menu_title, slug, path, content, target_resource_id,
+    title, menu_title, slug, path, content, image_media_id,
+    target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
     sort, published_at, unpublished_at, settings, created_at,
-    updated_at;
+    updated_at, created_by, updated_by;
 `,
 		item.ID,
 		item.ParentID,
@@ -379,6 +492,7 @@ RETURNING
 		item.Slug,
 		item.Path,
 		item.Content,
+		item.ImageMediaID,
 		item.TargetResourceID,
 		item.ExternalURL,
 		item.IsPublic,
@@ -389,6 +503,7 @@ RETURNING
 		item.PublishedAt,
 		item.UnpublishedAt,
 		string(rawSettings),
+		actorID,
 	))
 	if err != nil {
 		return resource.Resource{}, translateError(err)
@@ -418,12 +533,23 @@ WITH RECURSIVE tree AS
 UPDATE core.resources AS item
 SET
     path = tree.path,
-    updated_at = now()
+    updated_at = now(),
+    updated_by = $2
 FROM tree
 WHERE item.id = tree.id
   AND item.id <> $1;
-`, item.ID); err != nil {
+`, item.ID, actorID); err != nil {
 		return resource.Resource{}, translateError(err)
+	}
+
+	if !sameMediaID(current.ImageMediaID, item.ImageMediaID) &&
+		current.ImageMediaID != nil {
+		if _, err := transaction.Exec(ctx, `
+DELETE FROM core.media
+WHERE id = $1;
+`, *current.ImageMediaID); err != nil {
+			return resource.Resource{}, translateError(err)
+		}
 	}
 
 	if err := transaction.Commit(ctx); err != nil {
@@ -435,12 +561,63 @@ WHERE item.id = tree.id
 func (r *Repository) Delete(
 	ctx context.Context,
 	id resource.ID,
-) error {
+) (_ error) {
 	if ctx == nil {
 		return errors.New("delete resource context is nil")
 	}
 
-	commandTag, err := r.connector.Pool().Exec(ctx, `
+	transaction, err := r.connector.Pool().BeginTx(
+		ctx,
+		pgx.TxOptions{},
+	)
+	if err != nil {
+		return fmt.Errorf("begin resource delete: %w", err)
+	}
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		_ = transaction.Rollback(context.Background())
+	}()
+
+	observedMediaIDs, exists, err := treeMediaIDs(
+		ctx,
+		transaction,
+		id,
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return resource.ErrNotFound
+	}
+	if err := medialock.Lock(
+		ctx,
+		transaction,
+		observedMediaIDs...,
+	); err != nil {
+		return err
+	}
+
+	actualMediaIDs, exists, err := treeMediaIDs(
+		ctx,
+		transaction,
+		id,
+		true,
+	)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return resource.ErrNotFound
+	}
+	if !mediaIDsContained(actualMediaIDs, observedMediaIDs) {
+		return resource.ErrConflict
+	}
+
+	commandTag, err := transaction.Exec(ctx, `
 DELETE FROM core.resources
 WHERE id = $1;
 `, id)
@@ -450,6 +627,20 @@ WHERE id = $1;
 	if commandTag.RowsAffected() == 0 {
 		return resource.ErrNotFound
 	}
+
+	for _, mediaID := range actualMediaIDs {
+		if _, err := transaction.Exec(ctx, `
+DELETE FROM core.media
+WHERE id = $1;
+`, mediaID); err != nil {
+			return translateDeleteError(err)
+		}
+	}
+
+	if err := transaction.Commit(ctx); err != nil {
+		return translateDeleteError(err)
+	}
+	committed = true
 	return nil
 }
 
@@ -464,6 +655,7 @@ func scanResource(scanner rowScanner) (resource.Resource, error) {
 		templateCode     *string
 		contentType      *string
 		path             *string
+		imageMediaID     *int64
 		targetResourceID *int64
 		externalURL      *string
 		rawSettings      []byte
@@ -481,6 +673,7 @@ func scanResource(scanner rowScanner) (resource.Resource, error) {
 		&item.Slug,
 		&path,
 		&item.Content,
+		&imageMediaID,
 		&targetResourceID,
 		&externalURL,
 		&item.IsPublic,
@@ -493,6 +686,8 @@ func scanResource(scanner rowScanner) (resource.Resource, error) {
 		&rawSettings,
 		&item.CreatedAt,
 		&item.UpdatedAt,
+		&item.CreatedBy,
+		&item.UpdatedBy,
 	); err != nil {
 		return resource.Resource{}, err
 	}
@@ -507,6 +702,10 @@ func scanResource(scanner rowScanner) (resource.Resource, error) {
 	}
 	item.ContentType = contentType
 	item.Path = path
+	if imageMediaID != nil {
+		value := media.ID(*imageMediaID)
+		item.ImageMediaID = &value
+	}
 	if targetResourceID != nil {
 		value := resource.ID(*targetResourceID)
 		item.TargetResourceID = &value
@@ -529,6 +728,151 @@ func scanResource(scanner rowScanner) (resource.Resource, error) {
 	return item, nil
 }
 
+func ensureMediaAvailable(
+	ctx context.Context,
+	transaction pgx.Tx,
+	id media.ID,
+	exclude resource.ID,
+) error {
+	var attached bool
+	if err := transaction.QueryRow(ctx, `
+SELECT EXISTS
+(
+    SELECT 1
+    FROM core.resources
+    WHERE image_media_id = $1
+      AND ($2 = 0 OR id <> $2)
+
+    UNION ALL
+
+    SELECT 1
+    FROM core.users
+    WHERE avatar_media_id = $1
+);
+`, id, exclude).Scan(&attached); err != nil {
+		return fmt.Errorf(
+			"check media %d attachment: %w",
+			id,
+			err,
+		)
+	}
+	if attached {
+		return media.ErrAlreadyAttached
+	}
+	return nil
+}
+
+func treeMediaIDs(
+	ctx context.Context,
+	transaction pgx.Tx,
+	id resource.ID,
+	lock bool,
+) ([]media.ID, bool, error) {
+	query := `
+WITH RECURSIVE tree AS
+(
+    SELECT id
+    FROM core.resources
+    WHERE id = $1
+
+    UNION ALL
+
+    SELECT child.id
+    FROM core.resources AS child
+    JOIN tree
+      ON child.parent_id = tree.id
+)
+SELECT item.id, item.image_media_id
+FROM core.resources AS item
+JOIN tree
+  ON tree.id = item.id
+ORDER BY item.id`
+	if lock {
+		query += `
+FOR UPDATE OF item`
+	}
+	query += ";"
+
+	rows, err := transaction.Query(ctx, query, id)
+	if err != nil {
+		return nil, false, fmt.Errorf(
+			"query resource %d delete tree: %w",
+			id,
+			err,
+		)
+	}
+	defer rows.Close()
+
+	seen := make(map[media.ID]struct{})
+	result := make([]media.ID, 0)
+	exists := false
+	for rows.Next() {
+		exists = true
+		var (
+			resourceID   resource.ID
+			imageMediaID *int64
+		)
+		if err := rows.Scan(&resourceID, &imageMediaID); err != nil {
+			return nil, false, fmt.Errorf(
+				"scan resource delete tree: %w",
+				err,
+			)
+		}
+		if imageMediaID == nil {
+			continue
+		}
+		mediaID := media.ID(*imageMediaID)
+		if _, duplicate := seen[mediaID]; duplicate {
+			continue
+		}
+		seen[mediaID] = struct{}{}
+		result = append(result, mediaID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf(
+			"iterate resource delete tree: %w",
+			err,
+		)
+	}
+	return result, exists, nil
+}
+
+func mediaIDsContained(
+	actual []media.ID,
+	locked []media.ID,
+) bool {
+	lockedSet := make(map[media.ID]struct{}, len(locked))
+	for _, id := range locked {
+		lockedSet[id] = struct{}{}
+	}
+	for _, id := range actual {
+		if _, exists := lockedSet[id]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func equalMediaID(
+	expected *media.ID,
+	actual *int64,
+) bool {
+	if expected == nil || actual == nil {
+		return expected == nil && actual == nil
+	}
+	return int64(*expected) == *actual
+}
+
+func sameMediaID(
+	left *media.ID,
+	right *media.ID,
+) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
 func lockResource(
 	ctx context.Context,
 	transaction pgx.Tx,
@@ -537,10 +881,11 @@ func lockResource(
 	item, err := scanResource(transaction.QueryRow(ctx, `
 SELECT
     id, site_id, parent_id, type, template, content_type,
-    title, menu_title, slug, path, content, target_resource_id,
+    title, menu_title, slug, path, content, image_media_id,
+    target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
     sort, published_at, unpublished_at, settings, created_at,
-    updated_at
+    updated_at, created_by, updated_by
 FROM core.resources
 WHERE id = $1
 FOR UPDATE;

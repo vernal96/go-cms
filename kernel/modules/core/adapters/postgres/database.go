@@ -8,25 +8,37 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	"github.com/vernal96/go-cms/kernel/modules/core/access"
+	accesspostgres "github.com/vernal96/go-cms/kernel/modules/core/access/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	filepostgres "github.com/vernal96/go-cms/kernel/modules/core/file/adapters/postgres"
+	"github.com/vernal96/go-cms/kernel/modules/core/group"
+	grouppostgres "github.com/vernal96/go-cms/kernel/modules/core/group/adapters/postgres"
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
+	mediapostgres "github.com/vernal96/go-cms/kernel/modules/core/media/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	resourcepostgres "github.com/vernal96/go-cms/kernel/modules/core/resource/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	sitepostgres "github.com/vernal96/go-cms/kernel/modules/core/site/adapters/postgres"
+	"github.com/vernal96/go-cms/kernel/modules/core/user"
+	userpostgres "github.com/vernal96/go-cms/kernel/modules/core/user/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-//go:embed seeds/dev/*.sql
+//go:embed seeds/shared/*.sql seeds/dev/*.sql
 var seedFiles embed.FS
 
 type Database struct {
 	sites     site.Repository
 	resources resource.Repository
 	files     file.Repository
+	media     media.Repository
+	users     user.Repository
+	groups    group.Repository
+	access    access.Repository
 }
 
 type DatabaseFactory struct{}
@@ -70,10 +82,31 @@ func NewDatabase(
 		return nil, err
 	}
 
+	mediaRepository, err := mediapostgres.NewRepository(connector)
+	if err != nil {
+		return nil, err
+	}
+	userRepository, err := userpostgres.NewRepository(connector)
+	if err != nil {
+		return nil, err
+	}
+	groupRepository, err := grouppostgres.NewRepository(connector)
+	if err != nil {
+		return nil, err
+	}
+	accessRepository, err := accesspostgres.NewRepository(connector)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Database{
 		sites:     sites,
 		resources: resources,
 		files:     files,
+		media:     mediaRepository,
+		users:     userRepository,
+		groups:    groupRepository,
+		access:    accessRepository,
 	}, nil
 }
 
@@ -93,6 +126,22 @@ func (d *Database) Files() file.Repository {
 	return d.files
 }
 
+func (d *Database) Media() media.Repository {
+	return d.media
+}
+
+func (d *Database) Users() user.Repository {
+	return d.users
+}
+
+func (d *Database) Groups() group.Repository {
+	return d.groups
+}
+
+func (d *Database) Access() access.Repository {
+	return d.access
+}
+
 func (d *Database) MigrationSources() []migrations.Source {
 	return []migrations.Source{
 		{
@@ -106,6 +155,13 @@ func (d *Database) MigrationSources() []migrations.Source {
 
 func (d *Database) SeedSources() []seeds.Source {
 	return []seeds.Source{
+		{
+			ID:     "identity_shared",
+			Tags:   []seeds.Tag{"dev", "prod"},
+			Schema: "core",
+			FS:     seedFiles,
+			Path:   "seeds/shared",
+		},
 		{
 			ID:     "sites_dev",
 			Tags:   []seeds.Tag{"dev"},

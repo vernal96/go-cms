@@ -5,11 +5,16 @@ import (
 	"errors"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
+	"github.com/vernal96/go-cms/kernel/modules/core/group"
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/permission"
 )
 
 const ModuleCode kernel.ModuleCode = "core"
@@ -21,6 +26,10 @@ type Database interface {
 	Sites() site.Repository
 	Resources() resource.Repository
 	Files() file.Repository
+	Media() media.Repository
+	Users() user.Repository
+	Groups() group.Repository
+	Access() access.Repository
 }
 
 type Module struct{}
@@ -33,6 +42,14 @@ func (Module) Registry() kernel.ModuleRegistry {
 	return kernel.ModuleRegistry{
 		FieldTypes:    field.StandardTypes(),
 		ResourceTypes: resourcetype.StandardTypes(),
+		PermissionEntities: []permission.Entity{
+			{Code: "site"},
+			{Code: "resource"},
+			{Code: "file"},
+			{Code: "media"},
+			{Code: "user"},
+			{Code: "group"},
+		},
 	}
 }
 
@@ -57,6 +74,18 @@ func (Module) Build(
 	}
 	if database.Files() == nil {
 		return nil, errors.New("core file repository is nil")
+	}
+	if database.Media() == nil {
+		return nil, errors.New("core media repository is nil")
+	}
+	if database.Users() == nil {
+		return nil, errors.New("core user repository is nil")
+	}
+	if database.Groups() == nil {
+		return nil, errors.New("core group repository is nil")
+	}
+	if database.Access() == nil {
+		return nil, errors.New("core access repository is nil")
 	}
 
 	return &Runtime{database: database}, nil

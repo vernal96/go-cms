@@ -13,6 +13,7 @@ import (
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
+	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type Repository struct {
@@ -82,10 +83,19 @@ func (r *Repository) CreateFolder(
 	}
 
 	result, err := scanFolder(tx.QueryRow(ctx, `
-INSERT INTO core.file_folders (parent_id, storage, name)
-VALUES ($1, $2, $3)
-RETURNING id, parent_id, storage, name, created_at, updated_at;
-`, item.ParentID, item.Storage, item.Name))
+INSERT INTO core.file_folders
+    (parent_id, storage, name, created_by, updated_by)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING
+    id, parent_id, storage, name,
+    created_at, updated_at, created_by, updated_by;
+`,
+		item.ParentID,
+		item.Storage,
+		item.Name,
+		item.CreatedBy,
+		item.UpdatedBy,
+	))
 	if err != nil {
 		return file.Folder{}, translateError(err)
 	}
@@ -103,7 +113,9 @@ func (r *Repository) FolderByID(
 		return file.Folder{}, errors.New("get file folder context is nil")
 	}
 	result, err := scanFolder(r.connector.Pool().QueryRow(ctx, `
-SELECT id, parent_id, storage, name, created_at, updated_at
+SELECT
+    id, parent_id, storage, name,
+    created_at, updated_at, created_by, updated_by
 FROM core.file_folders
 WHERE id = $1;
 `, id))
@@ -125,7 +137,9 @@ func (r *Repository) ListFolders(
 		return nil, errors.New("list file folders context is nil")
 	}
 	rows, err := r.connector.Pool().Query(ctx, `
-SELECT id, parent_id, storage, name, created_at, updated_at
+SELECT
+    id, parent_id, storage, name,
+    created_at, updated_at, created_by, updated_by
 FROM core.file_folders
 WHERE storage = $1
   AND parent_id IS NOT DISTINCT FROM $2
@@ -181,12 +195,13 @@ func (r *Repository) CreateFile(
 INSERT INTO core.files
 (
     folder_id, storage, name, mime_type, size,
-    checksum_sha256, path, parent_id
+    checksum_sha256, path, parent_id, created_by, updated_by
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING
     id, folder_id, storage, name, mime_type, size,
-    checksum_sha256, path, parent_id, created_at, updated_at;
+    checksum_sha256, path, parent_id,
+    created_at, updated_at, created_by, updated_by;
 `,
 		item.FolderID,
 		item.Storage,
@@ -196,6 +211,8 @@ RETURNING
 		checksum,
 		item.Path,
 		item.ParentID,
+		item.CreatedBy,
+		item.UpdatedBy,
 	))
 	if err != nil {
 		return file.File{}, translateError(err)
@@ -247,6 +264,7 @@ ORDER BY name, id;
 
 func (r *Repository) MoveFile(
 	ctx context.Context,
+	actorID *security.UserID,
 	id file.ID,
 	folderID *file.FolderID,
 ) (file.File, error) {
@@ -283,12 +301,16 @@ FOR UPDATE;
 
 	result, err := scanFile(tx.QueryRow(ctx, `
 UPDATE core.files
-SET folder_id = $2, updated_at = now()
+SET
+    folder_id = $2,
+    updated_at = now(),
+    updated_by = $3
 WHERE id = $1
 RETURNING
     id, folder_id, storage, name, mime_type, size,
-    checksum_sha256, path, parent_id, created_at, updated_at;
-`, id, folderID))
+    checksum_sha256, path, parent_id,
+    created_at, updated_at, created_by, updated_by;
+`, id, folderID, actorID))
 	if err != nil {
 		return file.File{}, translateError(err)
 	}
@@ -300,6 +322,7 @@ RETURNING
 
 func (r *Repository) MoveFolder(
 	ctx context.Context,
+	actorID *security.UserID,
 	id file.FolderID,
 	parentID *file.FolderID,
 ) (file.Folder, error) {
@@ -316,7 +339,9 @@ func (r *Repository) MoveFolder(
 		return file.Folder{}, err
 	}
 	current, err := scanFolder(tx.QueryRow(ctx, `
-SELECT id, parent_id, storage, name, created_at, updated_at
+SELECT
+    id, parent_id, storage, name,
+    created_at, updated_at, created_by, updated_by
 FROM core.file_folders
 WHERE id = $1
 FOR UPDATE;
@@ -361,10 +386,15 @@ SELECT EXISTS (SELECT 1 FROM ancestors WHERE id = $1);
 
 	result, err := scanFolder(tx.QueryRow(ctx, `
 UPDATE core.file_folders
-SET parent_id = $2, updated_at = now()
+SET
+    parent_id = $2,
+    updated_at = now(),
+    updated_by = $3
 WHERE id = $1
-RETURNING id, parent_id, storage, name, created_at, updated_at;
-`, id, parentID))
+RETURNING
+    id, parent_id, storage, name,
+    created_at, updated_at, created_by, updated_by;
+`, id, parentID, actorID))
 	if err != nil {
 		return file.Folder{}, translateError(err)
 	}
@@ -548,7 +578,8 @@ const (
 	fileSelect = `
 SELECT
     id, folder_id, storage, name, mime_type, size,
-    checksum_sha256, path, parent_id, created_at, updated_at
+    checksum_sha256, path, parent_id,
+    created_at, updated_at, created_by, updated_by
 FROM core.files
 `
 	namespaceQuery = `
@@ -587,6 +618,8 @@ func scanFolder(scanner rowScanner) (file.Folder, error) {
 		&result.Name,
 		&result.CreatedAt,
 		&result.UpdatedAt,
+		&result.CreatedBy,
+		&result.UpdatedBy,
 	); err != nil {
 		return file.Folder{}, err
 	}
@@ -616,6 +649,8 @@ func scanFile(scanner rowScanner) (file.File, error) {
 		&parentID,
 		&result.CreatedAt,
 		&result.UpdatedAt,
+		&result.CreatedBy,
+		&result.UpdatedBy,
 	); err != nil {
 		return file.File{}, err
 	}

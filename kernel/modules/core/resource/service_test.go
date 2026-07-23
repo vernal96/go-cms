@@ -11,10 +11,24 @@ import (
 
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms/kernel/permission"
+	"github.com/vernal96/go-cms/kernel/security"
 )
+
+type testAuthorizer struct{}
+
+func (testAuthorizer) Check(
+	context.Context,
+	security.Actor,
+	permission.Code,
+) error {
+	return nil
+}
 
 type testModule struct{}
 
@@ -94,11 +108,12 @@ func (s testSites) RuntimeByID(id site.ID) (*site.Runtime, bool) {
 }
 
 type memoryRepository struct {
-	nextID      ID
-	items       map[ID]Resource
-	createError error
-	updateError error
-	deleteError error
+	nextID       ID
+	items        map[ID]Resource
+	createError  error
+	updateError  error
+	deleteError  error
+	deletedMedia []media.ID
 }
 
 func newMemoryRepository() *memoryRepository {
@@ -109,11 +124,27 @@ func newMemoryRepository() *memoryRepository {
 }
 
 func (r *memoryRepository) Create(
-	_ context.Context,
+	ctx context.Context,
+	_ *security.UserID,
 	item Resource,
+	validate ValidateImageMedia,
 ) (Resource, error) {
 	if r.createError != nil {
 		return Resource{}, r.createError
+	}
+	if item.ImageMediaID != nil {
+		if validate == nil {
+			return Resource{}, errors.New("image media validator is nil")
+		}
+		for _, existing := range r.items {
+			if existing.ImageMediaID != nil &&
+				*existing.ImageMediaID == *item.ImageMediaID {
+				return Resource{}, media.ErrAlreadyAttached
+			}
+		}
+		if err := validate(ctx, *item.ImageMediaID); err != nil {
+			return Resource{}, err
+		}
 	}
 
 	item = Clone(item)
@@ -175,8 +206,11 @@ func (r *memoryRepository) ListBySite(
 }
 
 func (r *memoryRepository) Update(
-	_ context.Context,
+	ctx context.Context,
+	_ *security.UserID,
+	expected Resource,
 	item Resource,
+	validate ValidateImageMedia,
 ) (Resource, error) {
 	if r.updateError != nil {
 		return Resource{}, r.updateError
@@ -185,6 +219,27 @@ func (r *memoryRepository) Update(
 	current, exists := r.items[item.ID]
 	if !exists {
 		return Resource{}, ErrNotFound
+	}
+	if current.ImageMediaID == nil != (expected.ImageMediaID == nil) ||
+		current.ImageMediaID != nil &&
+			expected.ImageMediaID != nil &&
+			*current.ImageMediaID != *expected.ImageMediaID {
+		return Resource{}, ErrConflict
+	}
+	if item.ImageMediaID != nil {
+		if validate == nil {
+			return Resource{}, errors.New("image media validator is nil")
+		}
+		for id, existing := range r.items {
+			if id != item.ID &&
+				existing.ImageMediaID != nil &&
+				*existing.ImageMediaID == *item.ImageMediaID {
+				return Resource{}, media.ErrAlreadyAttached
+			}
+		}
+		if err := validate(ctx, *item.ImageMediaID); err != nil {
+			return Resource{}, err
+		}
 	}
 	item = Clone(item)
 	item.CreatedAt = current.CreatedAt
@@ -225,6 +280,10 @@ func (r *memoryRepository) Update(
 		return Resource{}, err
 	}
 	r.items = candidate
+	if !sameTestMediaID(current.ImageMediaID, item.ImageMediaID) &&
+		current.ImageMediaID != nil {
+		r.deletedMedia = append(r.deletedMedia, *current.ImageMediaID)
+	}
 	return Clone(r.items[item.ID]), nil
 }
 
@@ -261,9 +320,83 @@ func (r *memoryRepository) Delete(
 		}
 	}
 	for deletedID := range deleted {
+		if item := r.items[deletedID]; item.ImageMediaID != nil {
+			r.deletedMedia = append(
+				r.deletedMedia,
+				*item.ImageMediaID,
+			)
+		}
 		delete(r.items, deletedID)
 	}
 	return nil
+}
+
+func sameTestMediaID(left, right *media.ID) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+type testMediaService struct {
+	items map[media.ID]media.ResolvedMedia
+}
+
+func newTestMediaService() *testMediaService {
+	return &testMediaService{
+		items: make(map[media.ID]media.ResolvedMedia),
+	}
+}
+
+func (*testMediaService) Create(
+	context.Context,
+	security.Actor,
+	media.CreateInput,
+) (media.Media, error) {
+	return media.Media{}, errors.New("not implemented")
+}
+
+func (s *testMediaService) Get(
+	_ context.Context,
+	_ security.Actor,
+	id media.ID,
+) (media.Media, error) {
+	item, exists := s.items[id]
+	if !exists {
+		return media.Media{}, media.ErrNotFound
+	}
+	return media.Clone(item.Media), nil
+}
+
+func (s *testMediaService) Resolve(
+	_ context.Context,
+	_ security.Actor,
+	id media.ID,
+) (media.ResolvedMedia, error) {
+	item, exists := s.items[id]
+	if !exists {
+		return media.ResolvedMedia{}, media.ErrNotFound
+	}
+	return media.ResolvedMedia{
+		Media: media.Clone(item.Media),
+		File:  corefile.Clone(item.File),
+	}, nil
+}
+
+func (*testMediaService) Update(
+	context.Context,
+	security.Actor,
+	media.UpdateInput,
+) (media.Media, error) {
+	return media.Media{}, errors.New("not implemented")
+}
+
+func (*testMediaService) Delete(
+	context.Context,
+	security.Actor,
+	media.ID,
+) error {
+	return errors.New("not implemented")
 }
 
 func validateMemoryUniqueness(items map[ID]Resource) error {
@@ -305,7 +438,9 @@ func cloneResourceMap(source map[ID]Resource) map[ID]Resource {
 	return result
 }
 
-func newTestService(t *testing.T) (*Service, *memoryRepository) {
+func newTestService(
+	t *testing.T,
+) (*Service, *memoryRepository, *testMediaService) {
 	t.Helper()
 
 	required := true
@@ -359,18 +494,24 @@ func newTestService(t *testing.T) (*Service, *memoryRepository) {
 	}
 
 	repository := newMemoryRepository()
-	service, err := NewService(repository, sites)
+	mediaService := newTestMediaService()
+	service, err := NewService(
+		repository,
+		sites,
+		mediaService,
+		testAuthorizer{},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return service, repository
+	return service, repository, mediaService
 }
 
 func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
-	service, _ := newTestService(t)
+	service, _, _ := newTestService(t)
 	templateCode := template.Code("article")
 
-	home, err := service.Create(context.Background(), CreateInput{
+	home, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:   1,
 		Template: &templateCode,
 		Title:    " Home ",
@@ -396,7 +537,7 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 	}
 
 	falseValue := false
-	about, err := service.Create(context.Background(), CreateInput{
+	about, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:       1,
 		ParentID:     &home.ID,
 		Template:     &templateCode,
@@ -423,7 +564,7 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 		t.Fatalf("explicit false values = %#v", about)
 	}
 
-	_, err = service.Create(context.Background(), CreateInput{
+	_, err = service.Create(context.Background(), security.System(), CreateInput{
 		SiteID: 1,
 		Title:  "Missing template",
 		Slug:   "missing-template",
@@ -432,7 +573,7 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 		t.Fatalf("missing template error = %v", err)
 	}
 
-	_, err = service.Create(context.Background(), CreateInput{
+	_, err = service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:   1,
 		Template: &templateCode,
 		Title:    "Invalid settings",
@@ -443,7 +584,7 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 		t.Fatalf("invalid settings error = %v", err)
 	}
 
-	_, err = service.Create(context.Background(), CreateInput{
+	_, err = service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:   1,
 		Template: &templateCode,
 		Title:    "Invalid slug",
@@ -456,10 +597,10 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 }
 
 func TestServiceBuiltInTypesAndNoPathType(t *testing.T) {
-	service, _ := newTestService(t)
+	service, _, _ := newTestService(t)
 	templateCode := template.Code("empty")
 
-	target, err := service.Create(context.Background(), CreateInput{
+	target, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:   1,
 		Template: &templateCode,
 		Title:    "Target",
@@ -470,7 +611,7 @@ func TestServiceBuiltInTypesAndNoPathType(t *testing.T) {
 	}
 
 	externalURL := "https://example.com/docs"
-	link, err := service.Create(context.Background(), CreateInput{
+	link, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:      1,
 		Type:        resourcetype.Link,
 		Title:       "External",
@@ -486,6 +627,7 @@ func TestServiceBuiltInTypesAndNoPathType(t *testing.T) {
 
 	resourceLink, err := service.Create(
 		context.Background(),
+		security.System(),
 		CreateInput{
 			SiteID:           1,
 			Type:             resourcetype.ResourceLink,
@@ -504,6 +646,7 @@ func TestServiceBuiltInTypesAndNoPathType(t *testing.T) {
 
 	otherSiteTarget, err := service.Create(
 		context.Background(),
+		security.System(),
 		CreateInput{
 			SiteID:   2,
 			Template: &templateCode,
@@ -514,7 +657,7 @@ func TestServiceBuiltInTypesAndNoPathType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.Create(context.Background(), CreateInput{
+	_, err = service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:           1,
 		Type:             resourcetype.ResourceLink,
 		Title:            "Cross-site alias",
@@ -525,7 +668,7 @@ func TestServiceBuiltInTypesAndNoPathType(t *testing.T) {
 		t.Fatalf("cross-site target error = %v", err)
 	}
 
-	noPath, err := service.Create(context.Background(), CreateInput{
+	noPath, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID: 1,
 		Type:   "no_path",
 		Title:  "Container",
@@ -538,7 +681,7 @@ func TestServiceBuiltInTypesAndNoPathType(t *testing.T) {
 		t.Fatalf("no_path resource path = %#v", noPath.Path)
 	}
 
-	_, err = service.Create(context.Background(), CreateInput{
+	_, err = service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:   1,
 		ParentID: &noPath.ID,
 		Template: &templateCode,
@@ -551,10 +694,10 @@ func TestServiceBuiltInTypesAndNoPathType(t *testing.T) {
 }
 
 func TestServiceUpdateMovesSubtreeAndBuildsSortedTree(t *testing.T) {
-	service, _ := newTestService(t)
+	service, _, _ := newTestService(t)
 	templateCode := template.Code("empty")
 
-	first, err := service.Create(context.Background(), CreateInput{
+	first, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:   1,
 		Template: &templateCode,
 		Title:    "First",
@@ -564,7 +707,7 @@ func TestServiceUpdateMovesSubtreeAndBuildsSortedTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := service.Create(context.Background(), CreateInput{
+	second, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:   1,
 		Template: &templateCode,
 		Title:    "Second",
@@ -574,7 +717,7 @@ func TestServiceUpdateMovesSubtreeAndBuildsSortedTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := service.Create(context.Background(), CreateInput{
+	child, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:   1,
 		ParentID: &first.ID,
 		Template: &templateCode,
@@ -587,6 +730,7 @@ func TestServiceUpdateMovesSubtreeAndBuildsSortedTree(t *testing.T) {
 	}
 	grandchild, err := service.Create(
 		context.Background(),
+		security.System(),
 		CreateInput{
 			SiteID:   1,
 			ParentID: &child.ID,
@@ -599,7 +743,7 @@ func TestServiceUpdateMovesSubtreeAndBuildsSortedTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	child, err = service.Update(context.Background(), UpdateInput{
+	child, err = service.Update(context.Background(), security.System(), UpdateInput{
 		ID:           child.ID,
 		ParentID:     &second.ID,
 		Type:         resourcetype.Page,
@@ -618,7 +762,7 @@ func TestServiceUpdateMovesSubtreeAndBuildsSortedTree(t *testing.T) {
 	if child.Path == nil || *child.Path != "/second/renamed" {
 		t.Fatalf("moved child path = %#v", child.Path)
 	}
-	grandchild, err = service.Get(context.Background(), grandchild.ID)
+	grandchild, err = service.Get(context.Background(), security.System(), grandchild.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,7 +771,7 @@ func TestServiceUpdateMovesSubtreeAndBuildsSortedTree(t *testing.T) {
 		t.Fatalf("grandchild path = %#v", grandchild.Path)
 	}
 
-	tree, err := service.Tree(context.Background(), 1)
+	tree, err := service.Tree(context.Background(), security.System(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -642,7 +786,7 @@ func TestServiceUpdateMovesSubtreeAndBuildsSortedTree(t *testing.T) {
 		t.Fatalf("nested tree = %#v", tree)
 	}
 
-	_, err = service.Update(context.Background(), UpdateInput{
+	_, err = service.Update(context.Background(), security.System(), UpdateInput{
 		ID:           second.ID,
 		ParentID:     &grandchild.ID,
 		Type:         resourcetype.Page,
@@ -662,11 +806,11 @@ func TestServiceUpdateMovesSubtreeAndBuildsSortedTree(t *testing.T) {
 func TestServiceUpdateFullyReplacesStateAndRejectsNoPathAncestor(
 	t *testing.T,
 ) {
-	service, _ := newTestService(t)
+	service, _, _ := newTestService(t)
 	article := template.Code("article")
 	empty := template.Code("empty")
 
-	page, err := service.Create(context.Background(), CreateInput{
+	page, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:   1,
 		Template: &article,
 		Title:    "Page",
@@ -677,7 +821,7 @@ func TestServiceUpdateFullyReplacesStateAndRejectsNoPathAncestor(
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := service.Create(context.Background(), CreateInput{
+	child, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:   1,
 		ParentID: &page.ID,
 		Template: &empty,
@@ -689,7 +833,7 @@ func TestServiceUpdateFullyReplacesStateAndRejectsNoPathAncestor(
 	}
 
 	externalURL := "/new-target"
-	page, err = service.Update(context.Background(), UpdateInput{
+	page, err = service.Update(context.Background(), security.System(), UpdateInput{
 		ID:           page.ID,
 		Type:         resourcetype.Link,
 		Title:        "Link now",
@@ -714,7 +858,7 @@ func TestServiceUpdateFullyReplacesStateAndRejectsNoPathAncestor(
 		t.Fatalf("fully replaced page = %#v", page)
 	}
 
-	_, err = service.Update(context.Background(), UpdateInput{
+	_, err = service.Update(context.Background(), security.System(), UpdateInput{
 		ID:           page.ID,
 		Type:         "no_path",
 		Title:        "Container",
@@ -729,7 +873,7 @@ func TestServiceUpdateFullyReplacesStateAndRejectsNoPathAncestor(
 		t.Fatalf("no_path ancestor error = %v", err)
 	}
 
-	child, err = service.Get(context.Background(), child.ID)
+	child, err = service.Get(context.Background(), security.System(), child.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,12 +883,12 @@ func TestServiceUpdateFullyReplacesStateAndRejectsNoPathAncestor(
 }
 
 func TestServicePublicationAndRepositoryErrors(t *testing.T) {
-	service, repository := newTestService(t)
+	service, repository, _ := newTestService(t)
 	templateCode := template.Code("empty")
 	publishedAt := time.Now().UTC()
 	unpublishedAt := publishedAt
 
-	_, err := service.Create(context.Background(), CreateInput{
+	_, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:        1,
 		Template:      &templateCode,
 		Title:         "Dates",
@@ -757,7 +901,7 @@ func TestServicePublicationAndRepositoryErrors(t *testing.T) {
 	}
 
 	repository.createError = errors.New("storage unavailable")
-	_, err = service.Create(context.Background(), CreateInput{
+	_, err = service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:   1,
 		Template: &templateCode,
 		Title:    "Repository error",
@@ -769,10 +913,10 @@ func TestServicePublicationAndRepositoryErrors(t *testing.T) {
 }
 
 func TestServiceDeleteCascadeAndReferenceProtection(t *testing.T) {
-	service, _ := newTestService(t)
+	service, _, _ := newTestService(t)
 	templateCode := template.Code("empty")
 
-	root, err := service.Create(context.Background(), CreateInput{
+	root, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:   1,
 		Template: &templateCode,
 		Title:    "Root",
@@ -781,7 +925,7 @@ func TestServiceDeleteCascadeAndReferenceProtection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := service.Create(context.Background(), CreateInput{
+	child, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:   1,
 		ParentID: &root.ID,
 		Template: &templateCode,
@@ -791,7 +935,7 @@ func TestServiceDeleteCascadeAndReferenceProtection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.Create(context.Background(), CreateInput{
+	_, err = service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:           1,
 		ParentID:         &root.ID,
 		Type:             resourcetype.ResourceLink,
@@ -805,6 +949,7 @@ func TestServiceDeleteCascadeAndReferenceProtection(t *testing.T) {
 
 	externalLink, err := service.Create(
 		context.Background(),
+		security.System(),
 		CreateInput{
 			SiteID:           1,
 			Type:             resourcetype.ResourceLink,
@@ -817,7 +962,7 @@ func TestServiceDeleteCascadeAndReferenceProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := service.Delete(context.Background(), root.ID); !errors.Is(
+	if err := service.Delete(context.Background(), security.System(), root.ID); !errors.Is(
 		err,
 		ErrReferenced,
 	) {
@@ -825,15 +970,17 @@ func TestServiceDeleteCascadeAndReferenceProtection(t *testing.T) {
 	}
 	if err := service.Delete(
 		context.Background(),
+		security.System(),
 		externalLink.ID,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Delete(context.Background(), root.ID); err != nil {
+	if err := service.Delete(context.Background(), security.System(), root.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.Get(
 		context.Background(),
+		security.System(),
 		child.ID,
 	); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted child error = %v", err)
@@ -841,9 +988,9 @@ func TestServiceDeleteCascadeAndReferenceProtection(t *testing.T) {
 }
 
 func TestServiceDetectsInvalidStoredResourcesOnRead(t *testing.T) {
-	service, repository := newTestService(t)
+	service, repository, _ := newTestService(t)
 	templateCode := template.Code("article")
-	item, err := service.Create(context.Background(), CreateInput{
+	item, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID:   1,
 		Template: &templateCode,
 		Title:    "Stored",
@@ -898,7 +1045,7 @@ func TestServiceDetectsInvalidStoredResourcesOnRead(t *testing.T) {
 			testCase.mutate(&corrupted)
 			repository.items[item.ID] = corrupted
 
-			_, err := service.Get(context.Background(), item.ID)
+			_, err := service.Get(context.Background(), security.System(), item.ID)
 			if err == nil || !strings.Contains(
 				err.Error(),
 				testCase.contains,
@@ -908,6 +1055,210 @@ func TestServiceDetectsInvalidStoredResourcesOnRead(t *testing.T) {
 
 			repository.items[item.ID] = Clone(original)
 		})
+	}
+}
+
+func TestServiceResourceImageMediaValidationAndAttachment(
+	t *testing.T,
+) {
+	service, _, mediaService := newTestService(t)
+	addResolvedMedia(mediaService, 1, 101, "image/png")
+	addResolvedMedia(mediaService, 2, 102, "application/pdf")
+	templateCode := template.Code("article")
+
+	imageMediaID := media.ID(1)
+	root, err := service.Create(context.Background(), security.System(), CreateInput{
+		SiteID:       1,
+		Template:     &templateCode,
+		Title:        "Home",
+		ImageMediaID: &imageMediaID,
+		Settings:     map[string]any{"headline": "Home"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root.ImageMediaID == nil || *root.ImageMediaID != imageMediaID {
+		t.Fatalf("resource image media = %#v", root.ImageMediaID)
+	}
+
+	if _, err := service.Create(context.Background(), security.System(), CreateInput{
+		SiteID:       1,
+		ParentID:     &root.ID,
+		Template:     &templateCode,
+		Title:        "Child",
+		Slug:         "child",
+		ImageMediaID: &imageMediaID,
+		Settings:     map[string]any{"headline": "Child"},
+	}); !errors.Is(err, media.ErrAlreadyAttached) {
+		t.Fatalf("duplicate media attachment error = %v", err)
+	}
+
+	nonImageMediaID := media.ID(2)
+	if _, err := service.Create(context.Background(), security.System(), CreateInput{
+		SiteID:       2,
+		Template:     &templateCode,
+		Title:        "Other home",
+		ImageMediaID: &nonImageMediaID,
+		Settings:     map[string]any{"headline": "Other"},
+	}); !errors.Is(err, ErrInvalidReference) {
+		t.Fatalf("non-image media error = %v", err)
+	}
+
+	missingMediaID := media.ID(99)
+	if _, err := service.Create(context.Background(), security.System(), CreateInput{
+		SiteID:       2,
+		Template:     &templateCode,
+		Title:        "Missing image",
+		ImageMediaID: &missingMediaID,
+		Settings:     map[string]any{"headline": "Missing"},
+	}); !errors.Is(err, ErrInvalidReference) {
+		t.Fatalf("missing media error = %v", err)
+	}
+}
+
+func TestServiceReplacingAndClearingImageDeletesOldMedia(
+	t *testing.T,
+) {
+	service, repository, mediaService := newTestService(t)
+	addResolvedMedia(mediaService, 1, 101, "image/png")
+	addResolvedMedia(mediaService, 2, 102, "image/webp")
+	templateCode := template.Code("article")
+
+	firstMediaID := media.ID(1)
+	item, err := service.Create(context.Background(), security.System(), CreateInput{
+		SiteID:       1,
+		Template:     &templateCode,
+		Title:        "Home",
+		ImageMediaID: &firstMediaID,
+		Settings:     map[string]any{"headline": "Home"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secondMediaID := media.ID(2)
+	input := updateInputFrom(item)
+	input.ImageMediaID = &secondMediaID
+	item, err = service.Update(context.Background(), security.System(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.ImageMediaID == nil || *item.ImageMediaID != secondMediaID {
+		t.Fatalf("replaced image media = %#v", item.ImageMediaID)
+	}
+	if len(repository.deletedMedia) != 1 ||
+		repository.deletedMedia[0] != firstMediaID {
+		t.Fatalf(
+			"deleted media after replacement = %#v",
+			repository.deletedMedia,
+		)
+	}
+
+	input = updateInputFrom(item)
+	input.ImageMediaID = nil
+	item, err = service.Update(context.Background(), security.System(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.ImageMediaID != nil {
+		t.Fatalf("cleared image media = %#v", item.ImageMediaID)
+	}
+	if len(repository.deletedMedia) != 2 ||
+		repository.deletedMedia[1] != secondMediaID {
+		t.Fatalf(
+			"deleted media after clear = %#v",
+			repository.deletedMedia,
+		)
+	}
+}
+
+func TestServiceDeletingResourceTreeDeletesItsMedia(t *testing.T) {
+	service, repository, mediaService := newTestService(t)
+	addResolvedMedia(mediaService, 1, 101, "image/png")
+	addResolvedMedia(mediaService, 2, 102, "image/jpeg")
+	templateCode := template.Code("article")
+
+	rootMediaID := media.ID(1)
+	root, err := service.Create(context.Background(), security.System(), CreateInput{
+		SiteID:       1,
+		Template:     &templateCode,
+		Title:        "Home",
+		ImageMediaID: &rootMediaID,
+		Settings:     map[string]any{"headline": "Home"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childMediaID := media.ID(2)
+	if _, err := service.Create(context.Background(), security.System(), CreateInput{
+		SiteID:       1,
+		ParentID:     &root.ID,
+		Template:     &templateCode,
+		Title:        "Child",
+		Slug:         "child",
+		ImageMediaID: &childMediaID,
+		Settings:     map[string]any{"headline": "Child"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := service.Delete(context.Background(), security.System(), root.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(repository.items) != 0 {
+		t.Fatalf("resources after delete = %#v", repository.items)
+	}
+
+	deleted := make(map[media.ID]bool)
+	for _, id := range repository.deletedMedia {
+		deleted[id] = true
+	}
+	if !deleted[rootMediaID] || !deleted[childMediaID] {
+		t.Fatalf("deleted media = %#v", repository.deletedMedia)
+	}
+}
+
+func addResolvedMedia(
+	service *testMediaService,
+	id media.ID,
+	fileID corefile.ID,
+	mimeType string,
+) {
+	service.items[id] = media.ResolvedMedia{
+		Media: media.Media{
+			ID:     id,
+			FileID: fileID,
+			Params: map[string]any{},
+		},
+		File: corefile.File{
+			ID:       fileID,
+			MIMEType: mimeType,
+		},
+	}
+}
+
+func updateInputFrom(item Resource) UpdateInput {
+	return UpdateInput{
+		ID:               item.ID,
+		ParentID:         cloneID(item.ParentID),
+		Type:             item.Type,
+		Template:         cloneTemplateCode(item.Template),
+		ContentType:      cloneString(item.ContentType),
+		Title:            item.Title,
+		MenuTitle:        item.MenuTitle,
+		Slug:             item.Slug,
+		Content:          item.Content,
+		ImageMediaID:     cloneMediaID(item.ImageMediaID),
+		TargetResourceID: cloneID(item.TargetResourceID),
+		ExternalURL:      cloneString(item.ExternalURL),
+		IsPublic:         item.IsPublic,
+		IsSearchable:     item.IsSearchable,
+		InMenu:           item.InMenu,
+		InSitemap:        item.InSitemap,
+		Sort:             item.Sort,
+		PublishedAt:      cloneTime(item.PublishedAt),
+		UnpublishedAt:    cloneTime(item.UnpublishedAt),
+		Settings:         cloneMap(item.Settings),
 	}
 }
 

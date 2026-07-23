@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
@@ -26,11 +28,23 @@ import (
 
 func TestDevSiteSeedSource(t *testing.T) {
 	sources := (&Database{}).SeedSources()
-	if len(sources) != 1 {
+	if len(sources) != 2 {
 		t.Fatalf("seed sources = %#v", sources)
 	}
 
-	source := sources[0]
+	shared := sources[0]
+	if shared.ID != "identity_shared" ||
+		len(shared.Tags) != 2 ||
+		shared.Tags[0] != "dev" ||
+		shared.Tags[1] != "prod" ||
+		shared.Schema != "core" {
+		t.Fatalf("shared identity source = %#v", shared)
+	}
+	if err := seeds.ValidateSource(shared); err != nil {
+		t.Fatal(err)
+	}
+
+	source := sources[1]
 	if source.ID != "sites_dev" ||
 		len(source.Tags) != 1 ||
 		source.Tags[0] != "dev" ||
@@ -45,8 +59,40 @@ func TestDevSiteSeedSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 {
+	if len(entries) != 4 {
 		t.Fatalf("dev seed files = %#v", entries)
+	}
+}
+
+func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
+	t.Parallel()
+
+	sources := (&Database{}).MigrationSources()
+	if len(sources) != 1 {
+		t.Fatalf("migration sources = %#v", sources)
+	}
+	entries, err := fs.ReadDir(sources[0].FS, sources[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 12 {
+		t.Fatalf("migration files = %#v", entries)
+	}
+	expected := map[string]bool{
+		"000005_identity.up.sql":      false,
+		"000005_identity.down.sql":    false,
+		"000006_permissions.up.sql":   false,
+		"000006_permissions.down.sql": false,
+	}
+	for _, entry := range entries {
+		if _, exists := expected[entry.Name()]; exists {
+			expected[entry.Name()] = true
+		}
+	}
+	for name, found := range expected {
+		if !found {
+			t.Fatalf("migration %q is not embedded", name)
+		}
 	}
 }
 
@@ -122,7 +168,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 3 || !hasVersion || dirty {
+	if version != 6 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,
@@ -136,6 +182,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	var resourcePathIndex *string
 	var fileFoldersTable *string
 	var filesTable *string
+	var mediaTable *string
 	if err := connector.Pool().QueryRow(
 		ctx,
 		`
@@ -144,7 +191,8 @@ SELECT
     to_regclass('core.resources')::text,
     to_regclass('core.uq_resources_site_path')::text,
     to_regclass('core.file_folders')::text,
-    to_regclass('core.files')::text;
+    to_regclass('core.files')::text,
+    to_regclass('core.media')::text;
 `,
 	).Scan(
 		&sitesTable,
@@ -152,6 +200,7 @@ SELECT
 		&resourcePathIndex,
 		&fileFoldersTable,
 		&filesTable,
+		&mediaTable,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -175,6 +224,9 @@ SELECT
 	}
 	if filesTable == nil || *filesTable != "core.files" {
 		t.Fatalf("core.files = %#v", filesTable)
+	}
+	if mediaTable == nil || *mediaTable != "core.media" {
+		t.Fatalf("core.media = %#v", mediaTable)
 	}
 
 	if _, err := connector.Pool().Exec(ctx, `
@@ -279,26 +331,185 @@ DELETE FROM core.file_folders;
 		t.Fatalf("delete namespace folder: %v", err)
 	}
 
-	seedPlan := seeds.Plan{
+	imageChecksum := sha256.Sum256([]byte("image"))
+	imageFile, err := fileRepository.CreateFile(ctx, corefile.File{
+		Storage:        "public",
+		Name:           "image.png",
+		MIMEType:       "image/png",
+		Size:           5,
+		ChecksumSHA256: hex.EncodeToString(imageChecksum[:]),
+		Path:           "objects/image",
+	})
+	if err != nil {
+		t.Fatalf("create image file: %v", err)
+	}
+	replacementChecksum := sha256.Sum256([]byte("replacement"))
+	replacementFile, err := fileRepository.CreateFile(ctx, corefile.File{
+		Storage:        "public",
+		Name:           "replacement.webp",
+		MIMEType:       "image/webp",
+		Size:           11,
+		ChecksumSHA256: hex.EncodeToString(replacementChecksum[:]),
+		Path:           "objects/replacement",
+	})
+	if err != nil {
+		t.Fatalf("create replacement image file: %v", err)
+	}
+	documentChecksum := sha256.Sum256([]byte("document"))
+	documentFile, err := fileRepository.CreateFile(ctx, corefile.File{
+		Storage:        "private",
+		Name:           "document.pdf",
+		MIMEType:       "application/pdf",
+		Size:           8,
+		ChecksumSHA256: hex.EncodeToString(documentChecksum[:]),
+		Path:           "objects/document",
+	})
+	if err != nil {
+		t.Fatalf("create document file: %v", err)
+	}
+
+	mediaRepository := database.Media()
+	mediaTitle := "Hero"
+	imageMedia, err := mediaRepository.Create(ctx, nil, media.Media{
+		FileID: imageFile.ID,
+		Title:  &mediaTitle,
+		Params: map[string]any{
+			"meta_alt": "Hero",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create image media: %v", err)
+	}
+	replacementMedia, err := mediaRepository.Create(ctx, nil, media.Media{
+		FileID: replacementFile.ID,
+		Params: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("create replacement media: %v", err)
+	}
+	documentMedia, err := mediaRepository.Create(ctx, nil, media.Media{
+		FileID: documentFile.ID,
+		Params: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("create document media: %v", err)
+	}
+	concurrentMedia, err := mediaRepository.Create(ctx, nil, media.Media{
+		FileID: imageFile.ID,
+		Params: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("create concurrent media: %v", err)
+	}
+	sharedMedia, err := mediaRepository.Create(ctx, nil, media.Media{
+		FileID: imageFile.ID,
+		Params: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("create shared media: %v", err)
+	}
+
+	if _, err := mediaRepository.Create(ctx, nil, media.Media{
+		FileID: corefile.ID(1 << 62),
+		Params: map[string]any{},
+	}); !errors.Is(err, media.ErrInvalidReference) {
+		t.Fatalf("missing media file error = %v", err)
+	}
+	if _, err := connector.Pool().Exec(ctx, `
+INSERT INTO core.media (file_id, params)
+VALUES ($1, '[]'::jsonb);
+`, imageFile.ID); err == nil {
+		t.Fatal("media accepted non-object params")
+	}
+
+	sharedSeedPlan := seeds.Plan{
 		Connection: string(connector.Code()),
 		Module:     core.ModuleCode,
 		Target:     connector,
 		Source:     database.SeedSources()[0],
 	}
+	devSeedPlan := seeds.Plan{
+		Connection: string(connector.Code()),
+		Module:     core.ModuleCode,
+		Target:     connector,
+		Source:     database.SeedSources()[1],
+	}
 	seedManager := seeds.NewManager()
-	if err := seedManager.Force(ctx, seedPlan, -1); err != nil {
-		t.Fatalf("prepare seed state: %v", err)
+	for _, seedPlan := range []seeds.Plan{
+		sharedSeedPlan,
+		devSeedPlan,
+	} {
+		if err := seedManager.Force(ctx, seedPlan, -1); err != nil {
+			t.Fatalf("prepare seed state: %v", err)
+		}
 	}
 	if _, err := connector.Pool().Exec(ctx, `
 DELETE
 FROM core.sites
 WHERE profile_code = 'dev'
   AND domain IN ('localhost', 'example.com');
+
+DELETE FROM core.users
+WHERE login = 'admin'
+  AND email = 'admin@example.test';
+
+DELETE FROM core.groups
+WHERE code IN ('admin', 'manager');
 `); err != nil {
-		t.Fatalf("clean seeded sites: %v", err)
+		t.Fatalf("clean seed targets: %v", err)
 	}
-	if err := seedManager.Up(ctx, seedPlan); err != nil {
-		t.Fatalf("seed up: %v", err)
+	if err := seedManager.Up(ctx, sharedSeedPlan); err != nil {
+		t.Fatalf("shared seed up: %v", err)
+	}
+	if err := seedManager.Up(ctx, devSeedPlan); err != nil {
+		t.Fatalf("dev seed up: %v", err)
+	}
+
+	var (
+		adminMemberships int64
+		managerSuper     bool
+		groupGrants      int64
+		guestGrants      int64
+	)
+	if err := connector.Pool().QueryRow(ctx, `
+SELECT
+    (
+        SELECT count(*)
+        FROM core.users u
+        JOIN core.user_groups ug ON ug.user_id = u.id
+        JOIN core.groups g ON g.id = ug.group_id
+        WHERE u.login = 'admin'
+          AND u.email = 'admin@example.test'
+          AND u.deleted_at IS NULL
+          AND g.code = 'admin'
+          AND g.is_super
+    ),
+    (
+        SELECT is_super
+        FROM core.groups
+        WHERE code = 'manager'
+    ),
+    (SELECT count(*) FROM core.group_permissions),
+    (SELECT count(*) FROM core.guest_permissions);
+`).Scan(
+		&adminMemberships,
+		&managerSuper,
+		&groupGrants,
+		&guestGrants,
+	); err != nil {
+		t.Fatalf("query identity seed: %v", err)
+	}
+	if adminMemberships != 1 ||
+		managerSuper ||
+		groupGrants != 0 ||
+		guestGrants != 0 {
+		t.Fatalf(
+			"identity seed = memberships:%d manager_super:%t group_grants:%d guest_grants:%d",
+			adminMemberships,
+			managerSuper,
+			groupGrants,
+			guestGrants,
+		)
 	}
 
 	loadedSites, err := database.Sites().List(ctx)
@@ -315,7 +526,9 @@ WHERE profile_code = 'dev'
 
 		found[item.Domain] = true
 		siteIDs[item.Domain] = item.ID
-		if item.ProfileCode != "dev" || item.Locale != "ru-RU" {
+		if item.ProfileCode != "dev" ||
+			item.Locale != "ru-RU" ||
+			!item.IsPublic {
 			t.Fatalf("seeded site = %#v", item)
 		}
 		rawSettings, err := json.Marshal(item.Settings)
@@ -337,12 +550,18 @@ WHERE id = $1;
 `, siteIDs["localhost"]); err != nil {
 		t.Fatalf("prepare site update timestamp: %v", err)
 	}
-	if err := database.Sites().UpdateSettings(
+	if _, err := database.Sites().Update(
 		ctx,
-		siteIDs["localhost"],
-		map[string]any{
-			"count": int64(3),
-			"flag":  false,
+		nil,
+		site.Site{
+			ID:       siteIDs["localhost"],
+			Domain:   "localhost",
+			Locale:   "ru-RU",
+			IsPublic: true,
+			Settings: map[string]any{
+				"count": int64(3),
+				"flag":  false,
+			},
 		},
 	); err != nil {
 		t.Fatalf("update settings: %v", err)
@@ -390,29 +609,164 @@ WHERE id = $1;
 	}
 
 	resourceRepository := database.Resources()
+	validateImageMedia := func(
+		ctx context.Context,
+		id media.ID,
+	) error {
+		item, err := mediaRepository.ByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		linkedFile, err := fileRepository.FileByID(ctx, item.FileID)
+		if err != nil {
+			return err
+		}
+		return resource.ValidateImageMediaFile(
+			ctx,
+			linkedFile,
+			media.Usage{
+				Kind: resource.ImageMediaUsage,
+			},
+		)
+	}
 	templateCode := template.Code("article")
 	contentType := "html"
 	rootPath := "/"
-	root, err := resourceRepository.Create(ctx, resource.Resource{
+	root, err := resourceRepository.Create(ctx, nil, resource.Resource{
 		SiteID:       siteIDs["localhost"],
 		Type:         resourcetype.Page,
 		Template:     &templateCode,
 		ContentType:  &contentType,
 		Title:        "Home",
 		Path:         &rootPath,
+		ImageMediaID: &imageMedia.ID,
 		IsPublic:     true,
 		IsSearchable: true,
 		InMenu:       true,
 		InSitemap:    true,
 		Settings:     map[string]any{"headline": "Home"},
-	})
+	}, validateImageMedia)
+
 	if err != nil {
 		t.Fatalf("create root resource: %v", err)
+	}
+
+	documentRootPath := "/"
+	if _, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID:       siteIDs["example.com"],
+		Type:         resourcetype.Page,
+		Template:     &templateCode,
+		ContentType:  &contentType,
+		Title:        "Invalid image",
+		Path:         &documentRootPath,
+		ImageMediaID: &documentMedia.ID,
+		IsPublic:     true,
+		IsSearchable: true,
+		InMenu:       true,
+		InSitemap:    true,
+		Settings:     map[string]any{"headline": "Invalid"},
+	}, validateImageMedia); !errors.Is(err, resource.ErrInvalidReference) {
+		t.Fatalf("non-image resource media error = %v", err)
+	}
+
+	duplicateImagePath := "/duplicate-image"
+	if _, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID:       siteIDs["localhost"],
+		ParentID:     &root.ID,
+		Type:         resourcetype.Page,
+		Template:     &templateCode,
+		ContentType:  &contentType,
+		Title:        "Duplicate image",
+		Slug:         "duplicate-image",
+		Path:         &duplicateImagePath,
+		ImageMediaID: &imageMedia.ID,
+		IsPublic:     true,
+		IsSearchable: true,
+		InMenu:       true,
+		InSitemap:    true,
+		Settings:     map[string]any{"headline": "Duplicate"},
+	}, validateImageMedia); !errors.Is(err, media.ErrAlreadyAttached) {
+		t.Fatalf("duplicate media attachment error = %v", err)
+	}
+
+	nextRoot := resource.Clone(root)
+	nextRoot.ImageMediaID = &replacementMedia.ID
+	root, err = resourceRepository.Update(
+		ctx,
+		nil,
+		root,
+		nextRoot,
+		validateImageMedia,
+	)
+	if err != nil {
+		t.Fatalf("replace root media: %v", err)
+	}
+	if _, err := mediaRepository.ByID(
+		ctx,
+		imageMedia.ID,
+	); !errors.Is(err, media.ErrNotFound) {
+		t.Fatalf("old media after replacement = %v", err)
+	}
+
+	if _, err := mediaRepository.Update(
+		ctx,
+		nil,
+		media.Media{
+			ID:     replacementMedia.ID,
+			FileID: documentFile.ID,
+			Params: map[string]any{},
+		},
+		func(
+			ctx context.Context,
+			usages []media.Usage,
+		) error {
+			for _, usage := range usages {
+				if err := resource.ValidateImageMediaFile(
+					ctx,
+					documentFile,
+					usage,
+				); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	); !errors.Is(err, resource.ErrInvalidReference) {
+		t.Fatalf("replace attached media with document error = %v", err)
+	}
+
+	replacementMedia, err = mediaRepository.Update(
+		ctx,
+		nil,
+		media.Media{
+			ID:     replacementMedia.ID,
+			FileID: imageFile.ID,
+			Params: map[string]any{"meta_alt": "Updated"},
+		},
+		func(
+			ctx context.Context,
+			usages []media.Usage,
+		) error {
+			for _, usage := range usages {
+				if err := resource.ValidateImageMediaFile(
+					ctx,
+					imageFile,
+					usage,
+				); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("replace attached media file: %v", err)
 	}
 
 	for _, slug := range []string{"no-path-one", "no-path-two"} {
 		noPath, err := resourceRepository.Create(
 			ctx,
+			nil,
 			resource.Resource{
 				SiteID:       siteIDs["localhost"],
 				Type:         "no_path",
@@ -423,8 +777,8 @@ WHERE id = $1;
 				InMenu:       true,
 				InSitemap:    true,
 				Settings:     map[string]any{},
-			},
-		)
+			}, nil)
+
 		if err != nil {
 			t.Fatalf("create nullable-path resource: %v", err)
 		}
@@ -433,9 +787,76 @@ WHERE id = $1;
 		}
 	}
 
+	type attachResult struct {
+		item resource.Resource
+		err  error
+	}
+	attachResults := make(chan attachResult, 2)
+	startAttach := make(chan struct{})
+	var attachWait sync.WaitGroup
+	for index, slug := range []string{
+		"concurrent-image-one",
+		"concurrent-image-two",
+	} {
+		attachWait.Add(1)
+		go func(index int, slug string) {
+			defer attachWait.Done()
+			<-startAttach
+			path := "/" + slug
+			item, err := resourceRepository.Create(
+				ctx,
+				nil,
+				resource.Resource{
+					SiteID:       siteIDs["localhost"],
+					ParentID:     &root.ID,
+					Type:         resourcetype.Page,
+					Template:     &templateCode,
+					ContentType:  &contentType,
+					Title:        "Concurrent " + strconv.Itoa(index),
+					Slug:         slug,
+					Path:         &path,
+					ImageMediaID: &concurrentMedia.ID,
+					IsPublic:     true,
+					IsSearchable: true,
+					InMenu:       true,
+					InSitemap:    true,
+					Settings: map[string]any{
+						"headline": "Concurrent",
+					},
+				},
+				validateImageMedia,
+			)
+			attachResults <- attachResult{item: item, err: err}
+		}(index, slug)
+	}
+	close(startAttach)
+	attachWait.Wait()
+	close(attachResults)
+
+	attached := 0
+	conflicted := 0
+	for result := range attachResults {
+		switch {
+		case result.err == nil:
+			attached++
+		case errors.Is(result.err, media.ErrAlreadyAttached):
+			conflicted++
+		default:
+			t.Fatalf("concurrent media attachment error = %v", result.err)
+		}
+	}
+	if attached != 1 || conflicted != 1 {
+		t.Fatalf(
+			"concurrent media attachments = success:%d conflict:%d",
+			attached,
+			conflicted,
+		)
+	}
+
 	sectionPath := "/section"
 	section, err := resourceRepository.Create(
 		ctx,
+		nil,
 		resource.Resource{
 			SiteID:       siteIDs["localhost"],
 			Type:         resourcetype.Page,
@@ -449,14 +870,14 @@ WHERE id = $1;
 			InMenu:       true,
 			InSitemap:    true,
 			Settings:     map[string]any{},
-		},
-	)
+		}, nil)
+
 	if err != nil {
 		t.Fatalf("create section resource: %v", err)
 	}
 
 	childPath := "/child"
-	child, err := resourceRepository.Create(ctx, resource.Resource{
+	child, err := resourceRepository.Create(ctx, nil, resource.Resource{
 		SiteID:       siteIDs["localhost"],
 		ParentID:     &root.ID,
 		Type:         resourcetype.Page,
@@ -470,7 +891,8 @@ WHERE id = $1;
 		InMenu:       true,
 		InSitemap:    true,
 		Settings:     map[string]any{},
-	})
+	}, nil)
+
 	if err != nil {
 		t.Fatalf("create child resource: %v", err)
 	}
@@ -478,6 +900,7 @@ WHERE id = $1;
 	grandchildPath := "/child/grandchild"
 	grandchild, err := resourceRepository.Create(
 		ctx,
+		nil,
 		resource.Resource{
 			SiteID:       siteIDs["localhost"],
 			ParentID:     &child.ID,
@@ -492,8 +915,8 @@ WHERE id = $1;
 			InMenu:       true,
 			InSitemap:    true,
 			Settings:     map[string]any{},
-		},
-	)
+		}, nil)
+
 	if err != nil {
 		t.Fatalf("create grandchild resource: %v", err)
 	}
@@ -508,7 +931,7 @@ WHERE id = $1;
 	}
 
 	duplicatePath := "/child"
-	_, err = resourceRepository.Create(ctx, resource.Resource{
+	_, err = resourceRepository.Create(ctx, nil, resource.Resource{
 		SiteID:       siteIDs["localhost"],
 		ParentID:     &root.ID,
 		Type:         resourcetype.Page,
@@ -522,13 +945,14 @@ WHERE id = $1;
 		InMenu:       true,
 		InSitemap:    true,
 		Settings:     map[string]any{},
-	})
+	}, nil)
+
 	if !errors.Is(err, resource.ErrConflict) {
 		t.Fatalf("sibling conflict error = %v", err)
 	}
 
 	crossSitePath := "/cross-site"
-	_, err = resourceRepository.Create(ctx, resource.Resource{
+	_, err = resourceRepository.Create(ctx, nil, resource.Resource{
 		SiteID:       siteIDs["example.com"],
 		ParentID:     &root.ID,
 		Type:         resourcetype.Page,
@@ -542,7 +966,8 @@ WHERE id = $1;
 		InMenu:       true,
 		InSitemap:    true,
 		Settings:     map[string]any{},
-	})
+	}, nil)
+
 	if !errors.Is(err, resource.ErrInvalidReference) {
 		t.Fatalf("cross-site parent error = %v", err)
 	}
@@ -565,7 +990,7 @@ VALUES ($1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
 	child.ParentID = &section.ID
 	renamedPath := "/section/renamed"
 	child.Path = &renamedPath
-	child, err = resourceRepository.Update(ctx, child)
+	child, err = resourceRepository.Update(ctx, nil, child, child, nil)
 	if err != nil {
 		t.Fatalf("rename resource: %v", err)
 	}
@@ -590,8 +1015,8 @@ VALUES ($1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
 	)
 	if _, err := resourceRepository.Update(
 		ctx,
-		section,
-	); !errors.Is(err, resource.ErrInvalidTree) {
+		nil,
+		section, section, nil); !errors.Is(err, resource.ErrInvalidTree) {
 		t.Fatalf("resource cycle error = %v", err)
 	}
 
@@ -599,6 +1024,7 @@ VALUES ($1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
 	internalLinkTarget := grandchild.ID
 	if _, err := resourceRepository.Create(
 		ctx,
+		nil,
 		resource.Resource{
 			SiteID:           siteIDs["localhost"],
 			ParentID:         &child.ID,
@@ -612,8 +1038,7 @@ VALUES ($1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
 			InMenu:           true,
 			InSitemap:        true,
 			Settings:         map[string]any{},
-		},
-	); err != nil {
+		}, nil); err != nil {
 		t.Fatalf("create internal resource link: %v", err)
 	}
 
@@ -621,6 +1046,7 @@ VALUES ($1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
 	externalLinkTarget := grandchild.ID
 	externalLink, err := resourceRepository.Create(
 		ctx,
+		nil,
 		resource.Resource{
 			SiteID:           siteIDs["localhost"],
 			Type:             resourcetype.ResourceLink,
@@ -633,8 +1059,8 @@ VALUES ($1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
 			InMenu:           true,
 			InSitemap:        true,
 			Settings:         map[string]any{},
-		},
-	)
+		}, nil)
+
 	if err != nil {
 		t.Fatalf("create external resource link: %v", err)
 	}
@@ -645,11 +1071,37 @@ VALUES ($1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
 	); !errors.Is(err, resource.ErrReferenced) {
 		t.Fatalf("referenced subtree delete error = %v", err)
 	}
+	if _, err := connector.Pool().Exec(ctx, `
+UPDATE core.resources
+SET image_media_id = $1
+WHERE id = ANY($2);
+`, sharedMedia.ID, []int64{
+		int64(child.ID),
+		int64(externalLink.ID),
+	}); err != nil {
+		t.Fatalf("create corrupted shared media attachment: %v", err)
+	}
 	if err := resourceRepository.Delete(
 		ctx,
 		externalLink.ID,
 	); err != nil {
 		t.Fatalf("delete external resource link: %v", err)
+	}
+	if _, err := mediaRepository.ByID(
+		ctx,
+		sharedMedia.ID,
+	); !errors.Is(err, media.ErrNotFound) {
+		t.Fatalf("shared media after resource delete = %v", err)
+	}
+	childAfterSharedDelete, err := resourceRepository.ByID(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("load resource after shared media delete: %v", err)
+	}
+	if childAfterSharedDelete.ImageMediaID != nil {
+		t.Fatalf(
+			"shared media reference was not cleared: %#v",
+			childAfterSharedDelete.ImageMediaID,
+		)
 	}
 	if err := resourceRepository.Delete(ctx, child.ID); err != nil {
 		t.Fatalf("delete resource subtree: %v", err)
@@ -661,16 +1113,50 @@ VALUES ($1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
 		t.Fatalf("deleted grandchild error = %v", err)
 	}
 
-	if err := database.Sites().UpdateSettings(
+	if err := fileRepository.DeleteFile(
 		ctx,
-		site.ID(1<<62),
-		map[string]any{},
+		imageFile.ID,
+		func(context.Context, []corefile.File) error {
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("delete media source file: %v", err)
+	}
+	if _, err := mediaRepository.ByID(
+		ctx,
+		replacementMedia.ID,
+	); !errors.Is(err, media.ErrNotFound) {
+		t.Fatalf("media after file delete = %v", err)
+	}
+	rootAfterFileDelete, err := resourceRepository.ByID(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("load resource after media file delete: %v", err)
+	}
+	if rootAfterFileDelete.ImageMediaID != nil {
+		t.Fatalf(
+			"resource media after file delete = %#v",
+			rootAfterFileDelete.ImageMediaID,
+		)
+	}
+
+	if _, err := database.Sites().Update(
+		ctx,
+		nil,
+		site.Site{
+			ID:       site.ID(1 << 62),
+			Domain:   "missing.example.com",
+			Locale:   "en-US",
+			Settings: map[string]any{},
+		},
 	); !errors.Is(err, site.ErrNotFound) {
 		t.Fatalf("missing site update error = %v", err)
 	}
 
-	if err := seedManager.Down(ctx, seedPlan, 1); err != nil {
-		t.Fatalf("seed down: %v", err)
+	if err := seedManager.Down(ctx, devSeedPlan, 2); err != nil {
+		t.Fatalf("dev seed down: %v", err)
+	}
+	if err := seedManager.Down(ctx, sharedSeedPlan, 1); err != nil {
+		t.Fatalf("shared seed down: %v", err)
 	}
 	loadedSites, err = database.Sites().List(ctx)
 	if err != nil {
@@ -684,7 +1170,7 @@ VALUES ($1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
 	}
 
 	restoreMigration = true
-	if err := manager.Down(ctx, plan, 3); err != nil {
+	if err := manager.Down(ctx, plan, 6); err != nil {
 		t.Fatalf("down: %v", err)
 	}
 

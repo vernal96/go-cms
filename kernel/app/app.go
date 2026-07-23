@@ -13,11 +13,19 @@ import (
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	coreaccess "github.com/vernal96/go-cms/kernel/modules/core/access"
+	corecommands "github.com/vernal96/go-cms/kernel/modules/core/commands"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
+	coregroup "github.com/vernal96/go-cms/kernel/modules/core/group"
+	coremedia "github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/modules/core/user/adapters/argon2id"
+	"github.com/vernal96/go-cms/kernel/permission"
+	"github.com/vernal96/go-cms/kernel/security"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
@@ -63,6 +71,11 @@ type App struct {
 	sites           *site.Catalog
 	resources       *resource.Service
 	files           corefile.Service
+	media           coremedia.Service
+	users           coreuser.Service
+	groups          coregroup.Service
+	authorization   coreaccess.Service
+	permissions     *permission.Catalog
 
 	bootOnce sync.Once
 	bootErr  error
@@ -157,9 +170,39 @@ func New(
 			"main core database has nil file repository",
 		)
 	}
+	if coreDatabase.Media() == nil {
+		return nil, errors.New(
+			"main core database has nil media repository",
+		)
+	}
+	if coreDatabase.Users() == nil {
+		return nil, errors.New(
+			"main core database has nil user repository",
+		)
+	}
+	if coreDatabase.Groups() == nil {
+		return nil, errors.New(
+			"main core database has nil group repository",
+		)
+	}
+	if coreDatabase.Access() == nil {
+		return nil, errors.New(
+			"main core database has nil access repository",
+		)
+	}
 	application.coreDatabase = coreDatabase
 
+	permissionCatalog, err := buildPermissionCatalog(definition.Profiles)
+	if err != nil {
+		return nil, err
+	}
+	application.permissions = permissionCatalog
+
 	application.collectModuleCommandProviders()
+	application.addProvider(
+		"core:identity-commands",
+		corecommands.New(application),
+	)
 
 	runner, err := console.New(application)
 	if err != nil {
@@ -201,15 +244,68 @@ func (a *App) boot(ctx context.Context) error {
 		return err
 	}
 
-	fileService, err := corefile.NewService(
-		a.coreDatabase.Files(),
-		a.filesystems,
+	accessService, err := coreaccess.NewService(
+		a.coreDatabase.Access(),
+		a.permissions,
 	)
 	if err != nil {
 		return err
 	}
 
-	factory, err := kernel.NewProfileRuntimeFactory(a, fileService)
+	fileService, err := corefile.NewService(
+		a.coreDatabase.Files(),
+		a.filesystems,
+		accessService,
+	)
+	if err != nil {
+		return err
+	}
+
+	mediaService, err := coremedia.NewService(
+		a.coreDatabase.Media(),
+		fileService,
+		coremedia.FilePolicies{
+			resource.ImageMediaUsage:  resource.ValidateImageMediaFile,
+			coreuser.AvatarMediaUsage: coreuser.ValidateAvatarMediaFile,
+		},
+		accessService,
+	)
+	if err != nil {
+		return err
+	}
+
+	groupService, err := coregroup.NewService(
+		a.coreDatabase.Groups(),
+		accessService,
+	)
+	if err != nil {
+		return err
+	}
+
+	passwordHasher, err := argon2id.New()
+	if err != nil {
+		return err
+	}
+	userService, err := coreuser.NewService(
+		a.coreDatabase.Users(),
+		passwordHasher,
+		mediaService,
+		accessService,
+	)
+	if err != nil {
+		return err
+	}
+
+	factory, err := kernel.NewProfileRuntimeFactory(
+		a,
+		kernel.RuntimeServices{
+			Files:         fileService,
+			Media:         mediaService,
+			Users:         userService,
+			Groups:        groupService,
+			Authorization: accessService,
+		},
+	)
 	if err != nil {
 		return err
 	}
@@ -243,6 +339,7 @@ func (a *App) boot(ctx context.Context) error {
 	catalog, err := site.NewCatalog(
 		a.coreDatabase.Sites(),
 		profileResolver(profileRuntimes),
+		accessService,
 	)
 	if err != nil {
 		return err
@@ -255,6 +352,8 @@ func (a *App) boot(ctx context.Context) error {
 	resourceService, err := resource.NewService(
 		a.coreDatabase.Resources(),
 		catalog,
+		mediaService,
+		accessService,
 	)
 	if err != nil {
 		return err
@@ -264,6 +363,10 @@ func (a *App) boot(ctx context.Context) error {
 	a.sites = catalog
 	a.resources = resourceService
 	a.files = fileService
+	a.media = mediaService
+	a.users = userService
+	a.groups = groupService
+	a.authorization = accessService
 	a.booted.Store(true)
 	return nil
 }
@@ -296,23 +399,36 @@ func (a *App) ProfileRuntime(
 }
 
 func (a *App) RuntimeByDomain(
+	ctx context.Context,
+	actor security.Actor,
 	domain string,
-) (*site.Runtime, bool) {
+) (*site.Runtime, error) {
 	if a == nil || a.closed.Load() || !a.booted.Load() {
-		return nil, false
+		if a != nil && a.closed.Load() {
+			return nil, ErrClosed
+		}
+		return nil, ErrNotBooted
 	}
 
-	return a.sites.RuntimeByDomain(domain)
+	return a.sites.ResolveByDomain(ctx, actor, domain)
 }
 
 func (a *App) RuntimeBySiteID(
+	ctx context.Context,
+	actor security.Actor,
 	id site.ID,
-) (*site.Runtime, bool) {
+) (*site.Runtime, error) {
 	if a == nil || a.closed.Load() || !a.booted.Load() {
-		return nil, false
+		if a != nil && a.closed.Load() {
+			return nil, ErrClosed
+		}
+		return nil, ErrNotBooted
 	}
-
-	return a.sites.RuntimeByID(id)
+	runtime, exists := a.sites.RuntimeByID(id)
+	if !exists {
+		return nil, site.ErrNotFound
+	}
+	return a.sites.ResolveByDomain(ctx, actor, runtime.Site().Domain)
 }
 
 func (a *App) ReloadSites(ctx context.Context) error {
@@ -321,6 +437,9 @@ func (a *App) ReloadSites(ctx context.Context) error {
 	}
 	if ctx == nil {
 		return errors.New("site reload context is nil")
+	}
+	if a.closed.Load() {
+		return ErrClosed
 	}
 	if !a.booted.Load() {
 		return ErrNotBooted
@@ -336,16 +455,19 @@ func (a *App) ReloadSites(ctx context.Context) error {
 	return a.sites.Reload(ctx)
 }
 
-func (a *App) UpdateSiteSettings(
+func (a *App) UpdateSite(
 	ctx context.Context,
-	id site.ID,
-	values map[string]any,
+	actor security.Actor,
+	input site.UpdateInput,
 ) (*site.Runtime, error) {
 	if a == nil {
 		return nil, errors.New("app is nil")
 	}
 	if ctx == nil {
 		return nil, errors.New("site settings update context is nil")
+	}
+	if a.closed.Load() {
+		return nil, ErrClosed
 	}
 	if !a.booted.Load() {
 		return nil, ErrNotBooted
@@ -358,11 +480,12 @@ func (a *App) UpdateSiteSettings(
 		return nil, ErrClosed
 	}
 
-	return a.sites.UpdateSettings(ctx, id, values)
+	return a.sites.Update(ctx, actor, input)
 }
 
 func (a *App) CreateResource(
 	ctx context.Context,
+	actor security.Actor,
 	input resource.CreateInput,
 ) (resource.Resource, error) {
 	service, err := a.resourceService()
@@ -376,11 +499,12 @@ func (a *App) CreateResource(
 		return resource.Resource{}, ErrClosed
 	}
 
-	return service.Create(ctx, input)
+	return service.Create(ctx, actor, input)
 }
 
 func (a *App) Resource(
 	ctx context.Context,
+	actor security.Actor,
 	id resource.ID,
 ) (resource.Resource, error) {
 	service, err := a.resourceService()
@@ -394,11 +518,12 @@ func (a *App) Resource(
 		return resource.Resource{}, ErrClosed
 	}
 
-	return service.Get(ctx, id)
+	return service.Get(ctx, actor, id)
 }
 
 func (a *App) ResourceByPath(
 	ctx context.Context,
+	actor security.Actor,
 	siteID site.ID,
 	path string,
 ) (resource.Resource, error) {
@@ -413,11 +538,12 @@ func (a *App) ResourceByPath(
 		return resource.Resource{}, ErrClosed
 	}
 
-	return service.GetByPath(ctx, siteID, path)
+	return service.GetByPath(ctx, actor, siteID, path)
 }
 
 func (a *App) ResourceTree(
 	ctx context.Context,
+	actor security.Actor,
 	siteID site.ID,
 ) ([]resource.Node, error) {
 	service, err := a.resourceService()
@@ -431,11 +557,12 @@ func (a *App) ResourceTree(
 		return nil, ErrClosed
 	}
 
-	return service.Tree(ctx, siteID)
+	return service.Tree(ctx, actor, siteID)
 }
 
 func (a *App) UpdateResource(
 	ctx context.Context,
+	actor security.Actor,
 	input resource.UpdateInput,
 ) (resource.Resource, error) {
 	service, err := a.resourceService()
@@ -449,11 +576,12 @@ func (a *App) UpdateResource(
 		return resource.Resource{}, ErrClosed
 	}
 
-	return service.Update(ctx, input)
+	return service.Update(ctx, actor, input)
 }
 
 func (a *App) DeleteResource(
 	ctx context.Context,
+	actor security.Actor,
 	id resource.ID,
 ) error {
 	service, err := a.resourceService()
@@ -467,12 +595,15 @@ func (a *App) DeleteResource(
 		return ErrClosed
 	}
 
-	return service.Delete(ctx, id)
+	return service.Delete(ctx, actor, id)
 }
 
 func (a *App) resourceService() (*resource.Service, error) {
 	if a == nil {
 		return nil, errors.New("app is nil")
+	}
+	if a.closed.Load() {
+		return nil, ErrClosed
 	}
 	if !a.booted.Load() {
 		return nil, ErrNotBooted
@@ -484,8 +615,93 @@ func (a *App) resourceService() (*resource.Service, error) {
 	return a.resources, nil
 }
 
+func (a *App) CreateMedia(
+	ctx context.Context,
+	actor security.Actor,
+	input coremedia.CreateInput,
+) (coremedia.Media, error) {
+	service, err := a.mediaService()
+	if err != nil {
+		return coremedia.Media{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coremedia.Media{}, ErrClosed
+	}
+	return service.Create(ctx, actor, input)
+}
+
+func (a *App) Media(
+	ctx context.Context,
+	actor security.Actor,
+	id coremedia.ID,
+) (coremedia.Media, error) {
+	service, err := a.mediaService()
+	if err != nil {
+		return coremedia.Media{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coremedia.Media{}, ErrClosed
+	}
+	return service.Get(ctx, actor, id)
+}
+
+func (a *App) UpdateMedia(
+	ctx context.Context,
+	actor security.Actor,
+	input coremedia.UpdateInput,
+) (coremedia.Media, error) {
+	service, err := a.mediaService()
+	if err != nil {
+		return coremedia.Media{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coremedia.Media{}, ErrClosed
+	}
+	return service.Update(ctx, actor, input)
+}
+
+func (a *App) DeleteMedia(
+	ctx context.Context,
+	actor security.Actor,
+	id coremedia.ID,
+) error {
+	service, err := a.mediaService()
+	if err != nil {
+		return err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return ErrClosed
+	}
+	return service.Delete(ctx, actor, id)
+}
+
+func (a *App) mediaService() (coremedia.Service, error) {
+	if a == nil {
+		return nil, errors.New("app is nil")
+	}
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+	if !a.booted.Load() {
+		return nil, ErrNotBooted
+	}
+	if a.media == nil {
+		return nil, errors.New("media service is nil")
+	}
+	return a.media, nil
+}
+
 func (a *App) CreateFileFolder(
 	ctx context.Context,
+	actor security.Actor,
 	input corefile.CreateFolderInput,
 ) (corefile.Folder, error) {
 	service, err := a.fileService()
@@ -497,11 +713,12 @@ func (a *App) CreateFileFolder(
 	if a.closed.Load() {
 		return corefile.Folder{}, ErrClosed
 	}
-	return service.CreateFolder(ctx, input)
+	return service.CreateFolder(ctx, actor, input)
 }
 
 func (a *App) FileFolder(
 	ctx context.Context,
+	actor security.Actor,
 	id corefile.FolderID,
 ) (corefile.Folder, error) {
 	service, err := a.fileService()
@@ -513,11 +730,12 @@ func (a *App) FileFolder(
 	if a.closed.Load() {
 		return corefile.Folder{}, ErrClosed
 	}
-	return service.GetFolder(ctx, id)
+	return service.GetFolder(ctx, actor, id)
 }
 
 func (a *App) ListFileFolder(
 	ctx context.Context,
+	actor security.Actor,
 	storage filesystem.Code,
 	id *corefile.FolderID,
 ) (corefile.Listing, error) {
@@ -530,11 +748,12 @@ func (a *App) ListFileFolder(
 	if a.closed.Load() {
 		return corefile.Listing{}, ErrClosed
 	}
-	return service.ListFolder(ctx, storage, id)
+	return service.ListFolder(ctx, actor, storage, id)
 }
 
 func (a *App) UploadFile(
 	ctx context.Context,
+	actor security.Actor,
 	input corefile.UploadInput,
 ) (corefile.File, error) {
 	service, err := a.fileService()
@@ -546,11 +765,12 @@ func (a *App) UploadFile(
 	if a.closed.Load() {
 		return corefile.File{}, ErrClosed
 	}
-	return service.Upload(ctx, input)
+	return service.Upload(ctx, actor, input)
 }
 
 func (a *App) File(
 	ctx context.Context,
+	actor security.Actor,
 	id corefile.ID,
 ) (corefile.File, error) {
 	service, err := a.fileService()
@@ -562,11 +782,12 @@ func (a *App) File(
 	if a.closed.Load() {
 		return corefile.File{}, ErrClosed
 	}
-	return service.GetFile(ctx, id)
+	return service.GetFile(ctx, actor, id)
 }
 
 func (a *App) OpenFile(
 	ctx context.Context,
+	actor security.Actor,
 	id corefile.ID,
 ) (corefile.OpenedFile, error) {
 	service, err := a.fileService()
@@ -578,7 +799,7 @@ func (a *App) OpenFile(
 	if a.closed.Load() {
 		return corefile.OpenedFile{}, ErrClosed
 	}
-	return service.Open(ctx, id)
+	return service.Open(ctx, actor, id)
 }
 
 func (a *App) OpenFileDelivery(
@@ -600,6 +821,7 @@ func (a *App) OpenFileDelivery(
 
 func (a *App) MoveFile(
 	ctx context.Context,
+	actor security.Actor,
 	input corefile.MoveFileInput,
 ) (corefile.File, error) {
 	service, err := a.fileService()
@@ -611,11 +833,12 @@ func (a *App) MoveFile(
 	if a.closed.Load() {
 		return corefile.File{}, ErrClosed
 	}
-	return service.MoveFile(ctx, input)
+	return service.MoveFile(ctx, actor, input)
 }
 
 func (a *App) MoveFileFolder(
 	ctx context.Context,
+	actor security.Actor,
 	input corefile.MoveFolderInput,
 ) (corefile.Folder, error) {
 	service, err := a.fileService()
@@ -627,10 +850,14 @@ func (a *App) MoveFileFolder(
 	if a.closed.Load() {
 		return corefile.Folder{}, ErrClosed
 	}
-	return service.MoveFolder(ctx, input)
+	return service.MoveFolder(ctx, actor, input)
 }
 
-func (a *App) DeleteFile(ctx context.Context, id corefile.ID) error {
+func (a *App) DeleteFile(
+	ctx context.Context,
+	actor security.Actor,
+	id corefile.ID,
+) error {
 	service, err := a.fileService()
 	if err != nil {
 		return err
@@ -640,11 +867,12 @@ func (a *App) DeleteFile(ctx context.Context, id corefile.ID) error {
 	if a.closed.Load() {
 		return ErrClosed
 	}
-	return service.DeleteFile(ctx, id)
+	return service.DeleteFile(ctx, actor, id)
 }
 
 func (a *App) DeleteFileFolder(
 	ctx context.Context,
+	actor security.Actor,
 	id corefile.FolderID,
 ) error {
 	service, err := a.fileService()
@@ -656,11 +884,12 @@ func (a *App) DeleteFileFolder(
 	if a.closed.Load() {
 		return ErrClosed
 	}
-	return service.DeleteFolder(ctx, id)
+	return service.DeleteFolder(ctx, actor, id)
 }
 
 func (a *App) FileURL(
 	ctx context.Context,
+	actor security.Actor,
 	id corefile.ID,
 ) (string, error) {
 	service, err := a.fileService()
@@ -672,11 +901,12 @@ func (a *App) FileURL(
 	if a.closed.Load() {
 		return "", ErrClosed
 	}
-	return service.URL(ctx, id)
+	return service.URL(ctx, actor, id)
 }
 
 func (a *App) TemporaryFileURL(
 	ctx context.Context,
+	actor security.Actor,
 	id corefile.ID,
 	expiresAt time.Time,
 ) (string, error) {
@@ -689,12 +919,15 @@ func (a *App) TemporaryFileURL(
 	if a.closed.Load() {
 		return "", ErrClosed
 	}
-	return service.TemporaryURL(ctx, id, expiresAt)
+	return service.TemporaryURL(ctx, actor, id, expiresAt)
 }
 
 func (a *App) fileService() (corefile.Service, error) {
 	if a == nil {
 		return nil, errors.New("app is nil")
+	}
+	if a.closed.Load() {
+		return nil, ErrClosed
 	}
 	if !a.booted.Load() {
 		return nil, ErrNotBooted
@@ -703,6 +936,441 @@ func (a *App) fileService() (corefile.Service, error) {
 		return nil, errors.New("file service is nil")
 	}
 	return a.files, nil
+}
+
+func (a *App) CreateUser(
+	ctx context.Context,
+	actor security.Actor,
+	input coreuser.CreateInput,
+) (coreuser.User, error) {
+	service, err := a.userService()
+	if err != nil {
+		return coreuser.User{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coreuser.User{}, ErrClosed
+	}
+	return service.Create(ctx, actor, input)
+}
+
+func (a *App) User(
+	ctx context.Context,
+	actor security.Actor,
+	id coreuser.ID,
+) (coreuser.User, error) {
+	service, err := a.userService()
+	if err != nil {
+		return coreuser.User{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coreuser.User{}, ErrClosed
+	}
+	return service.Get(ctx, actor, id)
+}
+
+func (a *App) Users(
+	ctx context.Context,
+	actor security.Actor,
+) ([]coreuser.User, error) {
+	service, err := a.userService()
+	if err != nil {
+		return nil, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+	return service.List(ctx, actor)
+}
+
+func (a *App) UpdateUser(
+	ctx context.Context,
+	actor security.Actor,
+	input coreuser.UpdateInput,
+) (coreuser.User, error) {
+	service, err := a.userService()
+	if err != nil {
+		return coreuser.User{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coreuser.User{}, ErrClosed
+	}
+	return service.Update(ctx, actor, input)
+}
+
+func (a *App) ChangeUserPassword(
+	ctx context.Context,
+	actor security.Actor,
+	id coreuser.ID,
+	password string,
+) (coreuser.User, error) {
+	service, err := a.userService()
+	if err != nil {
+		return coreuser.User{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coreuser.User{}, ErrClosed
+	}
+	return service.ChangePassword(ctx, actor, id, password)
+}
+
+func (a *App) DeleteUser(
+	ctx context.Context,
+	actor security.Actor,
+	id coreuser.ID,
+) (coreuser.User, error) {
+	service, err := a.userService()
+	if err != nil {
+		return coreuser.User{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coreuser.User{}, ErrClosed
+	}
+	return service.Delete(ctx, actor, id)
+}
+
+func (a *App) RestoreUser(
+	ctx context.Context,
+	actor security.Actor,
+	id coreuser.ID,
+) (coreuser.User, error) {
+	service, err := a.userService()
+	if err != nil {
+		return coreuser.User{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coreuser.User{}, ErrClosed
+	}
+	return service.Restore(ctx, actor, id)
+}
+
+func (a *App) Authenticate(
+	ctx context.Context,
+	input coreuser.AuthenticateInput,
+) (coreuser.User, error) {
+	service, err := a.userService()
+	if err != nil {
+		return coreuser.User{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coreuser.User{}, ErrClosed
+	}
+	return service.Authenticate(ctx, input)
+}
+
+func (a *App) CreateGroup(
+	ctx context.Context,
+	actor security.Actor,
+	input coregroup.CreateInput,
+) (coregroup.Group, error) {
+	service, err := a.groupService()
+	if err != nil {
+		return coregroup.Group{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coregroup.Group{}, ErrClosed
+	}
+	return service.Create(ctx, actor, input)
+}
+
+func (a *App) Group(
+	ctx context.Context,
+	actor security.Actor,
+	id coregroup.ID,
+) (coregroup.Group, error) {
+	service, err := a.groupService()
+	if err != nil {
+		return coregroup.Group{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coregroup.Group{}, ErrClosed
+	}
+	return service.Get(ctx, actor, id)
+}
+
+func (a *App) Groups(
+	ctx context.Context,
+	actor security.Actor,
+) ([]coregroup.Group, error) {
+	service, err := a.groupService()
+	if err != nil {
+		return nil, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+	return service.List(ctx, actor)
+}
+
+func (a *App) UpdateGroup(
+	ctx context.Context,
+	actor security.Actor,
+	input coregroup.UpdateInput,
+) (coregroup.Group, error) {
+	service, err := a.groupService()
+	if err != nil {
+		return coregroup.Group{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coregroup.Group{}, ErrClosed
+	}
+	return service.Update(ctx, actor, input)
+}
+
+func (a *App) DeleteGroup(
+	ctx context.Context,
+	actor security.Actor,
+	id coregroup.ID,
+) error {
+	service, err := a.groupService()
+	if err != nil {
+		return err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return ErrClosed
+	}
+	return service.Delete(ctx, actor, id)
+}
+
+func (a *App) AddUserToGroup(
+	ctx context.Context,
+	actor security.Actor,
+	groupID coregroup.ID,
+	userID security.UserID,
+) (coregroup.Membership, error) {
+	service, err := a.groupService()
+	if err != nil {
+		return coregroup.Membership{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coregroup.Membership{}, ErrClosed
+	}
+	return service.AddUser(ctx, actor, groupID, userID)
+}
+
+func (a *App) RemoveUserFromGroup(
+	ctx context.Context,
+	actor security.Actor,
+	groupID coregroup.ID,
+	userID security.UserID,
+) error {
+	service, err := a.groupService()
+	if err != nil {
+		return err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return ErrClosed
+	}
+	return service.RemoveUser(ctx, actor, groupID, userID)
+}
+
+func (a *App) GroupMembers(
+	ctx context.Context,
+	actor security.Actor,
+	groupID coregroup.ID,
+) ([]coregroup.Membership, error) {
+	service, err := a.groupService()
+	if err != nil {
+		return nil, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+	return service.Members(ctx, actor, groupID)
+}
+
+func (a *App) GroupPermissions(
+	ctx context.Context,
+	actor security.Actor,
+	groupID coregroup.ID,
+) ([]coregroup.PermissionGrant, error) {
+	service, err := a.groupService()
+	if err != nil {
+		return nil, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+	return service.Permissions(ctx, actor, groupID)
+}
+
+func (a *App) GrantGroupPermission(
+	ctx context.Context,
+	actor security.Actor,
+	groupID coregroup.ID,
+	code permission.Code,
+) (coregroup.PermissionGrant, error) {
+	service, err := a.groupService()
+	if err != nil {
+		return coregroup.PermissionGrant{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coregroup.PermissionGrant{}, ErrClosed
+	}
+	return service.GrantPermission(ctx, actor, groupID, code)
+}
+
+func (a *App) RevokeGroupPermission(
+	ctx context.Context,
+	actor security.Actor,
+	groupID coregroup.ID,
+	code permission.Code,
+) error {
+	service, err := a.groupService()
+	if err != nil {
+		return err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return ErrClosed
+	}
+	return service.RevokePermission(ctx, actor, groupID, code)
+}
+
+func (a *App) PermissionCodes() ([]permission.Code, error) {
+	if _, err := a.accessService(); err != nil {
+		return nil, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+	return a.permissions.Codes(), nil
+}
+
+func (a *App) GrantGuestPermission(
+	ctx context.Context,
+	actor security.Actor,
+	code permission.Code,
+) (coreaccess.Grant, error) {
+	service, err := a.accessService()
+	if err != nil {
+		return coreaccess.Grant{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return coreaccess.Grant{}, ErrClosed
+	}
+	return service.GrantGuest(ctx, actor, code)
+}
+
+func (a *App) RevokeGuestPermission(
+	ctx context.Context,
+	actor security.Actor,
+	code permission.Code,
+) error {
+	service, err := a.accessService()
+	if err != nil {
+		return err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return ErrClosed
+	}
+	return service.RevokeGuest(ctx, actor, code)
+}
+
+func (a *App) GuestPermissions(
+	ctx context.Context,
+	actor security.Actor,
+) ([]coreaccess.Grant, error) {
+	service, err := a.accessService()
+	if err != nil {
+		return nil, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+	return service.GuestPermissions(ctx, actor)
+}
+
+func (a *App) userService() (coreuser.Service, error) {
+	if a == nil {
+		return nil, errors.New("app is nil")
+	}
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+	if !a.booted.Load() {
+		return nil, ErrNotBooted
+	}
+	if a.users == nil {
+		return nil, errors.New("user service is nil")
+	}
+	return a.users, nil
+}
+
+func (a *App) groupService() (coregroup.Service, error) {
+	if a == nil {
+		return nil, errors.New("app is nil")
+	}
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+	if !a.booted.Load() {
+		return nil, ErrNotBooted
+	}
+	if a.groups == nil {
+		return nil, errors.New("group service is nil")
+	}
+	return a.groups, nil
+}
+
+func (a *App) accessService() (coreaccess.Service, error) {
+	if a == nil {
+		return nil, errors.New("app is nil")
+	}
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+	if !a.booted.Load() {
+		return nil, ErrNotBooted
+	}
+	if a.authorization == nil {
+		return nil, errors.New("access service is nil")
+	}
+	return a.authorization, nil
 }
 
 func (a *App) MigrationPlans() []migrations.Plan {
@@ -921,6 +1589,45 @@ func (a *App) collectModuleCommandProviders() {
 			)
 		}
 	}
+}
+
+func buildPermissionCatalog(
+	profiles []kernel.Profile,
+) (*permission.Catalog, error) {
+	seenModules := make(map[kernel.ModuleCode]struct{})
+	definitions := make([]permission.Definition, 0)
+
+	for _, profile := range profiles {
+		for _, profileModule := range profile.Modules {
+			if profileModule.Module == nil {
+				continue
+			}
+			moduleCode := profileModule.Module.Code()
+			if _, exists := seenModules[moduleCode]; exists {
+				continue
+			}
+			seenModules[moduleCode] = struct{}{}
+
+			provider, exists := profileModule.Module.(kernel.RegistryProvider)
+			if !exists {
+				continue
+			}
+			moduleDefinitions, err := permission.Definitions(
+				string(moduleCode),
+				provider.Registry().PermissionEntities,
+			)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"build permissions for module %q: %w",
+					moduleCode,
+					err,
+				)
+			}
+			definitions = append(definitions, moduleDefinitions...)
+		}
+	}
+
+	return permission.NewCatalog(definitions)
 }
 
 func (a *App) addProvider(key string, candidate any) {

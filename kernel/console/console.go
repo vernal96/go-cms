@@ -40,6 +40,16 @@ type Provider interface {
 	Commands() []Command
 }
 
+// RequiresBoot marks commands that need the application's services, as
+// opposed to schema and seed commands which intentionally run before Boot.
+type RequiresBoot interface {
+	RequiresBoot() bool
+}
+
+type bootableApplication interface {
+	Boot(context.Context) error
+}
+
 type Application interface {
 	kernel.DatabaseResolver
 	MigrationPlans() []migrations.Plan
@@ -114,6 +124,24 @@ func (c *Console) Run(
 	command, exists := c.commands[args[0]]
 	if !exists {
 		return fmt.Errorf("unknown console command %q", args[0])
+	}
+
+	if bootCommand, ok := command.(RequiresBoot); ok &&
+		bootCommand.RequiresBoot() {
+		application, ok := c.application.(bootableApplication)
+		if !ok {
+			return fmt.Errorf(
+				"command %q requires a bootable application",
+				command.Name(),
+			)
+		}
+		if err := application.Boot(ctx); err != nil {
+			return fmt.Errorf(
+				"boot application for command %q: %w",
+				command.Name(),
+				err,
+			)
+		}
 	}
 
 	return command.Run(ctx, args[1:], streams)

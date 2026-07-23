@@ -6,12 +6,16 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type ID int64
+
+const ImageMediaUsage media.UsageKind = "resource.image"
 
 var (
 	ErrNotFound         = errors.New("resource not found")
@@ -33,6 +37,7 @@ type Resource struct {
 	Slug             string
 	Path             *string
 	Content          string
+	ImageMediaID     *media.ID
 	TargetResourceID *ID
 	ExternalURL      *string
 	IsPublic         bool
@@ -45,6 +50,8 @@ type Resource struct {
 	Settings         map[string]any
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+	CreatedBy        *security.UserID
+	UpdatedBy        *security.UserID
 }
 
 type CreateInput struct {
@@ -57,6 +64,7 @@ type CreateInput struct {
 	MenuTitle        string
 	Slug             string
 	Content          string
+	ImageMediaID     *media.ID
 	TargetResourceID *ID
 	ExternalURL      *string
 	IsPublic         *bool
@@ -79,6 +87,7 @@ type UpdateInput struct {
 	MenuTitle        string
 	Slug             string
 	Content          string
+	ImageMediaID     *media.ID
 	TargetResourceID *ID
 	ExternalURL      *string
 	IsPublic         bool
@@ -96,12 +105,25 @@ type Node struct {
 	Children []Node
 }
 
+type ValidateImageMedia func(context.Context, media.ID) error
+
 type Repository interface {
-	Create(context.Context, Resource) (Resource, error)
+	Create(
+		context.Context,
+		*security.UserID,
+		Resource,
+		ValidateImageMedia,
+	) (Resource, error)
 	ByID(context.Context, ID) (Resource, error)
 	ByPath(context.Context, site.ID, string) (Resource, error)
 	ListBySite(context.Context, site.ID) ([]Resource, error)
-	Update(context.Context, Resource) (Resource, error)
+	Update(
+		context.Context,
+		*security.UserID,
+		Resource,
+		Resource,
+		ValidateImageMedia,
+	) (Resource, error)
 	Delete(context.Context, ID) error
 }
 
@@ -114,12 +136,23 @@ func Clone(item Resource) Resource {
 	item.Template = cloneTemplateCode(item.Template)
 	item.ContentType = cloneString(item.ContentType)
 	item.Path = cloneString(item.Path)
+	item.ImageMediaID = cloneMediaID(item.ImageMediaID)
 	item.TargetResourceID = cloneID(item.TargetResourceID)
 	item.ExternalURL = cloneString(item.ExternalURL)
 	item.PublishedAt = cloneTime(item.PublishedAt)
 	item.UnpublishedAt = cloneTime(item.UnpublishedAt)
 	item.Settings = cloneMap(item.Settings)
+	item.CreatedBy = cloneUserID(item.CreatedBy)
+	item.UpdatedBy = cloneUserID(item.UpdatedBy)
 	return item
+}
+
+func cloneUserID(value *security.UserID) *security.UserID {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	return &result
 }
 
 func BuildPath(
@@ -163,6 +196,14 @@ func validSlug(slug string, parentID *ID) bool {
 }
 
 func cloneID(value *ID) *ID {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	return &result
+}
+
+func cloneMediaID(value *media.ID) *media.ID {
 	if value == nil {
 		return nil
 	}

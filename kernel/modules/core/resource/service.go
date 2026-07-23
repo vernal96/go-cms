@@ -7,8 +7,35 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vernal96/go-cms/kernel/modules/core/file"
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/permission"
+	"github.com/vernal96/go-cms/kernel/security"
+)
+
+var (
+	readPermission = permission.MustCode(
+		"core",
+		"resource",
+		permission.Read,
+	)
+	createPermission = permission.MustCode(
+		"core",
+		"resource",
+		permission.Create,
+	)
+	updatePermission = permission.MustCode(
+		"core",
+		"resource",
+		permission.Update,
+	)
+	deletePermission = permission.MustCode(
+		"core",
+		"resource",
+		permission.Delete,
+	)
 )
 
 type SiteResolver interface {
@@ -18,11 +45,15 @@ type SiteResolver interface {
 type Service struct {
 	repository Repository
 	sites      SiteResolver
+	media      media.Service
+	authorizer security.Authorizer
 }
 
 func NewService(
 	repository Repository,
 	sites SiteResolver,
+	mediaService media.Service,
+	authorizer security.Authorizer,
 ) (*Service, error) {
 	if repository == nil {
 		return nil, errors.New("resource repository is nil")
@@ -30,18 +61,30 @@ func NewService(
 	if sites == nil {
 		return nil, errors.New("resource site resolver is nil")
 	}
+	if mediaService == nil {
+		return nil, errors.New("resource media service is nil")
+	}
+	if authorizer == nil {
+		return nil, errors.New("resource authorizer is nil")
+	}
 
 	return &Service{
 		repository: repository,
 		sites:      sites,
+		media:      mediaService,
+		authorizer: authorizer,
 	}, nil
 }
 
 func (s *Service) Create(
 	ctx context.Context,
+	actor security.Actor,
 	input CreateInput,
 ) (Resource, error) {
 	if err := validateContext(ctx, "resource create"); err != nil {
+		return Resource{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, createPermission); err != nil {
 		return Resource{}, err
 	}
 	if input.SiteID <= 0 {
@@ -71,6 +114,7 @@ func (s *Service) Create(
 		MenuTitle:        input.MenuTitle,
 		Slug:             input.Slug,
 		Content:          input.Content,
+		ImageMediaID:     cloneMediaID(input.ImageMediaID),
 		TargetResourceID: cloneID(input.TargetResourceID),
 		ExternalURL:      cloneString(input.ExternalURL),
 		IsPublic:         boolDefault(input.IsPublic, true),
@@ -81,6 +125,8 @@ func (s *Service) Create(
 		PublishedAt:      cloneTime(input.PublishedAt),
 		UnpublishedAt:    cloneTime(input.UnpublishedAt),
 		Settings:         cloneMap(input.Settings),
+		CreatedBy:        actor.AuditUserID(),
+		UpdatedBy:        actor.AuditUserID(),
 	}
 
 	normalized, err := s.normalize(
@@ -93,7 +139,12 @@ func (s *Service) Create(
 		return Resource{}, err
 	}
 
-	created, err := s.repository.Create(ctx, normalized)
+	created, err := s.repository.Create(
+		ctx,
+		actor.AuditUserID(),
+		normalized,
+		s.validateImageMedia,
+	)
 	if err != nil {
 		return Resource{}, fmt.Errorf("create resource: %w", err)
 	}
@@ -103,9 +154,13 @@ func (s *Service) Create(
 
 func (s *Service) Get(
 	ctx context.Context,
+	actor security.Actor,
 	id ID,
 ) (Resource, error) {
 	if err := validateContext(ctx, "resource get"); err != nil {
+		return Resource{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, readPermission); err != nil {
 		return Resource{}, err
 	}
 	if id <= 0 {
@@ -122,10 +177,14 @@ func (s *Service) Get(
 
 func (s *Service) GetByPath(
 	ctx context.Context,
+	actor security.Actor,
 	siteID site.ID,
 	path string,
 ) (Resource, error) {
 	if err := validateContext(ctx, "resource get by path"); err != nil {
+		return Resource{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, readPermission); err != nil {
 		return Resource{}, err
 	}
 	if siteID <= 0 {
@@ -152,9 +211,13 @@ func (s *Service) GetByPath(
 
 func (s *Service) Update(
 	ctx context.Context,
+	actor security.Actor,
 	input UpdateInput,
 ) (Resource, error) {
 	if err := validateContext(ctx, "resource update"); err != nil {
+		return Resource{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, updatePermission); err != nil {
 		return Resource{}, err
 	}
 	if input.ID <= 0 {
@@ -199,6 +262,7 @@ func (s *Service) Update(
 		MenuTitle:        input.MenuTitle,
 		Slug:             input.Slug,
 		Content:          input.Content,
+		ImageMediaID:     cloneMediaID(input.ImageMediaID),
 		TargetResourceID: cloneID(input.TargetResourceID),
 		ExternalURL:      cloneString(input.ExternalURL),
 		IsPublic:         input.IsPublic,
@@ -211,6 +275,8 @@ func (s *Service) Update(
 		Settings:         cloneMap(input.Settings),
 		CreatedAt:        current.CreatedAt,
 		UpdatedAt:        current.UpdatedAt,
+		CreatedBy:        cloneUserID(current.CreatedBy),
+		UpdatedBy:        actor.AuditUserID(),
 	}
 
 	if err := s.ensureNoParentCycle(ctx, item); err != nil {
@@ -236,7 +302,13 @@ func (s *Service) Update(
 		}
 	}
 
-	updated, err := s.repository.Update(ctx, normalized)
+	updated, err := s.repository.Update(
+		ctx,
+		actor.AuditUserID(),
+		current,
+		normalized,
+		s.validateImageMedia,
+	)
 	if err != nil {
 		return Resource{}, fmt.Errorf(
 			"update resource %d: %w",
@@ -250,9 +322,13 @@ func (s *Service) Update(
 
 func (s *Service) Delete(
 	ctx context.Context,
+	actor security.Actor,
 	id ID,
 ) error {
 	if err := validateContext(ctx, "resource delete"); err != nil {
+		return err
+	}
+	if err := s.authorizer.Check(ctx, actor, deletePermission); err != nil {
 		return err
 	}
 	if id <= 0 {
@@ -267,9 +343,13 @@ func (s *Service) Delete(
 
 func (s *Service) Tree(
 	ctx context.Context,
+	actor security.Actor,
 	siteID site.ID,
 ) ([]Node, error) {
 	if err := validateContext(ctx, "resource tree"); err != nil {
+		return nil, err
+	}
+	if err := s.authorizer.Check(ctx, actor, readPermission); err != nil {
 		return nil, err
 	}
 	if siteID <= 0 {
@@ -399,6 +479,14 @@ func (s *Service) normalize(
 			"resource unpublished_at must be after published_at",
 		)
 	}
+	if item.ImageMediaID != nil {
+		if err := s.validateImageMedia(
+			ctx,
+			*item.ImageMediaID,
+		); err != nil {
+			return Resource{}, err
+		}
+	}
 
 	profileRuntime := siteRuntime.Profile()
 	resourceType, exists := profileRuntime.Registry().ResourceType(
@@ -511,6 +599,61 @@ func (s *Service) normalize(
 	item.ExternalURL = cloneString(payload.ExternalURL)
 	item.Settings = cloneMap(payload.Settings)
 	return item, nil
+}
+
+func (s *Service) validateImageMedia(
+	ctx context.Context,
+	id media.ID,
+) error {
+	if id <= 0 {
+		return fmt.Errorf(
+			"%w: resource image media id is invalid",
+			ErrInvalidReference,
+		)
+	}
+
+	resolved, err := s.media.Resolve(
+		ctx,
+		security.System(),
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"%w: resolve resource image media %d: %v",
+			ErrInvalidReference,
+			id,
+			err,
+		)
+	}
+	return ValidateImageMediaFile(
+		ctx,
+		resolved.File,
+		media.Usage{
+			Kind: ImageMediaUsage,
+		},
+	)
+}
+
+func ValidateImageMediaFile(
+	ctx context.Context,
+	linkedFile file.File,
+	_ media.Usage,
+) error {
+	if err := validateContext(ctx, "validate resource image media"); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(
+		strings.ToLower(linkedFile.MIMEType),
+		"image/",
+	) {
+		return fmt.Errorf(
+			"%w: file %d has MIME type %q instead of image/*",
+			ErrInvalidReference,
+			linkedFile.ID,
+			linkedFile.MIMEType,
+		)
+	}
+	return nil
 }
 
 func (s *Service) relatedResource(

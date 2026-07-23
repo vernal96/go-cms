@@ -7,8 +7,12 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type Repository struct {
@@ -41,7 +45,12 @@ SELECT
     profile_code,
     domain,
     locale,
-    settings
+    settings,
+    is_public,
+    created_at,
+    updated_at,
+    created_by,
+    updated_by
 FROM core.sites
 ORDER BY id;
 `)
@@ -61,6 +70,11 @@ ORDER BY id;
 			&item.Domain,
 			&item.Locale,
 			&rawSettings,
+			&item.IsPublic,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+			&item.CreatedBy,
+			&item.UpdatedBy,
 		); err != nil {
 			return nil, fmt.Errorf("scan core site: %w", err)
 		}
@@ -88,41 +102,92 @@ ORDER BY id;
 	return sites, nil
 }
 
-func (r *Repository) UpdateSettings(
+func (r *Repository) Update(
 	ctx context.Context,
-	id site.ID,
-	settings map[string]any,
-) error {
+	actorID *security.UserID,
+	item site.Site,
+) (site.Site, error) {
 	if ctx == nil {
-		return errors.New("update site settings context is nil")
+		return site.Site{}, errors.New("update site context is nil")
 	}
-	if id <= 0 {
-		return errors.New("invalid site id")
+	if item.ID <= 0 {
+		return site.Site{}, errors.New("invalid site id")
 	}
-	if settings == nil {
-		settings = map[string]any{}
+	if item.Settings == nil {
+		item.Settings = map[string]any{}
 	}
 
-	rawSettings, err := json.Marshal(settings)
+	rawSettings, err := json.Marshal(item.Settings)
 	if err != nil {
-		return fmt.Errorf("encode settings for site %d: %w", id, err)
+		return site.Site{}, fmt.Errorf(
+			"encode settings for site %d: %w",
+			item.ID,
+			err,
+		)
 	}
 
-	commandTag, err := r.connector.Pool().Exec(ctx, `
+	var (
+		result      site.Site
+		rawReturned []byte
+	)
+	err = r.connector.Pool().QueryRow(ctx, `
 UPDATE core.sites
 SET
-    settings = $2::jsonb,
-    updated_at = now()
-WHERE id = $1;
-`, id, string(rawSettings))
-	if err != nil {
-		return fmt.Errorf("update settings for core site %d: %w", id, err)
+    domain = $2,
+    locale = $3,
+    settings = $4::jsonb,
+    is_public = $5,
+    updated_at = now(),
+    updated_by = $6
+WHERE id = $1
+RETURNING
+    id, profile_code, domain, locale, settings, is_public,
+    created_at, updated_at, created_by, updated_by;
+`,
+		item.ID,
+		item.Domain,
+		item.Locale,
+		string(rawSettings),
+		item.IsPublic,
+		actorID,
+	).Scan(
+		&result.ID,
+		&result.ProfileCode,
+		&result.Domain,
+		&result.Locale,
+		&rawReturned,
+		&result.IsPublic,
+		&result.CreatedAt,
+		&result.UpdatedAt,
+		&result.CreatedBy,
+		&result.UpdatedBy,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return site.Site{}, site.ErrNotFound
 	}
-	if commandTag.RowsAffected() == 0 {
-		return site.ErrNotFound
+	if err != nil {
+		var postgresError *pgconn.PgError
+		if errors.As(err, &postgresError) &&
+			postgresError.Code == pgerrcode.UniqueViolation {
+			return site.Site{}, fmt.Errorf("%w: %s", site.ErrConflict, err)
+		}
+		return site.Site{}, fmt.Errorf(
+			"update core site %d: %w",
+			item.ID,
+			err,
+		)
 	}
 
-	return nil
+	result.Settings = make(map[string]any)
+	decoder := json.NewDecoder(bytes.NewReader(rawReturned))
+	decoder.UseNumber()
+	if err := decoder.Decode(&result.Settings); err != nil {
+		return site.Site{}, fmt.Errorf(
+			"decode returned site settings: %w",
+			err,
+		)
+	}
+	return result, nil
 }
 
 var _ site.Repository = (*Repository)(nil)

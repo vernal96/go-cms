@@ -16,6 +16,31 @@ import (
 	"time"
 
 	"github.com/vernal96/go-cms/kernel/filesystem"
+	"github.com/vernal96/go-cms/kernel/permission"
+	"github.com/vernal96/go-cms/kernel/security"
+)
+
+var (
+	readPermission = permission.MustCode(
+		"core",
+		"file",
+		permission.Read,
+	)
+	createPermission = permission.MustCode(
+		"core",
+		"file",
+		permission.Create,
+	)
+	updatePermission = permission.MustCode(
+		"core",
+		"file",
+		permission.Update,
+	)
+	deletePermission = permission.MustCode(
+		"core",
+		"file",
+		permission.Delete,
+	)
 )
 
 type DiskResolver interface {
@@ -25,11 +50,13 @@ type DiskResolver interface {
 type service struct {
 	repository Repository
 	disks      DiskResolver
+	authorizer security.Authorizer
 }
 
 func NewService(
 	repository Repository,
 	disks DiskResolver,
+	authorizer security.Authorizer,
 ) (Service, error) {
 	if repository == nil {
 		return nil, errors.New("file repository is nil")
@@ -37,14 +64,25 @@ func NewService(
 	if disks == nil {
 		return nil, errors.New("filesystem disk resolver is nil")
 	}
-	return &service{repository: repository, disks: disks}, nil
+	if authorizer == nil {
+		return nil, errors.New("file authorizer is nil")
+	}
+	return &service{
+		repository: repository,
+		disks:      disks,
+		authorizer: authorizer,
+	}, nil
 }
 
 func (s *service) CreateFolder(
 	ctx context.Context,
+	actor security.Actor,
 	input CreateFolderInput,
 ) (Folder, error) {
 	if err := validateContext(ctx, "create file folder"); err != nil {
+		return Folder{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, createPermission); err != nil {
 		return Folder{}, err
 	}
 	name, err := normalizeName(input.Name)
@@ -65,9 +103,11 @@ func (s *service) CreateFolder(
 	}
 
 	result, err := s.repository.CreateFolder(ctx, Folder{
-		ParentID: cloneFolderID(input.ParentID),
-		Storage:  input.Storage,
-		Name:     name,
+		ParentID:  cloneFolderID(input.ParentID),
+		Storage:   input.Storage,
+		Name:      name,
+		CreatedBy: actor.AuditUserID(),
+		UpdatedBy: actor.AuditUserID(),
 	})
 	if err != nil {
 		return Folder{}, fmt.Errorf("create file folder: %w", err)
@@ -77,9 +117,13 @@ func (s *service) CreateFolder(
 
 func (s *service) GetFolder(
 	ctx context.Context,
+	actor security.Actor,
 	id FolderID,
 ) (Folder, error) {
 	if err := validateContext(ctx, "get file folder"); err != nil {
+		return Folder{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, readPermission); err != nil {
 		return Folder{}, err
 	}
 	if id <= 0 {
@@ -94,10 +138,14 @@ func (s *service) GetFolder(
 
 func (s *service) ListFolder(
 	ctx context.Context,
+	actor security.Actor,
 	storage filesystem.Code,
 	folderID *FolderID,
 ) (Listing, error) {
 	if err := validateContext(ctx, "list file folder"); err != nil {
+		return Listing{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, readPermission); err != nil {
 		return Listing{}, err
 	}
 	if _, err := s.disk(storage); err != nil {
@@ -130,9 +178,13 @@ func (s *service) ListFolder(
 
 func (s *service) Upload(
 	ctx context.Context,
+	actor security.Actor,
 	input UploadInput,
 ) (File, error) {
 	if err := validateContext(ctx, "upload file"); err != nil {
+		return File{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, createPermission); err != nil {
 		return File{}, err
 	}
 	if input.Content == nil {
@@ -200,6 +252,8 @@ func (s *service) Upload(
 		ChecksumSHA256: hex.EncodeToString(hash.Sum(nil)),
 		Path:           key,
 		ParentID:       cloneID(input.ParentID),
+		CreatedBy:      actor.AuditUserID(),
+		UpdatedBy:      actor.AuditUserID(),
 	}
 	result, createErr := s.repository.CreateFile(ctx, item)
 	if createErr != nil {
@@ -212,8 +266,15 @@ func (s *service) Upload(
 	return Clone(result), nil
 }
 
-func (s *service) GetFile(ctx context.Context, id ID) (File, error) {
+func (s *service) GetFile(
+	ctx context.Context,
+	actor security.Actor,
+	id ID,
+) (File, error) {
 	if err := validateContext(ctx, "get file"); err != nil {
+		return File{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, readPermission); err != nil {
 		return File{}, err
 	}
 	return s.file(ctx, id)
@@ -221,9 +282,13 @@ func (s *service) GetFile(ctx context.Context, id ID) (File, error) {
 
 func (s *service) Open(
 	ctx context.Context,
+	actor security.Actor,
 	id ID,
 ) (OpenedFile, error) {
 	if err := validateContext(ctx, "open file"); err != nil {
+		return OpenedFile{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, readPermission); err != nil {
 		return OpenedFile{}, err
 	}
 	item, err := s.file(ctx, id)
@@ -280,9 +345,13 @@ func (s *service) OpenDelivery(
 
 func (s *service) MoveFile(
 	ctx context.Context,
+	actor security.Actor,
 	input MoveFileInput,
 ) (File, error) {
 	if err := validateContext(ctx, "move file"); err != nil {
+		return File{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, updatePermission); err != nil {
 		return File{}, err
 	}
 	item, err := s.file(ctx, input.ID)
@@ -298,7 +367,12 @@ func (s *service) MoveFile(
 			return File{}, ErrStorageMismatch
 		}
 	}
-	result, err := s.repository.MoveFile(ctx, input.ID, input.FolderID)
+	result, err := s.repository.MoveFile(
+		ctx,
+		actor.AuditUserID(),
+		input.ID,
+		input.FolderID,
+	)
 	if err != nil {
 		return File{}, fmt.Errorf("move file %d: %w", input.ID, err)
 	}
@@ -307,9 +381,13 @@ func (s *service) MoveFile(
 
 func (s *service) MoveFolder(
 	ctx context.Context,
+	actor security.Actor,
 	input MoveFolderInput,
 ) (Folder, error) {
 	if err := validateContext(ctx, "move file folder"); err != nil {
+		return Folder{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, updatePermission); err != nil {
 		return Folder{}, err
 	}
 	if input.ID <= 0 {
@@ -331,15 +409,27 @@ func (s *service) MoveFolder(
 			return Folder{}, ErrStorageMismatch
 		}
 	}
-	result, err := s.repository.MoveFolder(ctx, input.ID, input.ParentID)
+	result, err := s.repository.MoveFolder(
+		ctx,
+		actor.AuditUserID(),
+		input.ID,
+		input.ParentID,
+	)
 	if err != nil {
 		return Folder{}, fmt.Errorf("move file folder %d: %w", input.ID, err)
 	}
 	return CloneFolder(result), nil
 }
 
-func (s *service) DeleteFile(ctx context.Context, id ID) error {
+func (s *service) DeleteFile(
+	ctx context.Context,
+	actor security.Actor,
+	id ID,
+) error {
 	if err := validateContext(ctx, "delete file"); err != nil {
+		return err
+	}
+	if err := s.authorizer.Check(ctx, actor, deletePermission); err != nil {
 		return err
 	}
 	if id <= 0 {
@@ -353,9 +443,13 @@ func (s *service) DeleteFile(ctx context.Context, id ID) error {
 
 func (s *service) DeleteFolder(
 	ctx context.Context,
+	actor security.Actor,
 	id FolderID,
 ) error {
 	if err := validateContext(ctx, "delete file folder"); err != nil {
+		return err
+	}
+	if err := s.authorizer.Check(ctx, actor, deletePermission); err != nil {
 		return err
 	}
 	if id <= 0 {
@@ -367,8 +461,15 @@ func (s *service) DeleteFolder(
 	return nil
 }
 
-func (s *service) URL(ctx context.Context, id ID) (string, error) {
+func (s *service) URL(
+	ctx context.Context,
+	actor security.Actor,
+	id ID,
+) (string, error) {
 	if err := validateContext(ctx, "create file URL"); err != nil {
+		return "", err
+	}
+	if err := s.authorizer.Check(ctx, actor, readPermission); err != nil {
 		return "", err
 	}
 	item, err := s.file(ctx, id)
@@ -387,10 +488,14 @@ func (s *service) URL(ctx context.Context, id ID) (string, error) {
 
 func (s *service) TemporaryURL(
 	ctx context.Context,
+	actor security.Actor,
 	id ID,
 	expiresAt time.Time,
 ) (string, error) {
 	if err := validateContext(ctx, "create temporary file URL"); err != nil {
+		return "", err
+	}
+	if err := s.authorizer.Check(ctx, actor, readPermission); err != nil {
 		return "", err
 	}
 	if !expiresAt.After(time.Now()) {

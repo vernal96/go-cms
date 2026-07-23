@@ -13,7 +13,19 @@ import (
 	"time"
 
 	"github.com/vernal96/go-cms/kernel/filesystem"
+	"github.com/vernal96/go-cms/kernel/permission"
+	"github.com/vernal96/go-cms/kernel/security"
 )
+
+type testAuthorizer struct{}
+
+func (testAuthorizer) Check(
+	context.Context,
+	security.Actor,
+	permission.Code,
+) error {
+	return nil
+}
 
 type memoryDisk struct {
 	code       filesystem.Code
@@ -264,6 +276,7 @@ func (r *memoryRepository) ListFiles(
 
 func (r *memoryRepository) MoveFile(
 	_ context.Context,
+	_ *security.UserID,
 	id ID,
 	folderID *FolderID,
 ) (File, error) {
@@ -286,6 +299,7 @@ func (r *memoryRepository) MoveFile(
 
 func (r *memoryRepository) MoveFolder(
 	_ context.Context,
+	_ *security.UserID,
 	id FolderID,
 	parentID *FolderID,
 ) (Folder, error) {
@@ -400,12 +414,12 @@ func (r *memoryRepository) selectedFiles(selected map[ID]struct{}) []File {
 func TestServiceUploadMeasuresContentAndCompensatesDatabaseFailure(t *testing.T) {
 	repository := newMemoryRepository()
 	public := newMemoryDisk("public", filesystem.VisibilityPublic)
-	service, err := NewService(repository, memoryDisks{"public": public})
+	service, err := NewService(repository, memoryDisks{"public": public}, testAuthorizer{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	folder, err := service.CreateFolder(context.Background(), CreateFolderInput{
+	folder, err := service.CreateFolder(context.Background(), security.System(), CreateFolderInput{
 		Storage: "public",
 		Name:    "images",
 	})
@@ -413,7 +427,7 @@ func TestServiceUploadMeasuresContentAndCompensatesDatabaseFailure(t *testing.T)
 		t.Fatal(err)
 	}
 	content := "hello file"
-	created, err := service.Upload(context.Background(), UploadInput{
+	created, err := service.Upload(context.Background(), security.System(), UploadInput{
 		FolderID: &folder.ID,
 		Storage:  "public",
 		Name:     "hello.txt",
@@ -430,13 +444,14 @@ func TestServiceUploadMeasuresContentAndCompensatesDatabaseFailure(t *testing.T)
 	}
 	if rawURL, err := service.URL(
 		context.Background(),
+		security.System(),
 		created.ID,
 	); err != nil || rawURL == "" {
 		t.Fatalf("public URL = %q, %v", rawURL, err)
 	}
 
 	repository.createFileError = errors.New("database unavailable")
-	_, err = service.Upload(context.Background(), UploadInput{
+	_, err = service.Upload(context.Background(), security.System(), UploadInput{
 		Storage: "public",
 		Name:    "orphan.txt",
 		Content: strings.NewReader("orphan"),
@@ -452,18 +467,68 @@ func TestServiceUploadMeasuresContentAndCompensatesDatabaseFailure(t *testing.T)
 	}
 }
 
+func TestServicePropagatesAuditActor(t *testing.T) {
+	t.Parallel()
+
+	repository := newMemoryRepository()
+	public := newMemoryDisk("public", filesystem.VisibilityPublic)
+	service, err := NewService(
+		repository,
+		memoryDisks{"public": public},
+		testAuthorizer{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor := security.User(77)
+	folder, err := service.CreateFolder(
+		context.Background(),
+		actor,
+		CreateFolderInput{Storage: "public", Name: "audit"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if folder.CreatedBy == nil ||
+		*folder.CreatedBy != 77 ||
+		folder.UpdatedBy == nil ||
+		*folder.UpdatedBy != 77 {
+		t.Fatalf("folder audit = %#v", folder)
+	}
+	created, err := service.Upload(
+		context.Background(),
+		actor,
+		UploadInput{
+			FolderID: &folder.ID,
+			Storage:  "public",
+			Name:     "audit.txt",
+			Content:  strings.NewReader("audit"),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.CreatedBy == nil ||
+		*created.CreatedBy != 77 ||
+		created.UpdatedBy == nil ||
+		*created.UpdatedBy != 77 {
+		t.Fatalf("file audit = %#v", created)
+	}
+}
+
 func TestServiceUsesSharedNamespaceAndVirtualMoves(t *testing.T) {
 	repository := newMemoryRepository()
 	public := newMemoryDisk("public", filesystem.VisibilityPublic)
-	service, _ := NewService(repository, memoryDisks{"public": public})
+	service, _ := NewService(repository, memoryDisks{"public": public}, testAuthorizer{})
 
 	if _, err := service.CreateFolder(
 		context.Background(),
+		security.System(),
 		CreateFolderInput{Storage: "public", Name: "same"},
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Upload(context.Background(), UploadInput{
+	if _, err := service.Upload(context.Background(), security.System(), UploadInput{
 		Storage: "public",
 		Name:    "same",
 		Content: strings.NewReader("content"),
@@ -473,15 +538,16 @@ func TestServiceUsesSharedNamespaceAndVirtualMoves(t *testing.T) {
 
 	target, _ := service.CreateFolder(
 		context.Background(),
+		security.System(),
 		CreateFolderInput{Storage: "public", Name: "target"},
 	)
-	created, _ := service.Upload(context.Background(), UploadInput{
+	created, _ := service.Upload(context.Background(), security.System(), UploadInput{
 		Storage: "public",
 		Name:    "movable",
 		Content: strings.NewReader("content"),
 	})
 	puts, deletes := public.puts, public.deletes
-	moved, err := service.MoveFile(context.Background(), MoveFileInput{
+	moved, err := service.MoveFile(context.Background(), security.System(), MoveFileInput{
 		ID:       created.ID,
 		FolderID: &target.ID,
 	})
@@ -502,18 +568,18 @@ func TestServiceFolderDeleteIncludesCrossStorageDerivativesAndRetries(t *testing
 	service, _ := NewService(repository, memoryDisks{
 		"public":  public,
 		"private": private,
-	})
-	folder, _ := service.CreateFolder(context.Background(), CreateFolderInput{
+	}, testAuthorizer{})
+	folder, _ := service.CreateFolder(context.Background(), security.System(), CreateFolderInput{
 		Storage: "public",
 		Name:    "source",
 	})
-	original, _ := service.Upload(context.Background(), UploadInput{
+	original, _ := service.Upload(context.Background(), security.System(), UploadInput{
 		FolderID: &folder.ID,
 		Storage:  "public",
 		Name:     "original",
 		Content:  strings.NewReader("original"),
 	})
-	derived, _ := service.Upload(context.Background(), UploadInput{
+	derived, _ := service.Upload(context.Background(), security.System(), UploadInput{
 		Storage:  "private",
 		Name:     "derived",
 		ParentID: &original.ID,
@@ -523,23 +589,26 @@ func TestServiceFolderDeleteIncludesCrossStorageDerivativesAndRetries(t *testing
 	private.deleteErr = errors.New("private unavailable")
 	if err := service.DeleteFolder(
 		context.Background(),
+		security.System(),
 		folder.ID,
 	); err == nil {
 		t.Fatal("expected partial physical delete error")
 	}
 	if _, err := service.GetFile(
 		context.Background(),
+		security.System(),
 		original.ID,
 	); err != nil {
 		t.Fatalf("metadata was removed after failed delete: %v", err)
 	}
 
 	private.deleteErr = nil
-	if err := service.DeleteFolder(context.Background(), folder.ID); err != nil {
+	if err := service.DeleteFolder(context.Background(), security.System(), folder.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.GetFile(
 		context.Background(),
+		security.System(),
 		derived.ID,
 	); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("derived file still exists: %v", err)

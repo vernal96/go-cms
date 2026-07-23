@@ -14,6 +14,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/app"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type Handler struct {
@@ -56,9 +57,33 @@ func (h *Handler) ServeHTTP(
 		return
 	}
 
-	runtime, exists := h.app.RuntimeByDomain(request.Host)
-	if !exists {
-		http.Error(response, "site runtime not found", http.StatusNotFound)
+	runtime, err := h.app.RuntimeByDomain(
+		request.Context(),
+		security.Guest(),
+		request.Host,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, site.ErrNotFound):
+			http.Error(
+				response,
+				"site runtime not found",
+				http.StatusNotFound,
+			)
+		case errors.Is(err, security.ErrForbidden),
+			errors.Is(err, security.ErrUnauthenticated):
+			http.Error(
+				response,
+				"site runtime forbidden",
+				http.StatusForbidden,
+			)
+		default:
+			http.Error(
+				response,
+				"site runtime failed",
+				http.StatusInternalServerError,
+			)
+		}
 		return
 	}
 

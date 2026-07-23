@@ -8,8 +8,13 @@ import (
 
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
+	"github.com/vernal96/go-cms/kernel/modules/core/group"
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/permission"
+	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type ModuleCode string
@@ -40,11 +45,14 @@ type Registry interface {
 	Module(ModuleCode) (ModuleRuntime, bool)
 	FieldType(field.TypeCode) (field.Type, bool)
 	ResourceType(resourcetype.Code) (resourcetype.Type, bool)
+	Permission(permission.Code) (permission.Definition, bool)
+	Permissions() []permission.Code
 }
 
 type ModuleRegistry struct {
-	FieldTypes    []field.Type
-	ResourceTypes []resourcetype.Type
+	FieldTypes         []field.Type
+	ResourceTypes      []resourcetype.Type
+	PermissionEntities []permission.Entity
 }
 
 type RegistryProvider interface {
@@ -52,9 +60,11 @@ type RegistryProvider interface {
 }
 
 type RuntimeRegistry struct {
-	modules       map[ModuleCode]ModuleRuntime
-	fieldTypes    map[field.TypeCode]field.Type
-	resourceTypes map[resourcetype.Code]resourcetype.Type
+	modules         map[ModuleCode]ModuleRuntime
+	fieldTypes      map[field.TypeCode]field.Type
+	resourceTypes   map[resourcetype.Code]resourcetype.Type
+	permissions     map[permission.Code]permission.Definition
+	permissionCodes []permission.Code
 }
 
 func newRuntimeRegistry() *RuntimeRegistry {
@@ -63,6 +73,9 @@ func newRuntimeRegistry() *RuntimeRegistry {
 		fieldTypes: make(map[field.TypeCode]field.Type),
 		resourceTypes: make(
 			map[resourcetype.Code]resourcetype.Type,
+		),
+		permissions: make(
+			map[permission.Code]permission.Definition,
 		),
 	}
 }
@@ -86,6 +99,17 @@ func (r *RuntimeRegistry) ResourceType(
 ) (resourcetype.Type, bool) {
 	resourceType, exists := r.resourceTypes[code]
 	return resourceType, exists
+}
+
+func (r *RuntimeRegistry) Permission(
+	code permission.Code,
+) (permission.Definition, bool) {
+	definition, exists := r.permissions[code]
+	return definition, exists
+}
+
+func (r *RuntimeRegistry) Permissions() []permission.Code {
+	return append([]permission.Code(nil), r.permissionCodes...)
 }
 
 func (r *RuntimeRegistry) add(runtime ModuleRuntime) error {
@@ -157,6 +181,26 @@ func (r *RuntimeRegistry) addResourceType(
 	return nil
 }
 
+func (r *RuntimeRegistry) addPermission(
+	definition permission.Definition,
+) error {
+	if definition.Code == "" {
+		return errors.New("permission code is empty")
+	}
+	if _, exists := r.permissions[definition.Code]; exists {
+		return fmt.Errorf(
+			"permission %q already exists",
+			definition.Code,
+		)
+	}
+	r.permissions[definition.Code] = definition
+	r.permissionCodes = append(
+		r.permissionCodes,
+		definition.Code,
+	)
+	return nil
+}
+
 func isNilValue(value any) bool {
 	reflected := reflect.ValueOf(value)
 	switch reflected.Kind() {
@@ -169,11 +213,15 @@ func isNilValue(value any) bool {
 }
 
 type ModuleContext struct {
-	resolver DatabaseResolver
-	profile  Profile
-	registry Registry
-	config   any
-	files    file.Service
+	resolver      DatabaseResolver
+	profile       Profile
+	registry      Registry
+	config        any
+	files         file.Service
+	media         media.Service
+	users         user.Service
+	groups        group.Service
+	authorization security.Authorizer
 }
 
 func newModuleContext(
@@ -181,14 +229,18 @@ func newModuleContext(
 	profile Profile,
 	registry Registry,
 	config any,
-	files file.Service,
+	services RuntimeServices,
 ) ModuleContext {
 	return ModuleContext{
-		resolver: resolver,
-		profile:  cloneProfile(profile),
-		registry: registry,
-		config:   config,
-		files:    files,
+		resolver:      resolver,
+		profile:       cloneProfile(profile),
+		registry:      registry,
+		config:        config,
+		files:         services.Files,
+		media:         services.Media,
+		users:         services.Users,
+		groups:        services.Groups,
+		authorization: services.Authorization,
 	}
 }
 
@@ -208,6 +260,24 @@ func (c ModuleContext) Config() any {
 // filesystem manager or any infrastructure connector to modules.
 func (c ModuleContext) Files() file.Service {
 	return c.files
+}
+
+// Media exposes the core application media service without exposing its
+// persistence adapter or the filesystem manager to modules.
+func (c ModuleContext) Media() media.Service {
+	return c.media
+}
+
+func (c ModuleContext) Users() user.Service {
+	return c.users
+}
+
+func (c ModuleContext) Groups() group.Service {
+	return c.groups
+}
+
+func (c ModuleContext) Authorization() security.Authorizer {
+	return c.authorization
 }
 
 func ModuleConfigFrom[T any](ctx ModuleContext) (T, error) {
@@ -332,23 +402,33 @@ func (r *ProfileRuntime) Templates() []template.Definition {
 
 type ProfileRuntimeFactory struct {
 	resolver DatabaseResolver
-	files    file.Service
+	services RuntimeServices
+}
+
+type RuntimeServices struct {
+	Files         file.Service
+	Media         media.Service
+	Users         user.Service
+	Groups        group.Service
+	Authorization security.Authorizer
 }
 
 func NewProfileRuntimeFactory(
 	resolver DatabaseResolver,
-	files ...file.Service,
+	services ...RuntimeServices,
 ) (*ProfileRuntimeFactory, error) {
 	if resolver == nil {
 		return nil, errors.New("database resolver is nil")
 	}
 
 	factory := &ProfileRuntimeFactory{resolver: resolver}
-	if len(files) > 1 {
-		return nil, errors.New("more than one file service was provided")
+	if len(services) > 1 {
+		return nil, errors.New(
+			"more than one runtime services set was provided",
+		)
 	}
-	if len(files) == 1 {
-		factory.files = files[0]
+	if len(services) == 1 {
+		factory.services = services[0]
 	}
 	return factory, nil
 }
@@ -434,6 +514,27 @@ func (f *ProfileRuntimeFactory) Make(
 				)
 			}
 		}
+		permissionDefinitions, err := permission.Definitions(
+			string(profileModule.Module.Code()),
+			moduleRegistry.PermissionEntities,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"register permissions from module %q: %w",
+				profileModule.Module.Code(),
+				err,
+			)
+		}
+		for index, definition := range permissionDefinitions {
+			if err := registry.addPermission(definition); err != nil {
+				return nil, fmt.Errorf(
+					"register permission at index %d from module %q: %w",
+					index,
+					profileModule.Module.Code(),
+					err,
+				)
+			}
+		}
 	}
 
 	paramSchema, err := field.Compile(profile.Params, registry)
@@ -465,7 +566,7 @@ func (f *ProfileRuntimeFactory) Make(
 			profile,
 			registry,
 			profileModule.Config,
-			f.files,
+			f.services,
 		)
 
 		runtime, err := module.Build(ctx, moduleContext)

@@ -50,6 +50,20 @@ func (c command) Run(
 	return err
 }
 
+type bootCommand struct{ command }
+
+func (bootCommand) RequiresBoot() bool { return true }
+
+type bootApplication struct {
+	application
+	boots int
+}
+
+func (a *bootApplication) Boot(context.Context) error {
+	a.boots++
+	return nil
+}
+
 func TestConsoleRegistersBuiltinsAndProviderCommands(t *testing.T) {
 	runner, err := console.New(application{
 		providers: []console.Provider{
@@ -116,5 +130,42 @@ func TestEmptySeedCollectionIsAValidNoOp(t *testing.T) {
 	}
 	if strings.TrimSpace(output.String()) != "[]" {
 		t.Fatalf("empty seed status = %q", output.String())
+	}
+}
+
+func TestConsoleBootsOnlyCommandsThatRequireServices(t *testing.T) {
+	application := &bootApplication{
+		application: application{
+			providers: []console.Provider{
+				provider{commands: []console.Command{
+					command{name: "plain"},
+					bootCommand{command{name: "secured"}},
+				}},
+			},
+		},
+	}
+	runner, err := console.New(application)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(
+		context.Background(),
+		[]string{"plain"},
+		console.IO{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if application.boots != 0 {
+		t.Fatalf("plain command boot count = %d", application.boots)
+	}
+	if err := runner.Run(
+		context.Background(),
+		[]string{"secured"},
+		console.IO{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if application.boots != 1 {
+		t.Fatalf("secured command boot count = %d", application.boots)
 	}
 }

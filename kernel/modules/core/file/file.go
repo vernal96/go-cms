@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/vernal96/go-cms/kernel/filesystem"
+	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type ID int64
@@ -30,6 +31,8 @@ type Folder struct {
 	Name      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	CreatedBy *security.UserID
+	UpdatedBy *security.UserID
 }
 
 type File struct {
@@ -44,6 +47,8 @@ type File struct {
 	ParentID       *ID
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	CreatedBy      *security.UserID
+	UpdatedBy      *security.UserID
 }
 
 type CreateFolderInput struct {
@@ -109,45 +114,89 @@ type Repository interface {
 		filesystem.Code,
 		*FolderID,
 	) ([]File, error)
-	MoveFile(context.Context, ID, *FolderID) (File, error)
-	MoveFolder(context.Context, FolderID, *FolderID) (Folder, error)
+	MoveFile(
+		context.Context,
+		*security.UserID,
+		ID,
+		*FolderID,
+	) (File, error)
+	MoveFolder(
+		context.Context,
+		*security.UserID,
+		FolderID,
+		*FolderID,
+	) (Folder, error)
 	DeleteFile(context.Context, ID, DeletePhysical) error
 	DeleteFolder(context.Context, FolderID, DeletePhysical) error
 }
 
 type Service interface {
-	CreateFolder(context.Context, CreateFolderInput) (Folder, error)
-	GetFolder(context.Context, FolderID) (Folder, error)
+	CreateFolder(
+		context.Context,
+		security.Actor,
+		CreateFolderInput,
+	) (Folder, error)
+	GetFolder(
+		context.Context,
+		security.Actor,
+		FolderID,
+	) (Folder, error)
 	ListFolder(
 		context.Context,
+		security.Actor,
 		filesystem.Code,
 		*FolderID,
 	) (Listing, error)
-	Upload(context.Context, UploadInput) (File, error)
-	GetFile(context.Context, ID) (File, error)
-	Open(context.Context, ID) (OpenedFile, error)
+	Upload(context.Context, security.Actor, UploadInput) (File, error)
+	GetFile(context.Context, security.Actor, ID) (File, error)
+	Open(context.Context, security.Actor, ID) (OpenedFile, error)
 	OpenDelivery(
 		context.Context,
 		ID,
 		DeliveryAuthorization,
 	) (OpenedFile, error)
-	MoveFile(context.Context, MoveFileInput) (File, error)
-	MoveFolder(context.Context, MoveFolderInput) (Folder, error)
-	DeleteFile(context.Context, ID) error
-	DeleteFolder(context.Context, FolderID) error
-	URL(context.Context, ID) (string, error)
-	TemporaryURL(context.Context, ID, time.Time) (string, error)
+	MoveFile(
+		context.Context,
+		security.Actor,
+		MoveFileInput,
+	) (File, error)
+	MoveFolder(
+		context.Context,
+		security.Actor,
+		MoveFolderInput,
+	) (Folder, error)
+	DeleteFile(context.Context, security.Actor, ID) error
+	DeleteFolder(context.Context, security.Actor, FolderID) error
+	URL(context.Context, security.Actor, ID) (string, error)
+	TemporaryURL(
+		context.Context,
+		security.Actor,
+		ID,
+		time.Time,
+	) (string, error)
 }
 
 func CloneFolder(item Folder) Folder {
 	item.ParentID = cloneFolderID(item.ParentID)
+	item.CreatedBy = cloneUserID(item.CreatedBy)
+	item.UpdatedBy = cloneUserID(item.UpdatedBy)
 	return item
 }
 
 func Clone(item File) File {
 	item.FolderID = cloneFolderID(item.FolderID)
 	item.ParentID = cloneID(item.ParentID)
+	item.CreatedBy = cloneUserID(item.CreatedBy)
+	item.UpdatedBy = cloneUserID(item.UpdatedBy)
 	return item
+}
+
+func cloneUserID(value *security.UserID) *security.UserID {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	return &result
 }
 
 func cloneID(value *ID) *ID {

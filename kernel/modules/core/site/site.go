@@ -8,13 +8,30 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/permission"
+	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type ID int64
 
-var ErrNotFound = errors.New("site not found")
+var (
+	ErrNotFound = errors.New("site not found")
+	ErrConflict = errors.New("site conflict")
+
+	readPermission = permission.MustCode(
+		"core",
+		"site",
+		permission.Read,
+	)
+	updatePermission = permission.MustCode(
+		"core",
+		"site",
+		permission.Update,
+	)
+)
 
 type Site struct {
 	ID          ID
@@ -22,11 +39,33 @@ type Site struct {
 	Domain      string
 	Locale      string
 	Settings    map[string]any
+	IsPublic    bool
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	CreatedBy   *security.UserID
+	UpdatedBy   *security.UserID
 }
 
 type Repository interface {
 	List(context.Context) ([]Site, error)
-	UpdateSettings(context.Context, ID, map[string]any) error
+	Update(
+		context.Context,
+		*security.UserID,
+		Site,
+	) (Site, error)
+}
+
+type Access interface {
+	security.Authorizer
+	IsGuestSubject(context.Context, security.Actor) (bool, error)
+}
+
+type UpdateInput struct {
+	ID       ID
+	Domain   string
+	Locale   string
+	Settings map[string]any
+	IsPublic bool
 }
 
 type Runtime struct {
@@ -89,6 +128,8 @@ func NewRuntime(
 func (r *Runtime) Site() Site {
 	result := r.site
 	result.Settings = cloneSettings(result.Settings)
+	result.CreatedBy = cloneUserID(result.CreatedBy)
+	result.UpdatedBy = cloneUserID(result.UpdatedBy)
 	return result
 }
 
@@ -110,6 +151,7 @@ type runtimeSnapshot struct {
 type Catalog struct {
 	repository Repository
 	profiles   ProfileResolver
+	access     Access
 
 	snapshot   atomic.Pointer[runtimeSnapshot]
 	mutationMu sync.Mutex
@@ -118,6 +160,7 @@ type Catalog struct {
 func NewCatalog(
 	repository Repository,
 	profiles ProfileResolver,
+	access Access,
 ) (*Catalog, error) {
 	if repository == nil {
 		return nil, errors.New("site repository is nil")
@@ -126,10 +169,14 @@ func NewCatalog(
 	if profiles == nil {
 		return nil, errors.New("profile resolver is nil")
 	}
+	if access == nil {
+		return nil, errors.New("site access service is nil")
+	}
 
 	catalog := &Catalog{
 		repository: repository,
 		profiles:   profiles,
+		access:     access,
 	}
 
 	catalog.snapshot.Store(&runtimeSnapshot{
@@ -171,6 +218,34 @@ func (c *Catalog) RuntimeByID(
 
 	runtime, exists := snapshot.byID[id]
 	return runtime, exists
+}
+
+func (c *Catalog) ResolveByDomain(
+	ctx context.Context,
+	actor security.Actor,
+	domain string,
+) (*Runtime, error) {
+	if ctx == nil {
+		return nil, errors.New("site resolve context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	runtime, exists := c.RuntimeByDomain(domain)
+	if !exists {
+		return nil, ErrNotFound
+	}
+	if err := c.access.Check(ctx, actor, readPermission); err != nil {
+		return nil, err
+	}
+	guest, err := c.access.IsGuestSubject(ctx, actor)
+	if err != nil {
+		return nil, err
+	}
+	if guest && !runtime.site.IsPublic {
+		return nil, security.ErrForbidden
+	}
+	return runtime, nil
 }
 
 func (c *Catalog) Reload(ctx context.Context) error {
@@ -240,10 +315,10 @@ func (c *Catalog) Reload(ctx context.Context) error {
 	return nil
 }
 
-func (c *Catalog) UpdateSettings(
+func (c *Catalog) Update(
 	ctx context.Context,
-	id ID,
-	values map[string]any,
+	actor security.Actor,
+	input UpdateInput,
 ) (*Runtime, error) {
 	if ctx == nil {
 		return nil, errors.New("site settings update context is nil")
@@ -251,7 +326,10 @@ func (c *Catalog) UpdateSettings(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if id <= 0 {
+	if err := c.access.Check(ctx, actor, updatePermission); err != nil {
+		return nil, err
+	}
+	if input.ID <= 0 {
 		return nil, errors.New("invalid site id")
 	}
 
@@ -263,27 +341,41 @@ func (c *Catalog) UpdateSettings(
 		return nil, errors.New("site runtime snapshot is nil")
 	}
 
-	current, exists := currentSnapshot.byID[id]
+	current, exists := currentSnapshot.byID[input.ID]
 	if !exists {
 		return nil, ErrNotFound
 	}
 
 	item := current.Site()
-	item.Settings = cloneSettings(values)
+	item.Domain = input.Domain
+	item.Locale = strings.TrimSpace(input.Locale)
+	item.Settings = cloneSettings(input.Settings)
+	item.IsPublic = input.IsPublic
 
 	nextRuntime, err := NewRuntime(item, current.Profile())
 	if err != nil {
 		return nil, fmt.Errorf(
 			"build updated site runtime %d: %w",
-			id,
+			input.ID,
 			err,
 		)
 	}
-
-	normalized := nextRuntime.Site().Settings
-	if err := c.repository.UpdateSettings(ctx, id, normalized); err != nil {
-		return nil, fmt.Errorf("update site settings: %w", err)
+	if existing, exists := currentSnapshot.byDomain[nextRuntime.site.Domain]; exists && existing.site.ID != input.ID {
+		return nil, ErrConflict
 	}
+
+	stored, err := c.repository.Update(
+		ctx,
+		actor.AuditUserID(),
+		nextRuntime.Site(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update site: %w", err)
+	}
+	nextRuntime.site.CreatedAt = stored.CreatedAt
+	nextRuntime.site.UpdatedAt = stored.UpdatedAt
+	nextRuntime.site.CreatedBy = cloneUserID(stored.CreatedBy)
+	nextRuntime.site.UpdatedBy = cloneUserID(stored.UpdatedBy)
 
 	nextSnapshot := &runtimeSnapshot{
 		byDomain: make(
@@ -302,8 +394,9 @@ func (c *Catalog) UpdateSettings(
 		nextSnapshot.byID[currentID] = runtime
 	}
 
+	delete(nextSnapshot.byDomain, current.site.Domain)
 	nextSnapshot.byDomain[nextRuntime.site.Domain] = nextRuntime
-	nextSnapshot.byID[id] = nextRuntime
+	nextSnapshot.byID[input.ID] = nextRuntime
 	c.snapshot.Store(nextSnapshot)
 
 	return nextRuntime, nil
@@ -351,6 +444,14 @@ func cloneSettings(source map[string]any) map[string]any {
 	}
 
 	return result
+}
+
+func cloneUserID(value *security.UserID) *security.UserID {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	return &result
 }
 
 func cloneSettingValue(value any) any {

@@ -18,12 +18,17 @@ import (
 	"github.com/vernal96/go-cms/kernel/console"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	coreaccess "github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
+	coregroup "github.com/vernal96/go-cms/kernel/modules/core/group"
+	coremedia "github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/security"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
@@ -131,35 +136,32 @@ func (r *fakeSiteRepository) List(context.Context) ([]site.Site, error) {
 	return append([]site.Site(nil), r.sites...), nil
 }
 
-func (r *fakeSiteRepository) UpdateSettings(
+func (r *fakeSiteRepository) Update(
 	_ context.Context,
-	id site.ID,
-	settings map[string]any,
-) error {
+	_ *security.UserID,
+	item site.Site,
+) (site.Site, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	r.updateCalls++
 	if r.updateErr != nil {
-		return r.updateErr
+		return site.Site{}, r.updateErr
 	}
 	if r.err != nil {
-		return r.err
+		return site.Site{}, r.err
 	}
 
 	for index := range r.sites {
-		if r.sites[index].ID != id {
+		if r.sites[index].ID != item.ID {
 			continue
 		}
 
-		r.sites[index].Settings = make(map[string]any, len(settings))
-		for key, value := range settings {
-			r.sites[index].Settings[key] = value
-		}
-		return nil
+		r.sites[index] = item
+		return item, nil
 	}
 
-	return site.ErrNotFound
+	return site.Site{}, site.ErrNotFound
 }
 
 func (r *fakeSiteRepository) set(items []site.Site, err error) {
@@ -190,6 +192,11 @@ func (r *fakeSiteRepository) updateCallCount() int {
 type fakeCoreDatabase struct {
 	repository         site.Repository
 	resourceRepository resource.Repository
+	fileRepository     corefile.Repository
+	mediaRepository    coremedia.Repository
+	userRepository     coreuser.Repository
+	groupRepository    coregroup.Repository
+	accessRepository   coreaccess.Repository
 	seedSources        []seeds.Source
 }
 
@@ -201,19 +208,64 @@ func (d *fakeCoreDatabase) Resources() resource.Repository {
 	}
 	return fakeResourceRepository{}
 }
-func (*fakeCoreDatabase) Files() corefile.Repository {
+func (d *fakeCoreDatabase) Files() corefile.Repository {
+	if d.fileRepository != nil {
+		return d.fileRepository
+	}
 	return fakeFileRepository{}
+}
+func (d *fakeCoreDatabase) Media() coremedia.Repository {
+	if d.mediaRepository != nil {
+		return d.mediaRepository
+	}
+	return fakeMediaRepository{}
+}
+func (d *fakeCoreDatabase) Users() coreuser.Repository {
+	if d.userRepository != nil {
+		return d.userRepository
+	}
+	return fakeUserRepository{}
+}
+func (d *fakeCoreDatabase) Groups() coregroup.Repository {
+	if d.groupRepository != nil {
+		return d.groupRepository
+	}
+	return fakeGroupRepository{}
+}
+func (d *fakeCoreDatabase) Access() coreaccess.Repository {
+	if d.accessRepository != nil {
+		return d.accessRepository
+	}
+	return fakeAccessRepository{}
 }
 
 type fakeFileRepository struct {
 	corefile.Repository
 }
 
+type fakeMediaRepository struct {
+	coremedia.Repository
+}
+
+type fakeUserRepository struct {
+	coreuser.Repository
+}
+
+type fakeGroupRepository struct {
+	coregroup.Repository
+}
+
+type fakeAccessRepository struct {
+	coreaccess.Repository
+}
+
 type fakeResourceRepository struct{}
 
 func (fakeResourceRepository) Create(
 	context.Context,
+	*security.UserID,
 	resource.Resource,
+	resource.ValidateImageMedia,
 ) (resource.Resource, error) {
 	return resource.Resource{}, resource.ErrNotFound
 }
@@ -242,7 +294,10 @@ func (fakeResourceRepository) ListBySite(
 
 func (fakeResourceRepository) Update(
 	context.Context,
+	*security.UserID,
 	resource.Resource,
+	resource.Resource,
+	resource.ValidateImageMedia,
 ) (resource.Resource, error) {
 	return resource.Resource{}, resource.ErrNotFound
 }
@@ -260,6 +315,96 @@ type appResourceRepository struct {
 	items  map[resource.ID]resource.Resource
 }
 
+type appFileRepository struct {
+	corefile.Repository
+	item corefile.File
+}
+
+func (r appFileRepository) FileByID(
+	_ context.Context,
+	id corefile.ID,
+) (corefile.File, error) {
+	if r.item.ID != id {
+		return corefile.File{}, corefile.ErrNotFound
+	}
+	return corefile.Clone(r.item), nil
+}
+
+type appMediaRepository struct {
+	mu     sync.Mutex
+	nextID coremedia.ID
+	items  map[coremedia.ID]coremedia.Media
+}
+
+func newAppMediaRepository() *appMediaRepository {
+	return &appMediaRepository{
+		nextID: 1,
+		items:  make(map[coremedia.ID]coremedia.Media),
+	}
+}
+
+func (r *appMediaRepository) Create(
+	_ context.Context,
+	_ *security.UserID,
+	item coremedia.Media,
+) (coremedia.Media, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	item = coremedia.Clone(item)
+	item.ID = r.nextID
+	r.nextID++
+	r.items[item.ID] = item
+	return coremedia.Clone(item), nil
+}
+
+func (r *appMediaRepository) ByID(
+	_ context.Context,
+	id coremedia.ID,
+) (coremedia.Media, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	item, exists := r.items[id]
+	if !exists {
+		return coremedia.Media{}, coremedia.ErrNotFound
+	}
+	return coremedia.Clone(item), nil
+}
+
+func (r *appMediaRepository) Update(
+	ctx context.Context,
+	_ *security.UserID,
+	item coremedia.Media,
+	validate coremedia.ValidateUsages,
+) (coremedia.Media, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.items[item.ID]; !exists {
+		return coremedia.Media{}, coremedia.ErrNotFound
+	}
+	if err := validate(ctx, nil); err != nil {
+		return coremedia.Media{}, err
+	}
+	r.items[item.ID] = coremedia.Clone(item)
+	return coremedia.Clone(item), nil
+}
+
+func (r *appMediaRepository) Delete(
+	_ context.Context,
+	id coremedia.ID,
+) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.items[id]; !exists {
+		return coremedia.ErrNotFound
+	}
+	delete(r.items, id)
+	return nil
+}
+
 func newAppResourceRepository() *appResourceRepository {
 	return &appResourceRepository{
 		nextID: 1,
@@ -269,7 +414,9 @@ func newAppResourceRepository() *appResourceRepository {
 
 func (r *appResourceRepository) Create(
 	_ context.Context,
+	_ *security.UserID,
 	item resource.Resource,
+	_ resource.ValidateImageMedia,
 ) (resource.Resource, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -331,7 +478,10 @@ func (r *appResourceRepository) ListBySite(
 
 func (r *appResourceRepository) Update(
 	_ context.Context,
+	_ *security.UserID,
+	_ resource.Resource,
 	item resource.Resource,
+	_ resource.ValidateImageMedia,
 ) (resource.Resource, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -586,18 +736,35 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	if repository.callCount() != 0 {
 		t.Fatalf("New called site repository %d times", repository.callCount())
 	}
-	if _, exists := application.RuntimeByDomain("example.com"); exists {
-		t.Fatal("runtime exists before Boot")
+	if _, err := application.PermissionCodes(); !errors.Is(
+		err,
+		appkernel.ErrNotBooted,
+	) {
+		t.Fatalf("PermissionCodes before Boot = %v", err)
+	}
+	if _, err := application.RuntimeByDomain(
+		ctx,
+		security.System(),
+		"example.com",
+	); !errors.Is(err, appkernel.ErrNotBooted) {
+		t.Fatalf("RuntimeByDomain before Boot = %v", err)
 	}
 	if err := application.ReloadSites(ctx); !errors.Is(err, appkernel.ErrNotBooted) {
 		t.Fatalf("ReloadSites before Boot = %v", err)
 	}
-	if _, err := application.UpdateSiteSettings(
+	if _, err := application.UpdateSite(
 		ctx,
-		1,
-		map[string]any{"theme": "dark"},
+		security.System(),
+		site.UpdateInput{ID: 1},
 	); !errors.Is(err, appkernel.ErrNotBooted) {
-		t.Fatalf("UpdateSiteSettings before Boot = %v", err)
+		t.Fatalf("UpdateSite before Boot = %v", err)
+	}
+	if _, err := application.Media(
+		ctx,
+		security.System(),
+		1,
+	); !errors.Is(err, appkernel.ErrNotBooted) {
+		t.Fatalf("Media before Boot = %v", err)
 	}
 	if _, exists := mainConnector.version(migrations.DefaultHistoryTable); exists {
 		t.Fatal("New applied migrations")
@@ -664,6 +831,10 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	if moduleBuilds.Load() != 1 {
 		t.Fatalf("module Build calls = %d", moduleBuilds.Load())
 	}
+	if codes, err := application.PermissionCodes(); err != nil ||
+		len(codes) != 24 {
+		t.Fatalf("core permission catalog = %#v, %v", codes, err)
+	}
 	if selected != logsFeature {
 		t.Fatalf("selected database = %#v", selected)
 	}
@@ -674,16 +845,28 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 		t.Fatal("Boot applied seeds")
 	}
 
-	first, exists := application.RuntimeByDomain("EXAMPLE.com.:443")
-	if !exists {
-		t.Fatal("runtime not found by Host with port")
+	first, err := application.RuntimeByDomain(
+		ctx,
+		security.System(),
+		"EXAMPLE.com.:443",
+	)
+	if err != nil {
+		t.Fatalf("runtime not found by Host with port: %v", err)
 	}
-	second, exists := application.RuntimeByDomain("example.com")
-	if !exists || first != second {
+	second, err := application.RuntimeByDomain(
+		ctx,
+		security.System(),
+		"example.com",
+	)
+	if err != nil || first != second {
 		t.Fatal("same domain did not return the same runtime")
 	}
-	other, exists := application.RuntimeByDomain("second.example.com")
-	if !exists || other == first {
+	other, err := application.RuntimeByDomain(
+		ctx,
+		security.System(),
+		"second.example.com",
+	)
+	if err != nil || other == first {
 		t.Fatal("different site did not get a distinct runtime")
 	}
 	if first.Profile() != other.Profile() {
@@ -695,27 +878,43 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 		t.Fatal("site runtime exposed mutable settings slice")
 	}
 
-	_, err = application.UpdateSiteSettings(
+	_, err = application.UpdateSite(
 		ctx,
-		1,
-		map[string]any{"unknown": "value"},
+		security.System(),
+		site.UpdateInput{
+			ID:       1,
+			Domain:   first.Site().Domain,
+			Locale:   first.Site().Locale,
+			Settings: map[string]any{"unknown": "value"},
+			IsPublic: first.Site().IsPublic,
+		},
 	)
 	var validationErrors field.ValidationErrors
 	if !errors.As(err, &validationErrors) {
 		t.Fatalf("invalid settings error = %T %v", err, err)
 	}
-	unchanged, exists := application.RuntimeByDomain("example.com")
-	if !exists || unchanged != first {
+	unchanged, lookupErr := application.RuntimeByDomain(
+		ctx,
+		security.System(),
+		"example.com",
+	)
+	if lookupErr != nil || unchanged != first {
 		t.Fatal("validation failure changed site runtime")
 	}
 	if repository.updateCallCount() != 0 {
 		t.Fatal("validation failure called site repository")
 	}
 
-	updated, err := application.UpdateSiteSettings(
+	updated, err := application.UpdateSite(
 		ctx,
-		1,
-		map[string]any{"theme": "dark"},
+		security.System(),
+		site.UpdateInput{
+			ID:       1,
+			Domain:   "renamed.example.com",
+			Locale:   first.Site().Locale,
+			Settings: map[string]any{"theme": "dark"},
+			IsPublic: true,
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -723,8 +922,21 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	if updated.Site().Settings["theme"] != "dark" {
 		t.Fatalf("updated settings = %#v", updated.Site().Settings)
 	}
-	currentByDomain, exists := application.RuntimeByDomain("example.com")
-	if !exists || currentByDomain != updated || currentByDomain == first {
+	if _, lookupErr := application.RuntimeByDomain(
+		ctx,
+		security.System(),
+		"example.com",
+	); !errors.Is(lookupErr, site.ErrNotFound) {
+		t.Fatalf("old domain still resolves: %v", lookupErr)
+	}
+	currentByDomain, lookupErr := application.RuntimeByDomain(
+		ctx,
+		security.System(),
+		"renamed.example.com",
+	)
+	if lookupErr != nil ||
+		currentByDomain != updated ||
+		currentByDomain == first {
 		t.Fatal("successful settings update did not replace runtime")
 	}
 	if repository.updateCallCount() != 1 {
@@ -732,26 +944,39 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	}
 
 	repository.setUpdateError(errors.New("update unavailable"))
-	_, err = application.UpdateSiteSettings(
+	_, err = application.UpdateSite(
 		ctx,
-		1,
-		map[string]any{"theme": "broken"},
+		security.System(),
+		site.UpdateInput{
+			ID:       1,
+			Domain:   updated.Site().Domain,
+			Locale:   updated.Site().Locale,
+			Settings: map[string]any{"theme": "broken"},
+			IsPublic: updated.Site().IsPublic,
+		},
 	)
 	if err == nil || !strings.Contains(err.Error(), "update unavailable") {
 		t.Fatalf("repository update error = %v", err)
 	}
-	preservedAfterUpdateError, exists := application.RuntimeByDomain(
-		"example.com",
+	preservedAfterUpdateError, lookupErr := application.RuntimeByDomain(
+		ctx,
+		security.System(),
+		"renamed.example.com",
 	)
-	if !exists || preservedAfterUpdateError != updated {
+	if lookupErr != nil || preservedAfterUpdateError != updated {
 		t.Fatal("repository failure changed site runtime")
 	}
 	repository.setUpdateError(nil)
 
-	if _, err := application.UpdateSiteSettings(
+	if _, err := application.UpdateSite(
 		ctx,
-		999,
-		map[string]any{"theme": "missing"},
+		security.System(),
+		site.UpdateInput{
+			ID:       999,
+			Domain:   "missing.example.com",
+			Locale:   "en-US",
+			Settings: map[string]any{"theme": "missing"},
+		},
 	); !errors.Is(err, site.ErrNotFound) {
 		t.Fatalf("missing site update error = %v", err)
 	}
@@ -777,9 +1002,13 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	if err := application.ReloadSites(ctx); err != nil {
 		t.Fatal(err)
 	}
-	current, exists := application.RuntimeByDomain("new.example.com")
-	if !exists {
-		t.Fatal("reloaded runtime not found")
+	current, err := application.RuntimeByDomain(
+		ctx,
+		security.System(),
+		"new.example.com",
+	)
+	if err != nil {
+		t.Fatalf("reloaded runtime not found: %v", err)
 	}
 
 	repository.set([]site.Site{
@@ -794,8 +1023,12 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	if err := application.ReloadSites(ctx); err == nil {
 		t.Fatal("expected invalid stored settings error")
 	}
-	preserved, exists := application.RuntimeByDomain("new.example.com")
-	if !exists || preserved != current {
+	preserved, lookupErr := application.RuntimeByDomain(
+		ctx,
+		security.System(),
+		"new.example.com",
+	)
+	if lookupErr != nil || preserved != current {
 		t.Fatal("invalid settings reload replaced the previous snapshot")
 	}
 
@@ -803,8 +1036,12 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	if err := application.ReloadSites(ctx); err == nil {
 		t.Fatal("expected reload error")
 	}
-	preserved, exists = application.RuntimeByDomain("new.example.com")
-	if !exists || preserved != current {
+	preserved, lookupErr = application.RuntimeByDomain(
+		ctx,
+		security.System(),
+		"new.example.com",
+	)
+	if lookupErr != nil || preserved != current {
 		t.Fatal("failed reload replaced the previous snapshot")
 	}
 
@@ -813,6 +1050,19 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	}
 	if err := application.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := application.Media(
+		ctx,
+		security.System(),
+		1,
+	); !errors.Is(err, appkernel.ErrClosed) {
+		t.Fatalf("Media after Close = %v", err)
+	}
+	if _, err := application.PermissionCodes(); !errors.Is(
+		err,
+		appkernel.ErrClosed,
+	) {
+		t.Fatalf("PermissionCodes after Close = %v", err)
 	}
 	if mainConnector.closes.Load() != 1 || logsConnector.closes.Load() != 1 {
 		t.Fatalf(
@@ -868,6 +1118,7 @@ func TestAppResourceFacades(t *testing.T) {
 
 	if _, err := application.CreateResource(
 		ctx,
+		security.System(),
 		resource.CreateInput{},
 	); !errors.Is(err, appkernel.ErrNotBooted) {
 		t.Fatalf("create before boot error = %v", err)
@@ -878,6 +1129,7 @@ func TestAppResourceFacades(t *testing.T) {
 
 	created, err := application.CreateResource(
 		ctx,
+		security.System(),
 		resource.CreateInput{
 			SiteID:   1,
 			Template: &templateCode,
@@ -893,15 +1145,15 @@ func TestAppResourceFacades(t *testing.T) {
 		t.Fatalf("created resource = %#v", created)
 	}
 
-	byID, err := application.Resource(ctx, created.ID)
+	byID, err := application.Resource(ctx, security.System(), created.ID)
 	if err != nil || byID.ID != created.ID {
 		t.Fatalf("resource by id = %#v, %v", byID, err)
 	}
-	byPath, err := application.ResourceByPath(ctx, 1, "/")
+	byPath, err := application.ResourceByPath(ctx, security.System(), 1, "/")
 	if err != nil || byPath.ID != created.ID {
 		t.Fatalf("resource by path = %#v, %v", byPath, err)
 	}
-	tree, err := application.ResourceTree(ctx, 1)
+	tree, err := application.ResourceTree(ctx, security.System(), 1)
 	if err != nil || len(tree) != 1 ||
 		tree[0].Resource.ID != created.ID {
 		t.Fatalf("resource tree = %#v, %v", tree, err)
@@ -909,6 +1161,7 @@ func TestAppResourceFacades(t *testing.T) {
 
 	updated, err := application.UpdateResource(
 		ctx,
+		security.System(),
 		resource.UpdateInput{
 			ID:           created.ID,
 			Type:         resourcetype.Page,
@@ -927,14 +1180,137 @@ func TestAppResourceFacades(t *testing.T) {
 		t.Fatalf("updated resource = %#v", updated)
 	}
 
-	if err := application.DeleteResource(ctx, created.ID); err != nil {
+	if err := application.DeleteResource(ctx, security.System(), created.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := application.Resource(
 		ctx,
+		security.System(),
 		created.ID,
 	); !errors.Is(err, resource.ErrNotFound) {
 		t.Fatalf("deleted resource error = %v", err)
+	}
+}
+
+func TestAppMediaFacades(t *testing.T) {
+	ctx := context.Background()
+	connector := newFakeConnector("main")
+	mediaRepository := newAppMediaRepository()
+	coreDatabase := &fakeCoreDatabase{
+		repository: &fakeSiteRepository{
+			sites: []site.Site{{
+				ID:          1,
+				ProfileCode: "dev",
+				Domain:      "example.com",
+				Locale:      "en-US",
+			}},
+		},
+		fileRepository: appFileRepository{
+			item: corefile.File{
+				ID:       1,
+				Name:     "image.png",
+				MIMEType: "image/png",
+				Size:     5,
+			},
+		},
+		mediaRepository: mediaRepository,
+	}
+
+	application, err := appkernel.New(ctx, appkernel.Definition{
+		MainDatabase: appkernel.DatabaseDefinition{
+			Connector: &fakeConnectorFactory{connector: connector},
+			Adapters: []kernel.ModuleDatabaseFactory{
+				&fakeDatabaseFactory{
+					code:     core.ModuleCode,
+					database: coreDatabase,
+				},
+			},
+		},
+		Profiles: []kernel.Profile{{
+			Code: "dev",
+			Modules: []kernel.ProfileModule{{
+				Module: core.Module{},
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := application.CreateMedia(
+		ctx,
+		security.System(),
+		coremedia.CreateInput{FileID: 1},
+	); !errors.Is(err, appkernel.ErrNotBooted) {
+		t.Fatalf("create media before boot error = %v", err)
+	}
+	if err := application.Boot(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	title := " Hero "
+	created, err := application.CreateMedia(
+		ctx,
+		security.System(),
+		coremedia.CreateInput{
+			FileID: 1,
+			Title:  &title,
+			Params: map[string]any{"meta_alt": "Hero"},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Title == nil || *created.Title != "Hero" {
+		t.Fatalf("created media = %#v", created)
+	}
+
+	loaded, err := application.Media(ctx, security.System(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.FileID != 1 || loaded.Params["meta_alt"] != "Hero" {
+		t.Fatalf("loaded media = %#v", loaded)
+	}
+
+	updatedTitle := "Updated"
+	updated, err := application.UpdateMedia(
+		ctx,
+		security.System(),
+		coremedia.UpdateInput{
+			ID:     created.ID,
+			FileID: 1,
+			Title:  &updatedTitle,
+			Params: map[string]any{"meta_alt": "Updated"},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title == nil || *updated.Title != updatedTitle {
+		t.Fatalf("updated media = %#v", updated)
+	}
+
+	if err := application.DeleteMedia(ctx, security.System(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.Media(
+		ctx,
+		security.System(),
+		created.ID,
+	); !errors.Is(err, coremedia.ErrNotFound) {
+		t.Fatalf("deleted media error = %v", err)
+	}
+
+	if err := application.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := application.DeleteMedia(
+		ctx,
+		security.System(),
+		created.ID,
+	); !errors.Is(err, appkernel.ErrClosed) {
+		t.Fatalf("delete media after close error = %v", err)
 	}
 }
 
