@@ -5,16 +5,24 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/vernal96/go-cms/internal/connectors/corefiles"
 	"github.com/vernal96/go-cms/internal/connectors/mainpostgres"
 	"github.com/vernal96/go-cms/internal/profiles/dev"
 	"github.com/vernal96/go-cms/kernel"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
+	"github.com/vernal96/go-cms/kernel/filesystem"
 	corepostgres "github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres"
 )
 
 type Config struct {
 	Server   ServerConfig        `envconfig:"SERVER"`
 	Postgres mainpostgres.Config `envconfig:"POSTGRES"`
+	Files    FilesConfig         `envconfig:"FILES"`
+}
+
+type FilesConfig struct {
+	Public  corefiles.Config `envconfig:"PUBLIC"`
+	Private corefiles.Config `envconfig:"PRIVATE"`
 }
 
 type ServerConfig struct {
@@ -38,6 +46,10 @@ func (c Config) Application() appkernel.Definition {
 			Adapters: []kernel.ModuleDatabaseFactory{
 				corepostgres.DatabaseFactory{},
 			},
+		},
+		Filesystems: []filesystem.Factory{
+			corefiles.PublicFactory(c.Files.Public),
+			corefiles.PrivateFactory(c.Files.Private),
 		},
 		Profiles: []kernel.Profile{dev.Profile},
 	}

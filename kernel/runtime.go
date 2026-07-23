@@ -7,6 +7,7 @@ import (
 	"reflect"
 
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 )
@@ -172,6 +173,7 @@ type ModuleContext struct {
 	profile  Profile
 	registry Registry
 	config   any
+	files    file.Service
 }
 
 func newModuleContext(
@@ -179,12 +181,14 @@ func newModuleContext(
 	profile Profile,
 	registry Registry,
 	config any,
+	files file.Service,
 ) ModuleContext {
 	return ModuleContext{
 		resolver: resolver,
 		profile:  cloneProfile(profile),
 		registry: registry,
 		config:   config,
+		files:    files,
 	}
 }
 
@@ -198,6 +202,12 @@ func (c ModuleContext) Registry() Registry {
 
 func (c ModuleContext) Config() any {
 	return c.config
+}
+
+// Files exposes the core application file service without exposing the
+// filesystem manager or any infrastructure connector to modules.
+func (c ModuleContext) Files() file.Service {
+	return c.files
 }
 
 func ModuleConfigFrom[T any](ctx ModuleContext) (T, error) {
@@ -322,18 +332,25 @@ func (r *ProfileRuntime) Templates() []template.Definition {
 
 type ProfileRuntimeFactory struct {
 	resolver DatabaseResolver
+	files    file.Service
 }
 
 func NewProfileRuntimeFactory(
 	resolver DatabaseResolver,
+	files ...file.Service,
 ) (*ProfileRuntimeFactory, error) {
 	if resolver == nil {
 		return nil, errors.New("database resolver is nil")
 	}
 
-	return &ProfileRuntimeFactory{
-		resolver: resolver,
-	}, nil
+	factory := &ProfileRuntimeFactory{resolver: resolver}
+	if len(files) > 1 {
+		return nil, errors.New("more than one file service was provided")
+	}
+	if len(files) == 1 {
+		factory.files = files[0]
+	}
+	return factory, nil
 }
 
 func (f *ProfileRuntimeFactory) Make(
@@ -448,6 +465,7 @@ func (f *ProfileRuntimeFactory) Make(
 			profile,
 			registry,
 			profileModule.Config,
+			f.files,
 		)
 
 		runtime, err := module.Build(ctx, moduleContext)

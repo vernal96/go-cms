@@ -9,6 +9,7 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 )
@@ -74,6 +75,48 @@ func (m registryModule) Build(
 
 type registryRuntime struct {
 	code kernel.ModuleCode
+}
+
+type markerFileService struct {
+	corefile.Service
+}
+
+type fileAwareModule struct {
+	expected corefile.Service
+}
+
+func (*fileAwareModule) Code() kernel.ModuleCode {
+	return "file-aware"
+}
+
+func (m *fileAwareModule) Build(
+	_ context.Context,
+	ctx kernel.ModuleContext,
+) (kernel.ModuleRuntime, error) {
+	if ctx.Files() != m.expected {
+		return nil, errors.New("module did not receive configured file service")
+	}
+	return registryRuntime{code: m.Code()}, nil
+}
+
+func TestProfileRuntimeInjectsOnlyFileServicePort(t *testing.T) {
+	files := &markerFileService{}
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		files,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := &fileAwareModule{expected: files}
+	if _, err := factory.Make(context.Background(), kernel.Profile{
+		Code: "files",
+		Modules: []kernel.ProfileModule{
+			{Module: module},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (r registryRuntime) ModuleCode() kernel.ModuleCode {

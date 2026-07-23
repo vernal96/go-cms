@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/console"
+	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
@@ -34,6 +37,7 @@ type DatabaseDefinition struct {
 type Definition struct {
 	MainDatabase        DatabaseDefinition
 	AdditionalDatabases []DatabaseDefinition
+	Filesystems         []filesystem.Factory
 	Profiles            []kernel.Profile
 }
 
@@ -48,6 +52,7 @@ type App struct {
 	main          *bindingRuntime
 	additional    map[kernel.ConnectionCode]*bindingRuntime
 	connectors    []kernel.DBConnector
+	filesystems   *filesystem.Manager
 	coreDatabase  core.Database
 	migrationPlan []migrations.Plan
 	seedPlan      []seeds.Plan
@@ -57,6 +62,7 @@ type App struct {
 	profileRuntimes map[kernel.ProfileCode]*kernel.ProfileRuntime
 	sites           *site.Catalog
 	resources       *resource.Service
+	files           corefile.Service
 
 	bootOnce sync.Once
 	bootErr  error
@@ -96,6 +102,12 @@ func New(
 
 		resultErr = errors.Join(resultErr, application.Close())
 	}()
+
+	filesystems, err := filesystem.NewManager(ctx, definition.Filesystems)
+	if err != nil {
+		return nil, err
+	}
+	application.filesystems = filesystems
 
 	definitions := make(
 		[]DatabaseDefinition,
@@ -138,6 +150,11 @@ func New(
 	if coreDatabase.Resources() == nil {
 		return nil, errors.New(
 			"main core database has nil resource repository",
+		)
+	}
+	if coreDatabase.Files() == nil {
+		return nil, errors.New(
+			"main core database has nil file repository",
 		)
 	}
 	application.coreDatabase = coreDatabase
@@ -184,7 +201,15 @@ func (a *App) boot(ctx context.Context) error {
 		return err
 	}
 
-	factory, err := kernel.NewProfileRuntimeFactory(a)
+	fileService, err := corefile.NewService(
+		a.coreDatabase.Files(),
+		a.filesystems,
+	)
+	if err != nil {
+		return err
+	}
+
+	factory, err := kernel.NewProfileRuntimeFactory(a, fileService)
 	if err != nil {
 		return err
 	}
@@ -238,6 +263,7 @@ func (a *App) boot(ctx context.Context) error {
 	a.profileRuntimes = profileRuntimes
 	a.sites = catalog
 	a.resources = resourceService
+	a.files = fileService
 	a.booted.Store(true)
 	return nil
 }
@@ -458,6 +484,227 @@ func (a *App) resourceService() (*resource.Service, error) {
 	return a.resources, nil
 }
 
+func (a *App) CreateFileFolder(
+	ctx context.Context,
+	input corefile.CreateFolderInput,
+) (corefile.Folder, error) {
+	service, err := a.fileService()
+	if err != nil {
+		return corefile.Folder{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return corefile.Folder{}, ErrClosed
+	}
+	return service.CreateFolder(ctx, input)
+}
+
+func (a *App) FileFolder(
+	ctx context.Context,
+	id corefile.FolderID,
+) (corefile.Folder, error) {
+	service, err := a.fileService()
+	if err != nil {
+		return corefile.Folder{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return corefile.Folder{}, ErrClosed
+	}
+	return service.GetFolder(ctx, id)
+}
+
+func (a *App) ListFileFolder(
+	ctx context.Context,
+	storage filesystem.Code,
+	id *corefile.FolderID,
+) (corefile.Listing, error) {
+	service, err := a.fileService()
+	if err != nil {
+		return corefile.Listing{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return corefile.Listing{}, ErrClosed
+	}
+	return service.ListFolder(ctx, storage, id)
+}
+
+func (a *App) UploadFile(
+	ctx context.Context,
+	input corefile.UploadInput,
+) (corefile.File, error) {
+	service, err := a.fileService()
+	if err != nil {
+		return corefile.File{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return corefile.File{}, ErrClosed
+	}
+	return service.Upload(ctx, input)
+}
+
+func (a *App) File(
+	ctx context.Context,
+	id corefile.ID,
+) (corefile.File, error) {
+	service, err := a.fileService()
+	if err != nil {
+		return corefile.File{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return corefile.File{}, ErrClosed
+	}
+	return service.GetFile(ctx, id)
+}
+
+func (a *App) OpenFile(
+	ctx context.Context,
+	id corefile.ID,
+) (corefile.OpenedFile, error) {
+	service, err := a.fileService()
+	if err != nil {
+		return corefile.OpenedFile{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return corefile.OpenedFile{}, ErrClosed
+	}
+	return service.Open(ctx, id)
+}
+
+func (a *App) OpenFileDelivery(
+	ctx context.Context,
+	id corefile.ID,
+	authorization corefile.DeliveryAuthorization,
+) (corefile.OpenedFile, error) {
+	service, err := a.fileService()
+	if err != nil {
+		return corefile.OpenedFile{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return corefile.OpenedFile{}, ErrClosed
+	}
+	return service.OpenDelivery(ctx, id, authorization)
+}
+
+func (a *App) MoveFile(
+	ctx context.Context,
+	input corefile.MoveFileInput,
+) (corefile.File, error) {
+	service, err := a.fileService()
+	if err != nil {
+		return corefile.File{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return corefile.File{}, ErrClosed
+	}
+	return service.MoveFile(ctx, input)
+}
+
+func (a *App) MoveFileFolder(
+	ctx context.Context,
+	input corefile.MoveFolderInput,
+) (corefile.Folder, error) {
+	service, err := a.fileService()
+	if err != nil {
+		return corefile.Folder{}, err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return corefile.Folder{}, ErrClosed
+	}
+	return service.MoveFolder(ctx, input)
+}
+
+func (a *App) DeleteFile(ctx context.Context, id corefile.ID) error {
+	service, err := a.fileService()
+	if err != nil {
+		return err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return ErrClosed
+	}
+	return service.DeleteFile(ctx, id)
+}
+
+func (a *App) DeleteFileFolder(
+	ctx context.Context,
+	id corefile.FolderID,
+) error {
+	service, err := a.fileService()
+	if err != nil {
+		return err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return ErrClosed
+	}
+	return service.DeleteFolder(ctx, id)
+}
+
+func (a *App) FileURL(
+	ctx context.Context,
+	id corefile.ID,
+) (string, error) {
+	service, err := a.fileService()
+	if err != nil {
+		return "", err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return "", ErrClosed
+	}
+	return service.URL(ctx, id)
+}
+
+func (a *App) TemporaryFileURL(
+	ctx context.Context,
+	id corefile.ID,
+	expiresAt time.Time,
+) (string, error) {
+	service, err := a.fileService()
+	if err != nil {
+		return "", err
+	}
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return "", ErrClosed
+	}
+	return service.TemporaryURL(ctx, id, expiresAt)
+}
+
+func (a *App) fileService() (corefile.Service, error) {
+	if a == nil {
+		return nil, errors.New("app is nil")
+	}
+	if !a.booted.Load() {
+		return nil, ErrNotBooted
+	}
+	if a.files == nil {
+		return nil, errors.New("file service is nil")
+	}
+	return a.files, nil
+}
+
 func (a *App) MigrationPlans() []migrations.Plan {
 	if a == nil {
 		return nil
@@ -542,6 +789,11 @@ func (a *App) Close() error {
 					connector.Code(),
 					err,
 				))
+			}
+		}
+		if a.filesystems != nil {
+			if err := a.filesystems.Close(); err != nil {
+				closeErrors = append(closeErrors, err)
 			}
 		}
 
@@ -858,6 +1110,33 @@ func validateSource(
 }
 
 func validateDefinition(definition Definition) error {
+	filesystemCodes := make(
+		map[filesystem.Code]struct{},
+		len(definition.Filesystems),
+	)
+	for index, factory := range definition.Filesystems {
+		if factory == nil {
+			return fmt.Errorf(
+				"filesystem factory at index %d is nil",
+				index,
+			)
+		}
+		code := factory.Code()
+		if code == "" {
+			return fmt.Errorf(
+				"filesystem factory at index %d has empty code",
+				index,
+			)
+		}
+		if _, exists := filesystemCodes[code]; exists {
+			return fmt.Errorf(
+				"filesystem disk %q is defined more than once",
+				code,
+			)
+		}
+		filesystemCodes[code] = struct{}{}
+	}
+
 	definitions := make(
 		[]DatabaseDefinition,
 		0,
@@ -962,6 +1241,10 @@ func validateDefinition(definition Definition) error {
 }
 
 func cloneDefinition(definition Definition) Definition {
+	definition.Filesystems = append(
+		[]filesystem.Factory(nil),
+		definition.Filesystems...,
+	)
 	definition.MainDatabase.Adapters = append(
 		[]ModuleDatabaseFactory(nil),
 		definition.MainDatabase.Adapters...,

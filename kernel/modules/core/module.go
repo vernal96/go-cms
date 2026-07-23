@@ -6,6 +6,7 @@ import (
 
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
@@ -19,6 +20,7 @@ type Database interface {
 	kernel.ModuleDatabase
 	Sites() site.Repository
 	Resources() resource.Repository
+	Files() file.Repository
 }
 
 type Module struct{}
@@ -52,6 +54,9 @@ func (Module) Build(
 	}
 	if database.Resources() == nil {
 		return nil, errors.New("core resource repository is nil")
+	}
+	if database.Files() == nil {
+		return nil, errors.New("core file repository is nil")
 	}
 
 	return &Runtime{database: database}, nil

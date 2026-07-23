@@ -19,6 +19,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
@@ -199,6 +200,13 @@ func (d *fakeCoreDatabase) Resources() resource.Repository {
 		return d.resourceRepository
 	}
 	return fakeResourceRepository{}
+}
+func (*fakeCoreDatabase) Files() corefile.Repository {
+	return fakeFileRepository{}
+}
+
+type fakeFileRepository struct {
+	corefile.Repository
 }
 
 type fakeResourceRepository struct{}

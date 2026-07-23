@@ -6,6 +6,7 @@ import (
 	projectconfig "github.com/vernal96/go-cms/internal/config"
 	"github.com/vernal96/go-cms/internal/connectors/mainpostgres"
 	configloader "github.com/vernal96/go-cms/kernel/config"
+	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 )
 
@@ -17,6 +18,11 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	t.Setenv("POSTGRES_DB", "cms")
 	t.Setenv("POSTGRES_USER", "cms")
 	t.Setenv("POSTGRES_PASSWORD", "secret")
+	t.Setenv("FILES_PUBLIC_DRIVER", "local")
+	t.Setenv("FILES_PUBLIC_LOCAL_ROOT", "/tmp/cms-public")
+	t.Setenv("FILES_PRIVATE_DRIVER", "s3")
+	t.Setenv("FILES_PRIVATE_S3_REGION", "us-east-1")
+	t.Setenv("FILES_PRIVATE_S3_BUCKET", "cms-private")
 
 	config, err := configloader.Load[projectconfig.Config]("")
 	if err != nil {
@@ -39,5 +45,10 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	}
 	if len(definition.Profiles) != 1 || definition.Profiles[0].Code != "dev" {
 		t.Fatalf("profiles = %#v", definition.Profiles)
+	}
+	if len(definition.Filesystems) != 2 ||
+		definition.Filesystems[0].Code() != filesystem.Code("public") ||
+		definition.Filesystems[1].Code() != filesystem.Code("private") {
+		t.Fatalf("filesystem factories = %#v", definition.Filesystems)
 	}
 }

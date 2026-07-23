@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -14,6 +16,7 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
@@ -119,7 +122,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 2 || !hasVersion || dirty {
+	if version != 3 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,
@@ -131,18 +134,24 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	var sitesTable *string
 	var resourcesTable *string
 	var resourcePathIndex *string
+	var fileFoldersTable *string
+	var filesTable *string
 	if err := connector.Pool().QueryRow(
 		ctx,
 		`
 SELECT
     to_regclass('core.sites')::text,
     to_regclass('core.resources')::text,
-    to_regclass('core.uq_resources_site_path')::text;
+    to_regclass('core.uq_resources_site_path')::text,
+    to_regclass('core.file_folders')::text,
+    to_regclass('core.files')::text;
 `,
 	).Scan(
 		&sitesTable,
 		&resourcesTable,
 		&resourcePathIndex,
+		&fileFoldersTable,
+		&filesTable,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -159,6 +168,115 @@ SELECT
 			"resource path index = %#v",
 			resourcePathIndex,
 		)
+	}
+	if fileFoldersTable == nil ||
+		*fileFoldersTable != "core.file_folders" {
+		t.Fatalf("core.file_folders = %#v", fileFoldersTable)
+	}
+	if filesTable == nil || *filesTable != "core.files" {
+		t.Fatalf("core.files = %#v", filesTable)
+	}
+
+	if _, err := connector.Pool().Exec(ctx, `
+DELETE FROM core.files;
+DELETE FROM core.file_folders;
+`); err != nil {
+		t.Fatal(err)
+	}
+	fileRepository := database.Files()
+	sourceFolder, err := fileRepository.CreateFolder(ctx, corefile.Folder{
+		Storage: "public",
+		Name:    "source",
+	})
+	if err != nil {
+		t.Fatalf("create file folder: %v", err)
+	}
+	namespaceFolder, err := fileRepository.CreateFolder(ctx, corefile.Folder{
+		Storage: "public",
+		Name:    "shared",
+	})
+	if err != nil {
+		t.Fatalf("create namespace folder: %v", err)
+	}
+	checksum := sha256.Sum256([]byte("original"))
+	_, err = fileRepository.CreateFile(ctx, corefile.File{
+		Storage:        "public",
+		Name:           "shared",
+		MIMEType:       "text/plain",
+		Size:           8,
+		ChecksumSHA256: hex.EncodeToString(checksum[:]),
+		Path:           "objects/shared",
+	})
+	if !errors.Is(err, corefile.ErrConflict) {
+		t.Fatalf("shared file/folder namespace error = %v", err)
+	}
+	original, err := fileRepository.CreateFile(ctx, corefile.File{
+		FolderID:       &sourceFolder.ID,
+		Storage:        "public",
+		Name:           "original.txt",
+		MIMEType:       "text/plain",
+		Size:           8,
+		ChecksumSHA256: hex.EncodeToString(checksum[:]),
+		Path:           "objects/original",
+	})
+	if err != nil {
+		t.Fatalf("create original file: %v", err)
+	}
+	derivedChecksum := sha256.Sum256([]byte("derived"))
+	derived, err := fileRepository.CreateFile(ctx, corefile.File{
+		Storage:        "private",
+		Name:           "derived.txt",
+		MIMEType:       "text/plain",
+		Size:           7,
+		ChecksumSHA256: hex.EncodeToString(derivedChecksum[:]),
+		Path:           "objects/derived",
+		ParentID:       &original.ID,
+	})
+	if err != nil {
+		t.Fatalf("create cross-storage derived file: %v", err)
+	}
+	physicalFailure := errors.New("physical delete failed")
+	if err := fileRepository.DeleteFolder(
+		ctx,
+		sourceFolder.ID,
+		func(context.Context, []corefile.File) error {
+			return physicalFailure
+		},
+	); !errors.Is(err, physicalFailure) {
+		t.Fatalf("delete rollback error = %v", err)
+	}
+	if _, err := fileRepository.FileByID(
+		ctx,
+		original.ID,
+	); err != nil {
+		t.Fatalf("delete failure removed metadata: %v", err)
+	}
+	var deletionPlan []corefile.File
+	if err := fileRepository.DeleteFolder(
+		ctx,
+		sourceFolder.ID,
+		func(_ context.Context, items []corefile.File) error {
+			deletionPlan = append(deletionPlan, items...)
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("delete file folder: %v", err)
+	}
+	if len(deletionPlan) != 2 {
+		t.Fatalf("cross-storage deletion plan = %#v", deletionPlan)
+	}
+	if _, err := fileRepository.FileByID(
+		ctx,
+		derived.ID,
+	); !errors.Is(err, corefile.ErrNotFound) {
+		t.Fatalf("derived metadata after folder delete = %v", err)
+	}
+	if err := fileRepository.DeleteFolder(
+		ctx,
+		namespaceFolder.ID,
+		func(context.Context, []corefile.File) error { return nil },
+	); err != nil {
+		t.Fatalf("delete namespace folder: %v", err)
 	}
 
 	seedPlan := seeds.Plan{
@@ -566,7 +684,7 @@ VALUES ($1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
 	}
 
 	restoreMigration = true
-	if err := manager.Down(ctx, plan, 2); err != nil {
+	if err := manager.Down(ctx, plan, 3); err != nil {
 		t.Fatalf("down: %v", err)
 	}
 
