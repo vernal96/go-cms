@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -66,7 +67,9 @@ ORDER BY id;
 
 		item.Settings = make(map[string]any)
 		if len(rawSettings) > 0 {
-			if err := json.Unmarshal(rawSettings, &item.Settings); err != nil {
+			decoder := json.NewDecoder(bytes.NewReader(rawSettings))
+			decoder.UseNumber()
+			if err := decoder.Decode(&item.Settings); err != nil {
 				return nil, fmt.Errorf(
 					"decode settings for site %d: %w",
 					item.ID,
@@ -83,6 +86,43 @@ ORDER BY id;
 	}
 
 	return sites, nil
+}
+
+func (r *Repository) UpdateSettings(
+	ctx context.Context,
+	id site.ID,
+	settings map[string]any,
+) error {
+	if ctx == nil {
+		return errors.New("update site settings context is nil")
+	}
+	if id <= 0 {
+		return errors.New("invalid site id")
+	}
+	if settings == nil {
+		settings = map[string]any{}
+	}
+
+	rawSettings, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("encode settings for site %d: %w", id, err)
+	}
+
+	commandTag, err := r.connector.Pool().Exec(ctx, `
+UPDATE core.sites
+SET
+    settings = $2::jsonb,
+    updated_at = now()
+WHERE id = $1;
+`, id, string(rawSettings))
+	if err != nil {
+		return fmt.Errorf("update settings for core site %d: %w", id, err)
+	}
+	if commandTag.RowsAffected() == 0 {
+		return site.ErrNotFound
+	}
+
+	return nil
 }
 
 var _ site.Repository = (*Repository)(nil)

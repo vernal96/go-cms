@@ -39,6 +39,14 @@ func (repository) List(context.Context) ([]site.Site, error) {
 	}, nil
 }
 
+func (repository) UpdateSettings(
+	context.Context,
+	site.ID,
+	map[string]any,
+) error {
+	return nil
+}
+
 type database struct{}
 
 func (database) ModuleCode() kernel.ModuleCode { return core.ModuleCode }

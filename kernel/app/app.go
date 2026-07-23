@@ -11,6 +11,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/console"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
@@ -280,6 +281,31 @@ func (a *App) ReloadSites(ctx context.Context) error {
 	}
 
 	return a.sites.Reload(ctx)
+}
+
+func (a *App) UpdateSiteSettings(
+	ctx context.Context,
+	id site.ID,
+	values map[string]any,
+) (*site.Runtime, error) {
+	if a == nil {
+		return nil, errors.New("app is nil")
+	}
+	if ctx == nil {
+		return nil, errors.New("site settings update context is nil")
+	}
+	if !a.booted.Load() {
+		return nil, ErrNotBooted
+	}
+
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+
+	return a.sites.UpdateSettings(ctx, id, values)
 }
 
 func (a *App) MigrationPlans() []migrations.Plan {
@@ -806,6 +832,9 @@ func cloneDefinition(definition Definition) Definition {
 		definition.Profiles[index].Modules = append(
 			[]kernel.ProfileModule(nil),
 			definition.Profiles[index].Modules...,
+		)
+		definition.Profiles[index].Params = field.CloneDefinitions(
+			definition.Profiles[index].Params,
 		)
 	}
 

@@ -18,6 +18,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/console"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
@@ -102,11 +103,13 @@ func (f *fakeConnectorFactory) Open(
 }
 
 type fakeSiteRepository struct {
-	mu         sync.Mutex
-	sites      []site.Site
-	err        error
-	calls      int
-	beforeList func()
+	mu          sync.Mutex
+	sites       []site.Site
+	err         error
+	updateErr   error
+	calls       int
+	updateCalls int
+	beforeList  func()
 }
 
 func (r *fakeSiteRepository) List(context.Context) ([]site.Site, error) {
@@ -124,6 +127,37 @@ func (r *fakeSiteRepository) List(context.Context) ([]site.Site, error) {
 	return append([]site.Site(nil), r.sites...), nil
 }
 
+func (r *fakeSiteRepository) UpdateSettings(
+	_ context.Context,
+	id site.ID,
+	settings map[string]any,
+) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.updateCalls++
+	if r.updateErr != nil {
+		return r.updateErr
+	}
+	if r.err != nil {
+		return r.err
+	}
+
+	for index := range r.sites {
+		if r.sites[index].ID != id {
+			continue
+		}
+
+		r.sites[index].Settings = make(map[string]any, len(settings))
+		for key, value := range settings {
+			r.sites[index].Settings[key] = value
+		}
+		return nil
+	}
+
+	return site.ErrNotFound
+}
+
 func (r *fakeSiteRepository) set(items []site.Site, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -135,6 +169,18 @@ func (r *fakeSiteRepository) callCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.calls
+}
+
+func (r *fakeSiteRepository) setUpdateError(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.updateErr = err
+}
+
+func (r *fakeSiteRepository) updateCallCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.updateCalls
 }
 
 type fakeCoreDatabase struct {
@@ -285,7 +331,10 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 				ProfileCode: "dev",
 				Domain:      "Example.COM.",
 				Locale:      "ru-RU",
-				Settings:    map[string]any{"theme": "light"},
+				Settings: map[string]any{
+					"theme": "light",
+					"roles": []any{"admin"},
+				},
 			},
 			{
 				ID:          2,
@@ -329,6 +378,24 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 		Profiles: []kernel.Profile{
 			{
 				Code: "dev",
+				Params: []field.Definition{
+					{
+						Key:   "theme",
+						Type:  field.TypeString,
+						Label: "Theme",
+					},
+					{
+						Key:   "roles",
+						Type:  field.TypeSelect,
+						Label: "Roles",
+						Options: field.SelectOptions{
+							Multiple: true,
+							Choices: []field.Choice{
+								{Value: "admin", Label: "Admin"},
+							},
+						},
+					},
+				},
 				Modules: []kernel.ProfileModule{
 					{Module: core.Module{}},
 					{
@@ -358,6 +425,13 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	}
 	if err := application.ReloadSites(ctx); !errors.Is(err, appkernel.ErrNotBooted) {
 		t.Fatalf("ReloadSites before Boot = %v", err)
+	}
+	if _, err := application.UpdateSiteSettings(
+		ctx,
+		1,
+		map[string]any{"theme": "dark"},
+	); !errors.Is(err, appkernel.ErrNotBooted) {
+		t.Fatalf("UpdateSiteSettings before Boot = %v", err)
 	}
 	if _, exists := mainConnector.version(migrations.DefaultHistoryTable); exists {
 		t.Fatal("New applied migrations")
@@ -449,6 +523,72 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	if first.Profile() != other.Profile() {
 		t.Fatal("sites of one profile do not share profile runtime")
 	}
+	firstCopy := first.Site()
+	firstCopy.Settings["roles"].([]string)[0] = "mutated"
+	if first.Site().Settings["roles"].([]string)[0] != "admin" {
+		t.Fatal("site runtime exposed mutable settings slice")
+	}
+
+	_, err = application.UpdateSiteSettings(
+		ctx,
+		1,
+		map[string]any{"unknown": "value"},
+	)
+	var validationErrors field.ValidationErrors
+	if !errors.As(err, &validationErrors) {
+		t.Fatalf("invalid settings error = %T %v", err, err)
+	}
+	unchanged, exists := application.RuntimeByDomain("example.com")
+	if !exists || unchanged != first {
+		t.Fatal("validation failure changed site runtime")
+	}
+	if repository.updateCallCount() != 0 {
+		t.Fatal("validation failure called site repository")
+	}
+
+	updated, err := application.UpdateSiteSettings(
+		ctx,
+		1,
+		map[string]any{"theme": "dark"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Site().Settings["theme"] != "dark" {
+		t.Fatalf("updated settings = %#v", updated.Site().Settings)
+	}
+	currentByDomain, exists := application.RuntimeByDomain("example.com")
+	if !exists || currentByDomain != updated || currentByDomain == first {
+		t.Fatal("successful settings update did not replace runtime")
+	}
+	if repository.updateCallCount() != 1 {
+		t.Fatalf("repository update calls = %d", repository.updateCallCount())
+	}
+
+	repository.setUpdateError(errors.New("update unavailable"))
+	_, err = application.UpdateSiteSettings(
+		ctx,
+		1,
+		map[string]any{"theme": "broken"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "update unavailable") {
+		t.Fatalf("repository update error = %v", err)
+	}
+	preservedAfterUpdateError, exists := application.RuntimeByDomain(
+		"example.com",
+	)
+	if !exists || preservedAfterUpdateError != updated {
+		t.Fatal("repository failure changed site runtime")
+	}
+	repository.setUpdateError(nil)
+
+	if _, err := application.UpdateSiteSettings(
+		ctx,
+		999,
+		map[string]any{"theme": "missing"},
+	); !errors.Is(err, site.ErrNotFound) {
+		t.Fatalf("missing site update error = %v", err)
+	}
 
 	consoleOutput.Reset()
 	if err := application.Console().Run(
@@ -476,11 +616,28 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 		t.Fatal("reloaded runtime not found")
 	}
 
+	repository.set([]site.Site{
+		{
+			ID:          4,
+			ProfileCode: "dev",
+			Domain:      "invalid.example.com",
+			Locale:      "en-US",
+			Settings:    map[string]any{"unknown": true},
+		},
+	}, nil)
+	if err := application.ReloadSites(ctx); err == nil {
+		t.Fatal("expected invalid stored settings error")
+	}
+	preserved, exists := application.RuntimeByDomain("new.example.com")
+	if !exists || preserved != current {
+		t.Fatal("invalid settings reload replaced the previous snapshot")
+	}
+
 	repository.set(nil, errors.New("database unavailable"))
 	if err := application.ReloadSites(ctx); err == nil {
 		t.Fatal("expected reload error")
 	}
-	preserved, exists := application.RuntimeByDomain("new.example.com")
+	preserved, exists = application.RuntimeByDomain("new.example.com")
 	if !exists || preserved != current {
 		t.Fatal("failed reload replaced the previous snapshot")
 	}

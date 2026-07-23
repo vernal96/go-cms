@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 )
 
@@ -21,6 +22,12 @@ type Module struct{}
 
 func (Module) Code() kernel.ModuleCode {
 	return ModuleCode
+}
+
+func (Module) Registry() kernel.ModuleRegistry {
+	return kernel.ModuleRegistry{
+		FieldTypes: field.StandardTypes(),
+	}
 }
 
 func (Module) Build(
@@ -56,4 +63,5 @@ func (r *Runtime) Database() Database {
 }
 
 var _ kernel.Module = Module{}
+var _ kernel.RegistryProvider = Module{}
 var _ kernel.ModuleRuntime = (*Runtime)(nil)

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 )
 
 type ModuleCode string
@@ -12,6 +15,7 @@ type ProfileCode string
 type Profile struct {
 	Code    ProfileCode
 	Modules []ProfileModule
+	Params  []field.Definition
 }
 
 type ProfileModule struct {
@@ -30,15 +34,26 @@ type ModuleRuntime interface {
 
 type Registry interface {
 	Module(ModuleCode) (ModuleRuntime, bool)
+	FieldType(field.TypeCode) (field.Type, bool)
+}
+
+type ModuleRegistry struct {
+	FieldTypes []field.Type
+}
+
+type RegistryProvider interface {
+	Registry() ModuleRegistry
 }
 
 type RuntimeRegistry struct {
-	modules map[ModuleCode]ModuleRuntime
+	modules    map[ModuleCode]ModuleRuntime
+	fieldTypes map[field.TypeCode]field.Type
 }
 
 func newRuntimeRegistry() *RuntimeRegistry {
 	return &RuntimeRegistry{
-		modules: make(map[ModuleCode]ModuleRuntime),
+		modules:    make(map[ModuleCode]ModuleRuntime),
+		fieldTypes: make(map[field.TypeCode]field.Type),
 	}
 }
 
@@ -47,6 +62,13 @@ func (r *RuntimeRegistry) Module(
 ) (ModuleRuntime, bool) {
 	runtime, exists := r.modules[code]
 	return runtime, exists
+}
+
+func (r *RuntimeRegistry) FieldType(
+	code field.TypeCode,
+) (field.Type, bool) {
+	fieldType, exists := r.fieldTypes[code]
+	return fieldType, exists
 }
 
 func (r *RuntimeRegistry) add(runtime ModuleRuntime) error {
@@ -68,6 +90,36 @@ func (r *RuntimeRegistry) add(runtime ModuleRuntime) error {
 
 	r.modules[code] = runtime
 	return nil
+}
+
+func (r *RuntimeRegistry) addFieldType(
+	fieldType field.Type,
+) error {
+	if fieldType == nil || isNilValue(fieldType) {
+		return errors.New("field type is nil")
+	}
+
+	code := fieldType.Code()
+	if code == "" {
+		return errors.New("field type code is empty")
+	}
+	if _, exists := r.fieldTypes[code]; exists {
+		return fmt.Errorf("field type %q already exists", code)
+	}
+
+	r.fieldTypes[code] = fieldType
+	return nil
+}
+
+func isNilValue(value any) bool {
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 type ModuleContext struct {
@@ -173,17 +225,20 @@ func ModuleDatabaseFrom[T ModuleDatabase](
 }
 
 type ProfileRuntime struct {
-	profile  Profile
-	registry Registry
+	profile     Profile
+	registry    Registry
+	paramSchema *field.Schema
 }
 
 func newProfileRuntime(
 	profile Profile,
 	registry Registry,
+	paramSchema *field.Schema,
 ) *ProfileRuntime {
 	return &ProfileRuntime{
-		profile:  cloneProfile(profile),
-		registry: registry,
+		profile:     cloneProfile(profile),
+		registry:    registry,
+		paramSchema: paramSchema,
 	}
 }
 
@@ -193,6 +248,10 @@ func (r *ProfileRuntime) Profile() Profile {
 
 func (r *ProfileRuntime) Registry() Registry {
 	return r.registry
+}
+
+func (r *ProfileRuntime) ParamSchema() *field.Schema {
+	return r.paramSchema
 }
 
 type ProfileRuntimeFactory struct {
@@ -266,6 +325,33 @@ func (f *ProfileRuntimeFactory) Make(
 	registry := newRuntimeRegistry()
 
 	for _, profileModule := range profile.Modules {
+		provider, ok := profileModule.Module.(RegistryProvider)
+		if !ok {
+			continue
+		}
+
+		for index, fieldType := range provider.Registry().FieldTypes {
+			if err := registry.addFieldType(fieldType); err != nil {
+				return nil, fmt.Errorf(
+					"register field type at index %d from module %q: %w",
+					index,
+					profileModule.Module.Code(),
+					err,
+				)
+			}
+		}
+	}
+
+	paramSchema, err := field.Compile(profile.Params, registry)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"compile params for profile %q: %w",
+			profile.Code,
+			err,
+		)
+	}
+
+	for _, profileModule := range profile.Modules {
 		module := profileModule.Module
 
 		moduleContext := newModuleContext(
@@ -305,7 +391,7 @@ func (f *ProfileRuntimeFactory) Make(
 		}
 	}
 
-	return newProfileRuntime(profile, registry), nil
+	return newProfileRuntime(profile, registry, paramSchema), nil
 }
 
 func cloneProfile(profile Profile) Profile {
@@ -313,6 +399,7 @@ func cloneProfile(profile Profile) Profile {
 		[]ProfileModule(nil),
 		profile.Modules...,
 	)
+	profile.Params = field.CloneDefinitions(profile.Params)
 
 	return profile
 }

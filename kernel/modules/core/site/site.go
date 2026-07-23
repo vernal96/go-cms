@@ -14,6 +14,8 @@ import (
 
 type ID int64
 
+var ErrNotFound = errors.New("site not found")
+
 type Site struct {
 	ID          ID
 	ProfileCode kernel.ProfileCode
@@ -24,6 +26,7 @@ type Site struct {
 
 type Repository interface {
 	List(context.Context) ([]Site, error)
+	UpdateSettings(context.Context, ID, map[string]any) error
 }
 
 type Runtime struct {
@@ -66,7 +69,16 @@ func NewRuntime(
 		)
 	}
 
-	item.Settings = cloneSettings(item.Settings)
+	paramSchema := profileRuntime.ParamSchema()
+	if paramSchema == nil {
+		return nil, errors.New("profile param schema is nil")
+	}
+
+	settings, err := paramSchema.Validate(item.Settings)
+	if err != nil {
+		return nil, fmt.Errorf("validate site settings: %w", err)
+	}
+	item.Settings = cloneSettings(settings)
 
 	return &Runtime{
 		site:           item,
@@ -92,14 +104,15 @@ type ProfileResolver interface {
 
 type runtimeSnapshot struct {
 	byDomain map[string]*Runtime
+	byID     map[ID]*Runtime
 }
 
 type Catalog struct {
 	repository Repository
 	profiles   ProfileResolver
 
-	snapshot atomic.Pointer[runtimeSnapshot]
-	reloadMu sync.Mutex
+	snapshot   atomic.Pointer[runtimeSnapshot]
+	mutationMu sync.Mutex
 }
 
 func NewCatalog(
@@ -121,6 +134,7 @@ func NewCatalog(
 
 	catalog.snapshot.Store(&runtimeSnapshot{
 		byDomain: make(map[string]*Runtime),
+		byID:     make(map[ID]*Runtime),
 	})
 
 	return catalog, nil
@@ -152,8 +166,8 @@ func (c *Catalog) Reload(ctx context.Context) error {
 		return err
 	}
 
-	c.reloadMu.Lock()
-	defer c.reloadMu.Unlock()
+	c.mutationMu.Lock()
+	defer c.mutationMu.Unlock()
 
 	sites, err := c.repository.List(ctx)
 	if err != nil {
@@ -162,6 +176,7 @@ func (c *Catalog) Reload(ctx context.Context) error {
 
 	next := &runtimeSnapshot{
 		byDomain: make(map[string]*Runtime, len(sites)),
+		byID:     make(map[ID]*Runtime, len(sites)),
 	}
 
 	for index, item := range sites {
@@ -179,8 +194,9 @@ func (c *Catalog) Reload(ctx context.Context) error {
 		runtime, err := NewRuntime(item, profileRuntime)
 		if err != nil {
 			return fmt.Errorf(
-				"build site runtime at index %d: %w",
+				"build site runtime at index %d with id %d: %w",
 				index,
+				item.ID,
 				err,
 			)
 		}
@@ -193,12 +209,88 @@ func (c *Catalog) Reload(ctx context.Context) error {
 				domain,
 			)
 		}
+		if _, exists := next.byID[item.ID]; exists {
+			return fmt.Errorf(
+				"duplicate site id %d",
+				item.ID,
+			)
+		}
 
 		next.byDomain[domain] = runtime
+		next.byID[item.ID] = runtime
 	}
 
 	c.snapshot.Store(next)
 	return nil
+}
+
+func (c *Catalog) UpdateSettings(
+	ctx context.Context,
+	id ID,
+	values map[string]any,
+) (*Runtime, error) {
+	if ctx == nil {
+		return nil, errors.New("site settings update context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if id <= 0 {
+		return nil, errors.New("invalid site id")
+	}
+
+	c.mutationMu.Lock()
+	defer c.mutationMu.Unlock()
+
+	currentSnapshot := c.snapshot.Load()
+	if currentSnapshot == nil {
+		return nil, errors.New("site runtime snapshot is nil")
+	}
+
+	current, exists := currentSnapshot.byID[id]
+	if !exists {
+		return nil, ErrNotFound
+	}
+
+	item := current.Site()
+	item.Settings = cloneSettings(values)
+
+	nextRuntime, err := NewRuntime(item, current.Profile())
+	if err != nil {
+		return nil, fmt.Errorf(
+			"build updated site runtime %d: %w",
+			id,
+			err,
+		)
+	}
+
+	normalized := nextRuntime.Site().Settings
+	if err := c.repository.UpdateSettings(ctx, id, normalized); err != nil {
+		return nil, fmt.Errorf("update site settings: %w", err)
+	}
+
+	nextSnapshot := &runtimeSnapshot{
+		byDomain: make(
+			map[string]*Runtime,
+			len(currentSnapshot.byDomain),
+		),
+		byID: make(
+			map[ID]*Runtime,
+			len(currentSnapshot.byID),
+		),
+	}
+	for domain, runtime := range currentSnapshot.byDomain {
+		nextSnapshot.byDomain[domain] = runtime
+	}
+	for currentID, runtime := range currentSnapshot.byID {
+		nextSnapshot.byID[currentID] = runtime
+	}
+
+	nextSnapshot.byDomain[nextRuntime.site.Domain] = nextRuntime
+	nextSnapshot.byID[id] = nextRuntime
+	c.snapshot.Store(nextSnapshot)
+
+	return nextRuntime, nil
 }
 
 func NormalizeDomain(value string) (string, error) {
@@ -258,6 +350,9 @@ func cloneSettingValue(value any) any {
 		}
 
 		return result
+
+	case []string:
+		return append([]string(nil), typed...)
 
 	default:
 		return typed

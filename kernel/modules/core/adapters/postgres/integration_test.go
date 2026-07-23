@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
@@ -162,12 +164,14 @@ WHERE profile_code = 'dev'
 	}
 
 	found := make(map[string]bool, 2)
+	siteIDs := make(map[string]site.ID, 2)
 	for _, item := range loadedSites {
 		if item.Domain != "localhost" && item.Domain != "example.com" {
 			continue
 		}
 
 		found[item.Domain] = true
+		siteIDs[item.Domain] = item.ID
 		if item.ProfileCode != "dev" || item.Locale != "ru-RU" {
 			t.Fatalf("seeded site = %#v", item)
 		}
@@ -181,6 +185,73 @@ WHERE profile_code = 'dev'
 	}
 	if !found["localhost"] || !found["example.com"] {
 		t.Fatalf("seeded domains = %#v", found)
+	}
+
+	if _, err := connector.Pool().Exec(ctx, `
+UPDATE core.sites
+SET updated_at = '2000-01-01T00:00:00Z'
+WHERE id = $1;
+`, siteIDs["localhost"]); err != nil {
+		t.Fatalf("prepare site update timestamp: %v", err)
+	}
+	if err := database.Sites().UpdateSettings(
+		ctx,
+		siteIDs["localhost"],
+		map[string]any{
+			"count": int64(3),
+			"flag":  false,
+		},
+	); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+
+	loadedSites, err = database.Sites().List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedSiteFound := false
+	for _, item := range loadedSites {
+		if item.ID != siteIDs["localhost"] {
+			continue
+		}
+		updatedSiteFound = true
+
+		if item.Settings["count"] != json.Number("3") ||
+			item.Settings["flag"] != false {
+			t.Fatalf("updated settings = %#v", item.Settings)
+		}
+
+		var updatedAt time.Time
+		if err := connector.Pool().QueryRow(
+			ctx,
+			"SELECT updated_at FROM core.sites WHERE id = $1",
+			item.ID,
+		).Scan(&updatedAt); err != nil {
+			t.Fatal(err)
+		}
+		if !updatedAt.After(time.Date(
+			2000,
+			time.January,
+			1,
+			0,
+			0,
+			0,
+			0,
+			time.UTC,
+		)) {
+			t.Fatalf("updated_at was not changed: %v", updatedAt)
+		}
+	}
+	if !updatedSiteFound {
+		t.Fatal("updated site was not returned by repository")
+	}
+
+	if err := database.Sites().UpdateSettings(
+		ctx,
+		site.ID(1<<62),
+		map[string]any{},
+	); !errors.Is(err, site.ErrNotFound) {
+		t.Fatalf("missing site update error = %v", err)
 	}
 
 	if err := seedManager.Down(ctx, seedPlan, 1); err != nil {
