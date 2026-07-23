@@ -10,7 +10,6 @@ import (
 
 	projectconfig "github.com/vernal96/go-cms/internal/config"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
-	configloader "github.com/vernal96/go-cms/kernel/config"
 	"github.com/vernal96/go-cms/kernel/console"
 )
 
@@ -29,7 +28,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) (resultErr error) {
-	projectConfig, err := configloader.Load[projectconfig.Config]("")
+	projectConfig, err := projectconfig.Load()
 	if err != nil {
 		return err
 	}

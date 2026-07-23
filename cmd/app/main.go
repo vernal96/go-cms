@@ -9,7 +9,6 @@ import (
 	projectconfig "github.com/vernal96/go-cms/internal/config"
 	httpserver "github.com/vernal96/go-cms/internal/server/http"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
-	configloader "github.com/vernal96/go-cms/kernel/config"
 )
 
 func main() {
@@ -20,7 +19,7 @@ func main() {
 	)
 	defer stop()
 
-	projectConfig, err := configloader.Load[projectconfig.Config]("")
+	projectConfig, err := projectconfig.Load()
 	if err != nil {
 		panic(err)
 	}
