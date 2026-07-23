@@ -6,6 +6,8 @@ import (
 
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	"github.com/vernal96/go-cms/kernel/modules/core/resource"
+	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 )
 
@@ -16,6 +18,7 @@ const ModuleCode kernel.ModuleCode = "core"
 type Database interface {
 	kernel.ModuleDatabase
 	Sites() site.Repository
+	Resources() resource.Repository
 }
 
 type Module struct{}
@@ -26,7 +29,8 @@ func (Module) Code() kernel.ModuleCode {
 
 func (Module) Registry() kernel.ModuleRegistry {
 	return kernel.ModuleRegistry{
-		FieldTypes: field.StandardTypes(),
+		FieldTypes:    field.StandardTypes(),
+		ResourceTypes: resourcetype.StandardTypes(),
 	}
 }
 
@@ -45,6 +49,9 @@ func (Module) Build(
 
 	if database.Sites() == nil {
 		return nil, errors.New("core site repository is nil")
+	}
+	if database.Resources() == nil {
+		return nil, errors.New("core resource repository is nil")
 	}
 
 	return &Runtime{database: database}, nil

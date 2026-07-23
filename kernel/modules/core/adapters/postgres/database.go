@@ -8,6 +8,8 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	"github.com/vernal96/go-cms/kernel/modules/core/resource"
+	resourcepostgres "github.com/vernal96/go-cms/kernel/modules/core/resource/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	sitepostgres "github.com/vernal96/go-cms/kernel/modules/core/site/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/seeds"
@@ -20,7 +22,8 @@ var migrationFiles embed.FS
 var seedFiles embed.FS
 
 type Database struct {
-	sites site.Repository
+	sites     site.Repository
+	resources resource.Repository
 }
 
 type DatabaseFactory struct{}
@@ -54,7 +57,15 @@ func NewDatabase(
 		return nil, err
 	}
 
-	return &Database{sites: sites}, nil
+	resources, err := resourcepostgres.NewRepository(connector)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Database{
+		sites:     sites,
+		resources: resources,
+	}, nil
 }
 
 func (d *Database) ModuleCode() kernel.ModuleCode {
@@ -63,6 +74,10 @@ func (d *Database) ModuleCode() kernel.ModuleCode {
 
 func (d *Database) Sites() site.Repository {
 	return d.sites
+}
+
+func (d *Database) Resources() resource.Repository {
+	return d.resources
 }
 
 func (d *Database) MigrationSources() []migrations.Source {

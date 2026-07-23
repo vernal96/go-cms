@@ -10,6 +10,7 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 )
 
@@ -51,6 +52,54 @@ type database struct{}
 
 func (database) ModuleCode() kernel.ModuleCode { return core.ModuleCode }
 func (database) Sites() site.Repository        { return repository{} }
+func (database) Resources() resource.Repository {
+	return resourceRepository{}
+}
+
+type resourceRepository struct{}
+
+func (resourceRepository) Create(
+	context.Context,
+	resource.Resource,
+) (resource.Resource, error) {
+	return resource.Resource{}, resource.ErrNotFound
+}
+
+func (resourceRepository) ByID(
+	context.Context,
+	resource.ID,
+) (resource.Resource, error) {
+	return resource.Resource{}, resource.ErrNotFound
+}
+
+func (resourceRepository) ByPath(
+	context.Context,
+	site.ID,
+	string,
+) (resource.Resource, error) {
+	return resource.Resource{}, resource.ErrNotFound
+}
+
+func (resourceRepository) ListBySite(
+	context.Context,
+	site.ID,
+) ([]resource.Resource, error) {
+	return nil, nil
+}
+
+func (resourceRepository) Update(
+	context.Context,
+	resource.Resource,
+) (resource.Resource, error) {
+	return resource.Resource{}, resource.ErrNotFound
+}
+
+func (resourceRepository) Delete(
+	context.Context,
+	resource.ID,
+) error {
+	return resource.ErrNotFound
+}
 
 type databaseFactory struct{}
 

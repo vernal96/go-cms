@@ -9,6 +9,8 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
+	"github.com/vernal96/go-cms/kernel/modules/core/template"
 )
 
 type emptyDatabaseResolver struct{}
@@ -27,9 +29,11 @@ func (emptyDatabaseResolver) ModuleDatabase(
 }
 
 type registryModule struct {
-	code       kernel.ModuleCode
-	fieldTypes []field.Type
-	expectType field.TypeCode
+	code               kernel.ModuleCode
+	fieldTypes         []field.Type
+	resourceTypes      []resourcetype.Type
+	expectType         field.TypeCode
+	expectResourceType resourcetype.Code
 }
 
 func (m registryModule) Code() kernel.ModuleCode {
@@ -39,6 +43,10 @@ func (m registryModule) Code() kernel.ModuleCode {
 func (m registryModule) Registry() kernel.ModuleRegistry {
 	return kernel.ModuleRegistry{
 		FieldTypes: append([]field.Type(nil), m.fieldTypes...),
+		ResourceTypes: append(
+			[]resourcetype.Type(nil),
+			m.resourceTypes...,
+		),
 	}
 }
 
@@ -49,6 +57,15 @@ func (m registryModule) Build(
 	if m.expectType != "" {
 		if _, exists := ctx.Registry().FieldType(m.expectType); !exists {
 			return nil, errors.New("expected field type is not registered")
+		}
+	}
+	if m.expectResourceType != "" {
+		if _, exists := ctx.Registry().ResourceType(
+			m.expectResourceType,
+		); !exists {
+			return nil, errors.New(
+				"expected resource type is not registered",
+			)
 		}
 	}
 
@@ -99,6 +116,25 @@ func (customValueType) Rules() []string {
 
 func (customValueType) Example() any {
 	return "example"
+}
+
+type customResourceType struct {
+	code     resourcetype.Code
+	pathMode resourcetype.PathMode
+}
+
+func (t customResourceType) Code() resourcetype.Code {
+	return t.code
+}
+
+func (t customResourceType) PathMode() resourcetype.PathMode {
+	return t.pathMode
+}
+
+func (customResourceType) Normalize(
+	payload resourcetype.Payload,
+) (resourcetype.Payload, error) {
+	return payload, nil
 }
 
 func TestProfileRuntimeCollectsFieldTypesBeforeModuleBuild(t *testing.T) {
@@ -238,6 +274,259 @@ func TestProfileRuntimeRejectsInvalidFieldRegistrations(t *testing.T) {
 	}
 }
 
+func TestProfileRuntimeCollectsResourceTypesBeforeModuleBuild(
+	t *testing.T,
+) {
+	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runtime, err := factory.Make(context.Background(), kernel.Profile{
+		Code: "custom",
+		Modules: []kernel.ProfileModule{
+			{
+				Module: registryModule{
+					code:               "consumer",
+					expectResourceType: "custom",
+				},
+			},
+			{
+				Module: registryModule{
+					code: "provider",
+					resourceTypes: []resourcetype.Type{
+						customResourceType{
+							code:     "custom",
+							pathMode: resourcetype.PathNone,
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resourceType, exists := runtime.Registry().ResourceType("custom")
+	if !exists || resourceType.PathMode() != resourcetype.PathNone {
+		t.Fatalf("custom resource type = %#v, %t", resourceType, exists)
+	}
+}
+
+func TestProfileRuntimeRejectsInvalidResourceTypeRegistrations(
+	t *testing.T,
+) {
+	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testCases := []struct {
+		name     string
+		types    []resourcetype.Type
+		contains string
+	}{
+		{
+			name: "empty code",
+			types: []resourcetype.Type{
+				customResourceType{pathMode: resourcetype.PathRoute},
+			},
+			contains: "code is empty",
+		},
+		{
+			name: "duplicate",
+			types: []resourcetype.Type{
+				customResourceType{
+					code:     "custom",
+					pathMode: resourcetype.PathRoute,
+				},
+				customResourceType{
+					code:     "custom",
+					pathMode: resourcetype.PathRoute,
+				},
+			},
+			contains: "already exists",
+		},
+		{
+			name: "invalid path mode",
+			types: []resourcetype.Type{
+				customResourceType{
+					code:     "custom",
+					pathMode: "invalid",
+				},
+			},
+			contains: "invalid path mode",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := factory.Make(
+				context.Background(),
+				kernel.Profile{
+					Code: "custom",
+					Modules: []kernel.ProfileModule{{
+						Module: registryModule{
+							code:          "provider",
+							resourceTypes: testCase.types,
+						},
+					}},
+				},
+			)
+			if err == nil || !strings.Contains(
+				err.Error(),
+				testCase.contains,
+			) {
+				t.Fatalf("make error = %v", err)
+			}
+		})
+	}
+}
+
+func TestProfileRuntimeCompilesAndClonesTemplates(t *testing.T) {
+	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	required := true
+	profile := kernel.Profile{
+		Code: "templates",
+		Modules: []kernel.ProfileModule{{
+			Module: registryModule{
+				code: "fields",
+				fieldTypes: append(
+					field.StandardTypes(),
+					customFieldType{code: "custom"},
+				),
+			},
+		}},
+		Templates: []template.Definition{{
+			Code:  "article",
+			Label: "Article",
+			Fields: []field.Definition{
+				{
+					Key:      "headline",
+					Type:     field.TypeString,
+					Label:    "Headline",
+					Required: &required,
+					Rules:    []string{"min=2"},
+				},
+				{
+					Key:   "custom_value",
+					Type:  "custom",
+					Label: "Custom value",
+				},
+				{
+					Key:   "layout",
+					Type:  field.TypeSelect,
+					Label: "Layout",
+					Options: field.SelectOptions{
+						Choices: []field.Choice{{
+							Value: "wide",
+							Label: "Wide",
+						}},
+					},
+				},
+			},
+		}},
+	}
+
+	runtime, err := factory.Make(context.Background(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	article, exists := runtime.Template("article")
+	if !exists {
+		t.Fatal("article template is missing")
+	}
+	values, err := article.FieldSchema().Validate(map[string]any{
+		"headline":     "News",
+		"custom_value": "custom",
+		"layout":       "wide",
+	})
+	if err != nil ||
+		values["headline"] != "News" ||
+		values["custom_value"] != "custom" ||
+		values["layout"] != "wide" {
+		t.Fatalf("template settings = %#v, %v", values, err)
+	}
+
+	profile.Templates[0].Label = "Changed"
+	profile.Templates[0].Fields[0].Rules[0] = "max=1"
+	options := profile.Templates[0].Fields[2].Options.(field.SelectOptions)
+	options.Choices[0].Label = "Changed"
+	definition := article.Definition()
+	definitionOptions := definition.Fields[2].Options.(field.SelectOptions)
+	if definition.Label != "Article" ||
+		definition.Fields[0].Rules[0] != "min=2" ||
+		definitionOptions.Choices[0].Label != "Wide" {
+		t.Fatalf("template shares caller memory: %#v", definition)
+	}
+	definition.Fields[0].Rules[0] = "max=1"
+	if article.Definition().Fields[0].Rules[0] != "min=2" {
+		t.Fatal("template definition result is mutable")
+	}
+}
+
+func TestProfileRuntimeRejectsInvalidTemplates(t *testing.T) {
+	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testCases := []struct {
+		name      string
+		templates []template.Definition
+		contains  string
+	}{
+		{
+			name: "duplicate",
+			templates: []template.Definition{
+				{Code: "article", Label: "Article"},
+				{Code: "article", Label: "Other"},
+			},
+			contains: "duplicate template code",
+		},
+		{
+			name: "unknown field type",
+			templates: []template.Definition{{
+				Code:  "article",
+				Label: "Article",
+				Fields: []field.Definition{{
+					Key: "value", Type: "missing", Label: "Value",
+				}},
+			}},
+			contains: "unknown type",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := factory.Make(
+				context.Background(),
+				kernel.Profile{
+					Code: "templates",
+					Modules: []kernel.ProfileModule{{
+						Module: registryModule{
+							code:       "fields",
+							fieldTypes: field.StandardTypes(),
+						},
+					}},
+					Templates: testCase.templates,
+				},
+			)
+			if err == nil || !strings.Contains(
+				err.Error(),
+				testCase.contains,
+			) {
+				t.Fatalf("make error = %v", err)
+			}
+		})
+	}
+}
+
 func TestCoreModuleRegistersAllStandardFieldTypes(t *testing.T) {
 	registry := core.Module{}.Registry()
 	if len(registry.FieldTypes) != 9 {
@@ -261,6 +550,29 @@ func TestCoreModuleRegistersAllStandardFieldTypes(t *testing.T) {
 	} {
 		if !found[code] {
 			t.Fatalf("standard field type %q is missing", code)
+		}
+	}
+
+	if len(registry.ResourceTypes) != 3 {
+		t.Fatalf(
+			"standard resource types = %d",
+			len(registry.ResourceTypes),
+		)
+	}
+	resourceTypes := make(
+		map[resourcetype.Code]bool,
+		len(registry.ResourceTypes),
+	)
+	for _, resourceType := range registry.ResourceTypes {
+		resourceTypes[resourceType.Code()] = true
+	}
+	for _, code := range []resourcetype.Code{
+		resourcetype.Page,
+		resourcetype.Link,
+		resourcetype.ResourceLink,
+	} {
+		if !resourceTypes[code] {
+			t.Fatalf("standard resource type %q is missing", code)
 		}
 	}
 }

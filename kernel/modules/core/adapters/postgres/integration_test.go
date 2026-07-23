@@ -14,7 +14,10 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	"github.com/vernal96/go-cms/kernel/modules/core/resource"
+	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
@@ -116,7 +119,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 1 || !hasVersion || dirty {
+	if version != 2 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,
@@ -126,14 +129,36 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	}
 
 	var sitesTable *string
+	var resourcesTable *string
+	var resourcePathIndex *string
 	if err := connector.Pool().QueryRow(
 		ctx,
-		"SELECT to_regclass('core.sites')::text",
-	).Scan(&sitesTable); err != nil {
+		`
+SELECT
+    to_regclass('core.sites')::text,
+    to_regclass('core.resources')::text,
+    to_regclass('core.uq_resources_site_path')::text;
+`,
+	).Scan(
+		&sitesTable,
+		&resourcesTable,
+		&resourcePathIndex,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if sitesTable == nil || *sitesTable != "core.sites" {
 		t.Fatalf("core.sites = %#v", sitesTable)
+	}
+	if resourcesTable == nil ||
+		*resourcesTable != "core.resources" {
+		t.Fatalf("core.resources = %#v", resourcesTable)
+	}
+	if resourcePathIndex == nil ||
+		*resourcePathIndex != "core.uq_resources_site_path" {
+		t.Fatalf(
+			"resource path index = %#v",
+			resourcePathIndex,
+		)
 	}
 
 	seedPlan := seeds.Plan{
@@ -246,6 +271,278 @@ WHERE id = $1;
 		t.Fatal("updated site was not returned by repository")
 	}
 
+	resourceRepository := database.Resources()
+	templateCode := template.Code("article")
+	contentType := "html"
+	rootPath := "/"
+	root, err := resourceRepository.Create(ctx, resource.Resource{
+		SiteID:       siteIDs["localhost"],
+		Type:         resourcetype.Page,
+		Template:     &templateCode,
+		ContentType:  &contentType,
+		Title:        "Home",
+		Path:         &rootPath,
+		IsPublic:     true,
+		IsSearchable: true,
+		InMenu:       true,
+		InSitemap:    true,
+		Settings:     map[string]any{"headline": "Home"},
+	})
+	if err != nil {
+		t.Fatalf("create root resource: %v", err)
+	}
+
+	for _, slug := range []string{"no-path-one", "no-path-two"} {
+		noPath, err := resourceRepository.Create(
+			ctx,
+			resource.Resource{
+				SiteID:       siteIDs["localhost"],
+				Type:         "no_path",
+				Title:        slug,
+				Slug:         slug,
+				IsPublic:     true,
+				IsSearchable: true,
+				InMenu:       true,
+				InSitemap:    true,
+				Settings:     map[string]any{},
+			},
+		)
+		if err != nil {
+			t.Fatalf("create nullable-path resource: %v", err)
+		}
+		if noPath.Path != nil {
+			t.Fatalf("nullable resource path = %#v", noPath.Path)
+		}
+	}
+
+	sectionPath := "/section"
+	section, err := resourceRepository.Create(
+		ctx,
+		resource.Resource{
+			SiteID:       siteIDs["localhost"],
+			Type:         resourcetype.Page,
+			Template:     &templateCode,
+			ContentType:  &contentType,
+			Title:        "Section",
+			Slug:         "section",
+			Path:         &sectionPath,
+			IsPublic:     true,
+			IsSearchable: true,
+			InMenu:       true,
+			InSitemap:    true,
+			Settings:     map[string]any{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("create section resource: %v", err)
+	}
+
+	childPath := "/child"
+	child, err := resourceRepository.Create(ctx, resource.Resource{
+		SiteID:       siteIDs["localhost"],
+		ParentID:     &root.ID,
+		Type:         resourcetype.Page,
+		Template:     &templateCode,
+		ContentType:  &contentType,
+		Title:        "Child",
+		Slug:         "child",
+		Path:         &childPath,
+		IsPublic:     true,
+		IsSearchable: true,
+		InMenu:       true,
+		InSitemap:    true,
+		Settings:     map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("create child resource: %v", err)
+	}
+
+	grandchildPath := "/child/grandchild"
+	grandchild, err := resourceRepository.Create(
+		ctx,
+		resource.Resource{
+			SiteID:       siteIDs["localhost"],
+			ParentID:     &child.ID,
+			Type:         resourcetype.Page,
+			Template:     &templateCode,
+			ContentType:  &contentType,
+			Title:        "Grandchild",
+			Slug:         "grandchild",
+			Path:         &grandchildPath,
+			IsPublic:     true,
+			IsSearchable: true,
+			InMenu:       true,
+			InSitemap:    true,
+			Settings:     map[string]any{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("create grandchild resource: %v", err)
+	}
+
+	loadedChild, err := resourceRepository.ByPath(
+		ctx,
+		siteIDs["localhost"],
+		childPath,
+	)
+	if err != nil || loadedChild.ID != child.ID {
+		t.Fatalf("resource by path = %#v, %v", loadedChild, err)
+	}
+
+	duplicatePath := "/child"
+	_, err = resourceRepository.Create(ctx, resource.Resource{
+		SiteID:       siteIDs["localhost"],
+		ParentID:     &root.ID,
+		Type:         resourcetype.Page,
+		Template:     &templateCode,
+		ContentType:  &contentType,
+		Title:        "Duplicate",
+		Slug:         "child",
+		Path:         &duplicatePath,
+		IsPublic:     true,
+		IsSearchable: true,
+		InMenu:       true,
+		InSitemap:    true,
+		Settings:     map[string]any{},
+	})
+	if !errors.Is(err, resource.ErrConflict) {
+		t.Fatalf("sibling conflict error = %v", err)
+	}
+
+	crossSitePath := "/cross-site"
+	_, err = resourceRepository.Create(ctx, resource.Resource{
+		SiteID:       siteIDs["example.com"],
+		ParentID:     &root.ID,
+		Type:         resourcetype.Page,
+		Template:     &templateCode,
+		ContentType:  &contentType,
+		Title:        "Cross-site",
+		Slug:         "cross-site",
+		Path:         &crossSitePath,
+		IsPublic:     true,
+		IsSearchable: true,
+		InMenu:       true,
+		InSitemap:    true,
+		Settings:     map[string]any{},
+	})
+	if !errors.Is(err, resource.ErrInvalidReference) {
+		t.Fatalf("cross-site parent error = %v", err)
+	}
+
+	if _, err := connector.Pool().Exec(ctx, `
+INSERT INTO core.resources
+(
+    site_id,
+    title,
+    slug,
+    settings
+)
+VALUES ($1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
+`, siteIDs["localhost"]); err == nil {
+		t.Fatal("resources accepted non-object settings")
+	}
+
+	child.Slug = "renamed"
+	child.Title = "Renamed child"
+	child.ParentID = &section.ID
+	renamedPath := "/section/renamed"
+	child.Path = &renamedPath
+	child, err = resourceRepository.Update(ctx, child)
+	if err != nil {
+		t.Fatalf("rename resource: %v", err)
+	}
+	if child.Path == nil || *child.Path != renamedPath {
+		t.Fatalf("renamed child path = %#v", child.Path)
+	}
+	grandchild, err = resourceRepository.ByID(ctx, grandchild.ID)
+	if err != nil {
+		t.Fatalf("load moved grandchild: %v", err)
+	}
+	if grandchild.Path == nil ||
+		*grandchild.Path != "/section/renamed/grandchild" {
+		t.Fatalf(
+			"moved grandchild path = %#v",
+			grandchild.Path,
+		)
+	}
+
+	section.ParentID = &grandchild.ID
+	section.Path = testStringPointer(
+		"/section/renamed/grandchild/section",
+	)
+	if _, err := resourceRepository.Update(
+		ctx,
+		section,
+	); !errors.Is(err, resource.ErrInvalidTree) {
+		t.Fatalf("resource cycle error = %v", err)
+	}
+
+	internalLinkPath := "/section/renamed/internal-link"
+	internalLinkTarget := grandchild.ID
+	if _, err := resourceRepository.Create(
+		ctx,
+		resource.Resource{
+			SiteID:           siteIDs["localhost"],
+			ParentID:         &child.ID,
+			Type:             resourcetype.ResourceLink,
+			Title:            "Internal link",
+			Slug:             "internal-link",
+			Path:             &internalLinkPath,
+			TargetResourceID: &internalLinkTarget,
+			IsPublic:         true,
+			IsSearchable:     true,
+			InMenu:           true,
+			InSitemap:        true,
+			Settings:         map[string]any{},
+		},
+	); err != nil {
+		t.Fatalf("create internal resource link: %v", err)
+	}
+
+	externalLinkPath := "/external-link"
+	externalLinkTarget := grandchild.ID
+	externalLink, err := resourceRepository.Create(
+		ctx,
+		resource.Resource{
+			SiteID:           siteIDs["localhost"],
+			Type:             resourcetype.ResourceLink,
+			Title:            "External link",
+			Slug:             "external-link",
+			Path:             &externalLinkPath,
+			TargetResourceID: &externalLinkTarget,
+			IsPublic:         true,
+			IsSearchable:     true,
+			InMenu:           true,
+			InSitemap:        true,
+			Settings:         map[string]any{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("create external resource link: %v", err)
+	}
+
+	if err := resourceRepository.Delete(
+		ctx,
+		child.ID,
+	); !errors.Is(err, resource.ErrReferenced) {
+		t.Fatalf("referenced subtree delete error = %v", err)
+	}
+	if err := resourceRepository.Delete(
+		ctx,
+		externalLink.ID,
+	); err != nil {
+		t.Fatalf("delete external resource link: %v", err)
+	}
+	if err := resourceRepository.Delete(ctx, child.ID); err != nil {
+		t.Fatalf("delete resource subtree: %v", err)
+	}
+	if _, err := resourceRepository.ByID(
+		ctx,
+		grandchild.ID,
+	); !errors.Is(err, resource.ErrNotFound) {
+		t.Fatalf("deleted grandchild error = %v", err)
+	}
+
 	if err := database.Sites().UpdateSettings(
 		ctx,
 		site.ID(1<<62),
@@ -269,7 +566,7 @@ WHERE id = $1;
 	}
 
 	restoreMigration = true
-	if err := manager.Down(ctx, plan, 1); err != nil {
+	if err := manager.Down(ctx, plan, 2); err != nil {
 		t.Fatalf("down: %v", err)
 	}
 
@@ -306,4 +603,8 @@ SELECT
 		t.Fatalf("restore up: %v", err)
 	}
 	restoreMigration = false
+}
+
+func testStringPointer(value string) *string {
+	return &value
 }

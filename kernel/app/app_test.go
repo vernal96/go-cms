@@ -19,7 +19,10 @@ import (
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	"github.com/vernal96/go-cms/kernel/modules/core/resource"
+	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
@@ -184,12 +187,167 @@ func (r *fakeSiteRepository) updateCallCount() int {
 }
 
 type fakeCoreDatabase struct {
-	repository  site.Repository
-	seedSources []seeds.Source
+	repository         site.Repository
+	resourceRepository resource.Repository
+	seedSources        []seeds.Source
 }
 
 func (*fakeCoreDatabase) ModuleCode() kernel.ModuleCode { return core.ModuleCode }
 func (d *fakeCoreDatabase) Sites() site.Repository      { return d.repository }
+func (d *fakeCoreDatabase) Resources() resource.Repository {
+	if d.resourceRepository != nil {
+		return d.resourceRepository
+	}
+	return fakeResourceRepository{}
+}
+
+type fakeResourceRepository struct{}
+
+func (fakeResourceRepository) Create(
+	context.Context,
+	resource.Resource,
+) (resource.Resource, error) {
+	return resource.Resource{}, resource.ErrNotFound
+}
+
+func (fakeResourceRepository) ByID(
+	context.Context,
+	resource.ID,
+) (resource.Resource, error) {
+	return resource.Resource{}, resource.ErrNotFound
+}
+
+func (fakeResourceRepository) ByPath(
+	context.Context,
+	site.ID,
+	string,
+) (resource.Resource, error) {
+	return resource.Resource{}, resource.ErrNotFound
+}
+
+func (fakeResourceRepository) ListBySite(
+	context.Context,
+	site.ID,
+) ([]resource.Resource, error) {
+	return nil, nil
+}
+
+func (fakeResourceRepository) Update(
+	context.Context,
+	resource.Resource,
+) (resource.Resource, error) {
+	return resource.Resource{}, resource.ErrNotFound
+}
+
+func (fakeResourceRepository) Delete(
+	context.Context,
+	resource.ID,
+) error {
+	return resource.ErrNotFound
+}
+
+type appResourceRepository struct {
+	mu     sync.Mutex
+	nextID resource.ID
+	items  map[resource.ID]resource.Resource
+}
+
+func newAppResourceRepository() *appResourceRepository {
+	return &appResourceRepository{
+		nextID: 1,
+		items:  make(map[resource.ID]resource.Resource),
+	}
+}
+
+func (r *appResourceRepository) Create(
+	_ context.Context,
+	item resource.Resource,
+) (resource.Resource, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	item = resource.Clone(item)
+	item.ID = r.nextID
+	r.nextID++
+	r.items[item.ID] = item
+	return resource.Clone(item), nil
+}
+
+func (r *appResourceRepository) ByID(
+	_ context.Context,
+	id resource.ID,
+) (resource.Resource, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	item, exists := r.items[id]
+	if !exists {
+		return resource.Resource{}, resource.ErrNotFound
+	}
+	return resource.Clone(item), nil
+}
+
+func (r *appResourceRepository) ByPath(
+	_ context.Context,
+	siteID site.ID,
+	path string,
+) (resource.Resource, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, item := range r.items {
+		if item.SiteID == siteID &&
+			item.Path != nil &&
+			*item.Path == path {
+			return resource.Clone(item), nil
+		}
+	}
+	return resource.Resource{}, resource.ErrNotFound
+}
+
+func (r *appResourceRepository) ListBySite(
+	_ context.Context,
+	siteID site.ID,
+) ([]resource.Resource, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	result := make([]resource.Resource, 0)
+	for _, item := range r.items {
+		if item.SiteID == siteID {
+			result = append(result, resource.Clone(item))
+		}
+	}
+	return result, nil
+}
+
+func (r *appResourceRepository) Update(
+	_ context.Context,
+	item resource.Resource,
+) (resource.Resource, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.items[item.ID]; !exists {
+		return resource.Resource{}, resource.ErrNotFound
+	}
+	r.items[item.ID] = resource.Clone(item)
+	return resource.Clone(item), nil
+}
+
+func (r *appResourceRepository) Delete(
+	_ context.Context,
+	id resource.ID,
+) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.items[id]; !exists {
+		return resource.ErrNotFound
+	}
+	delete(r.items, id)
+	return nil
+}
 
 func (*fakeCoreDatabase) MigrationSources() []migrations.Source {
 	return []migrations.Source{versionedSource("migration")}
@@ -654,6 +812,121 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 			mainConnector.closes.Load(),
 			logsConnector.closes.Load(),
 		)
+	}
+}
+
+func TestAppResourceFacades(t *testing.T) {
+	ctx := context.Background()
+	connector := newFakeConnector("main")
+	resourceRepository := newAppResourceRepository()
+	coreDatabase := &fakeCoreDatabase{
+		repository: &fakeSiteRepository{
+			sites: []site.Site{{
+				ID:          1,
+				ProfileCode: "dev",
+				Domain:      "example.com",
+				Locale:      "en-US",
+			}},
+		},
+		resourceRepository: resourceRepository,
+	}
+	templateCode := template.Code("article")
+
+	application, err := appkernel.New(ctx, appkernel.Definition{
+		MainDatabase: appkernel.DatabaseDefinition{
+			Connector: &fakeConnectorFactory{connector: connector},
+			Adapters: []kernel.ModuleDatabaseFactory{
+				&fakeDatabaseFactory{
+					code:     core.ModuleCode,
+					database: coreDatabase,
+				},
+			},
+		},
+		Profiles: []kernel.Profile{{
+			Code: "dev",
+			Modules: []kernel.ProfileModule{{
+				Module: core.Module{},
+			}},
+			Templates: []template.Definition{{
+				Code:  templateCode,
+				Label: "Article",
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = application.Close() }()
+
+	if _, err := application.CreateResource(
+		ctx,
+		resource.CreateInput{},
+	); !errors.Is(err, appkernel.ErrNotBooted) {
+		t.Fatalf("create before boot error = %v", err)
+	}
+	if err := application.Boot(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := application.CreateResource(
+		ctx,
+		resource.CreateInput{
+			SiteID:   1,
+			Template: &templateCode,
+			Title:    "Home",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Type != resourcetype.Page ||
+		created.Path == nil ||
+		*created.Path != "/" {
+		t.Fatalf("created resource = %#v", created)
+	}
+
+	byID, err := application.Resource(ctx, created.ID)
+	if err != nil || byID.ID != created.ID {
+		t.Fatalf("resource by id = %#v, %v", byID, err)
+	}
+	byPath, err := application.ResourceByPath(ctx, 1, "/")
+	if err != nil || byPath.ID != created.ID {
+		t.Fatalf("resource by path = %#v, %v", byPath, err)
+	}
+	tree, err := application.ResourceTree(ctx, 1)
+	if err != nil || len(tree) != 1 ||
+		tree[0].Resource.ID != created.ID {
+		t.Fatalf("resource tree = %#v, %v", tree, err)
+	}
+
+	updated, err := application.UpdateResource(
+		ctx,
+		resource.UpdateInput{
+			ID:           created.ID,
+			Type:         resourcetype.Page,
+			Template:     &templateCode,
+			Title:        "Updated home",
+			IsPublic:     true,
+			IsSearchable: true,
+			InMenu:       true,
+			InSitemap:    true,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Updated home" {
+		t.Fatalf("updated resource = %#v", updated)
+	}
+
+	if err := application.DeleteResource(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.Resource(
+		ctx,
+		created.ID,
+	); !errors.Is(err, resource.ErrNotFound) {
+		t.Fatalf("deleted resource error = %v", err)
 	}
 }
 

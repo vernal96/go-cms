@@ -157,6 +157,22 @@ func (c *Catalog) RuntimeByDomain(
 	return runtime, exists
 }
 
+func (c *Catalog) RuntimeByID(
+	id ID,
+) (*Runtime, bool) {
+	if id <= 0 {
+		return nil, false
+	}
+
+	snapshot := c.snapshot.Load()
+	if snapshot == nil {
+		return nil, false
+	}
+
+	runtime, exists := snapshot.byID[id]
+	return runtime, exists
+}
+
 func (c *Catalog) Reload(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("site reload context is nil")

@@ -12,7 +12,9 @@ import (
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
@@ -54,6 +56,7 @@ type App struct {
 
 	profileRuntimes map[kernel.ProfileCode]*kernel.ProfileRuntime
 	sites           *site.Catalog
+	resources       *resource.Service
 
 	bootOnce sync.Once
 	bootErr  error
@@ -131,6 +134,11 @@ func New(
 	}
 	if coreDatabase.Sites() == nil {
 		return nil, errors.New("main core database has nil site repository")
+	}
+	if coreDatabase.Resources() == nil {
+		return nil, errors.New(
+			"main core database has nil resource repository",
+		)
 	}
 	application.coreDatabase = coreDatabase
 
@@ -219,8 +227,17 @@ func (a *App) boot(ctx context.Context) error {
 		return fmt.Errorf("compile site runtimes: %w", err)
 	}
 
+	resourceService, err := resource.NewService(
+		a.coreDatabase.Resources(),
+		catalog,
+	)
+	if err != nil {
+		return err
+	}
+
 	a.profileRuntimes = profileRuntimes
 	a.sites = catalog
+	a.resources = resourceService
 	a.booted.Store(true)
 	return nil
 }
@@ -260,6 +277,16 @@ func (a *App) RuntimeByDomain(
 	}
 
 	return a.sites.RuntimeByDomain(domain)
+}
+
+func (a *App) RuntimeBySiteID(
+	id site.ID,
+) (*site.Runtime, bool) {
+	if a == nil || a.closed.Load() || !a.booted.Load() {
+		return nil, false
+	}
+
+	return a.sites.RuntimeByID(id)
 }
 
 func (a *App) ReloadSites(ctx context.Context) error {
@@ -306,6 +333,129 @@ func (a *App) UpdateSiteSettings(
 	}
 
 	return a.sites.UpdateSettings(ctx, id, values)
+}
+
+func (a *App) CreateResource(
+	ctx context.Context,
+	input resource.CreateInput,
+) (resource.Resource, error) {
+	service, err := a.resourceService()
+	if err != nil {
+		return resource.Resource{}, err
+	}
+
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return resource.Resource{}, ErrClosed
+	}
+
+	return service.Create(ctx, input)
+}
+
+func (a *App) Resource(
+	ctx context.Context,
+	id resource.ID,
+) (resource.Resource, error) {
+	service, err := a.resourceService()
+	if err != nil {
+		return resource.Resource{}, err
+	}
+
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return resource.Resource{}, ErrClosed
+	}
+
+	return service.Get(ctx, id)
+}
+
+func (a *App) ResourceByPath(
+	ctx context.Context,
+	siteID site.ID,
+	path string,
+) (resource.Resource, error) {
+	service, err := a.resourceService()
+	if err != nil {
+		return resource.Resource{}, err
+	}
+
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return resource.Resource{}, ErrClosed
+	}
+
+	return service.GetByPath(ctx, siteID, path)
+}
+
+func (a *App) ResourceTree(
+	ctx context.Context,
+	siteID site.ID,
+) ([]resource.Node, error) {
+	service, err := a.resourceService()
+	if err != nil {
+		return nil, err
+	}
+
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+
+	return service.Tree(ctx, siteID)
+}
+
+func (a *App) UpdateResource(
+	ctx context.Context,
+	input resource.UpdateInput,
+) (resource.Resource, error) {
+	service, err := a.resourceService()
+	if err != nil {
+		return resource.Resource{}, err
+	}
+
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return resource.Resource{}, ErrClosed
+	}
+
+	return service.Update(ctx, input)
+}
+
+func (a *App) DeleteResource(
+	ctx context.Context,
+	id resource.ID,
+) error {
+	service, err := a.resourceService()
+	if err != nil {
+		return err
+	}
+
+	a.lifecycleMu.RLock()
+	defer a.lifecycleMu.RUnlock()
+	if a.closed.Load() {
+		return ErrClosed
+	}
+
+	return service.Delete(ctx, id)
+}
+
+func (a *App) resourceService() (*resource.Service, error) {
+	if a == nil {
+		return nil, errors.New("app is nil")
+	}
+	if !a.booted.Load() {
+		return nil, ErrNotBooted
+	}
+	if a.resources == nil {
+		return nil, errors.New("resource service is nil")
+	}
+
+	return a.resources, nil
 }
 
 func (a *App) MigrationPlans() []migrations.Plan {
@@ -835,6 +985,9 @@ func cloneDefinition(definition Definition) Definition {
 		)
 		definition.Profiles[index].Params = field.CloneDefinitions(
 			definition.Profiles[index].Params,
+		)
+		definition.Profiles[index].Templates = template.CloneDefinitions(
+			definition.Profiles[index].Templates,
 		)
 	}
 
