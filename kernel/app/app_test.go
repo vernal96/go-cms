@@ -23,6 +23,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/logging"
 	"github.com/vernal96/go-cms/kernel/migrations"
+	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	coreaccess "github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
@@ -1340,6 +1341,7 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 				},
 				Modules: []kernel.ProfileModule{
 					{Module: core.Module{}},
+					{Module: admin.Module{}},
 					{
 						Module: module,
 						Config: featureConfig{Connection: "logs"},
@@ -1458,8 +1460,8 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 		t.Fatalf("module Build calls = %d", moduleBuilds.Load())
 	}
 	if codes, err := application.PermissionCodes(); err != nil ||
-		len(codes) != 24 {
-		t.Fatalf("core permission catalog = %#v, %v", codes, err)
+		len(codes) != 28 {
+		t.Fatalf("permission catalog = %#v, %v", codes, err)
 	}
 	if selected != logsFeature {
 		t.Fatalf("selected database = %#v", selected)
@@ -1730,9 +1732,10 @@ func TestAppResourceFacades(t *testing.T) {
 		},
 		Profiles: []kernel.Profile{{
 			Code: "dev",
-			Modules: []kernel.ProfileModule{{
-				Module: core.Module{},
-			}},
+			Modules: []kernel.ProfileModule{
+				{Module: core.Module{}},
+				{Module: admin.Module{}},
+			},
 			Templates: []template.Definition{{
 				Code:  templateCode,
 				Label: "Article",
@@ -1820,6 +1823,71 @@ func TestAppResourceFacades(t *testing.T) {
 	}
 }
 
+func TestAppBootRequiresCoreAndAdminModules(t *testing.T) {
+	tests := []struct {
+		name    string
+		modules []kernel.ProfileModule
+		missing kernel.ModuleCode
+	}{
+		{
+			name: "core",
+			modules: []kernel.ProfileModule{
+				{Module: admin.Module{}},
+			},
+			missing: core.ModuleCode,
+		},
+		{
+			name: "admin",
+			modules: []kernel.ProfileModule{
+				{Module: core.Module{}},
+			},
+			missing: admin.ModuleCode,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			application, err := appkernel.New(
+				context.Background(),
+				appkernel.Definition{
+					Logger:   fakeLoggerFactory{},
+					EventBus: fakeEventBusFactory{},
+					MainDatabase: appkernel.DatabaseDefinition{
+						Connector: &fakeConnectorFactory{
+							connector: newFakeConnector("main"),
+						},
+						Adapters: []kernel.ModuleDatabaseFactory{
+							&fakeDatabaseFactory{
+								code: core.ModuleCode,
+								database: &fakeCoreDatabase{
+									repository: &fakeSiteRepository{},
+								},
+							},
+						},
+					},
+					Profiles: []kernel.Profile{{
+						Code:    "dev",
+						Modules: test.modules,
+					}},
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = application.Close() }()
+
+			err = application.Boot(context.Background())
+			if err == nil ||
+				!strings.Contains(
+					err.Error(),
+					`required module "`+string(test.missing)+`"`,
+				) {
+				t.Fatalf("Boot error = %v", err)
+			}
+		})
+	}
+}
+
 func TestAppMediaFacades(t *testing.T) {
 	ctx := context.Background()
 	connector := newFakeConnector("main")
@@ -1858,9 +1926,10 @@ func TestAppMediaFacades(t *testing.T) {
 		},
 		Profiles: []kernel.Profile{{
 			Code: "dev",
-			Modules: []kernel.ProfileModule{{
-				Module: core.Module{},
-			}},
+			Modules: []kernel.ProfileModule{
+				{Module: core.Module{}},
+				{Module: admin.Module{}},
+			},
 		}},
 	})
 	if err != nil {
@@ -2051,31 +2120,37 @@ func TestAppBootRejectsDifferentCoreRepositoryCachesAcrossProfiles(
 			Profiles: []kernel.Profile{
 				{
 					Code: "first",
-					Modules: []kernel.ProfileModule{{
-						Module: core.Module{},
-						Config: core.Config{
-							RepositoryCacheTTL: time.Minute,
+					Modules: []kernel.ProfileModule{
+						{
+							Module: core.Module{},
+							Config: core.Config{
+								RepositoryCacheTTL: time.Minute,
+							},
+							Caches: []cache.Binding{{
+								Alias:     core.RepositoryCacheAlias,
+								Code:      cacheStore.code,
+								Namespace: "core/first",
+							}},
 						},
-						Caches: []cache.Binding{{
-							Alias:     core.RepositoryCacheAlias,
-							Code:      cacheStore.code,
-							Namespace: "core/first",
-						}},
-					}},
+						{Module: admin.Module{}},
+					},
 				},
 				{
 					Code: "second",
-					Modules: []kernel.ProfileModule{{
-						Module: core.Module{},
-						Config: core.Config{
-							RepositoryCacheTTL: time.Minute,
+					Modules: []kernel.ProfileModule{
+						{
+							Module: core.Module{},
+							Config: core.Config{
+								RepositoryCacheTTL: time.Minute,
+							},
+							Caches: []cache.Binding{{
+								Alias:     core.RepositoryCacheAlias,
+								Code:      cacheStore.code,
+								Namespace: "core/second",
+							}},
 						},
-						Caches: []cache.Binding{{
-							Alias:     core.RepositoryCacheAlias,
-							Code:      cacheStore.code,
-							Namespace: "core/second",
-						}},
-					}},
+						{Module: admin.Module{}},
+					},
 				},
 			},
 		},
@@ -2267,6 +2342,7 @@ func TestBootFailureIsRememberedAndNotRetried(t *testing.T) {
 				Code: "dev",
 				Modules: []kernel.ProfileModule{
 					{Module: core.Module{}},
+					{Module: admin.Module{}},
 				},
 			},
 		},

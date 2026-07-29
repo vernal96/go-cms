@@ -117,6 +117,34 @@ func (s *ApplicationService) Get(
 	return Clone(record.User), nil
 }
 
+func (s *ApplicationService) Current(
+	ctx context.Context,
+	actor security.Actor,
+) (User, error) {
+	if ctx == nil {
+		return User{}, errors.New("current user context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return User{}, err
+	}
+
+	id, exists := actor.UserID()
+	if !exists {
+		return User{}, security.ErrUnauthenticated
+	}
+	record, err := s.byID(ctx, id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return User{}, security.ErrUnauthenticated
+		}
+		return User{}, err
+	}
+	if record.DeletedAt != nil {
+		return User{}, security.ErrUnauthenticated
+	}
+	return Clone(record.User), nil
+}
+
 func (s *ApplicationService) List(
 	ctx context.Context,
 	actor security.Actor,

@@ -277,6 +277,57 @@ func newService(
 	return service, repository, hasher
 }
 
+func TestCurrentReturnsOnlyAnActiveAuthenticatedUser(t *testing.T) {
+	t.Parallel()
+
+	service, repository, _ := newService(t)
+	repository.records[1] = Record{
+		User: User{
+			ID:    1,
+			Login: "active",
+			Email: "active@example.test",
+			Name:  "Active",
+		},
+		PasswordHash: "hash:a-valid-password",
+	}
+	deletedAt := time.Now().UTC()
+	repository.records[2] = Record{
+		User: User{
+			ID:        2,
+			Login:     "deleted",
+			Email:     "deleted@example.test",
+			Name:      "Deleted",
+			DeletedAt: &deletedAt,
+		},
+		PasswordHash: "hash:a-valid-password",
+	}
+
+	current, err := service.Current(
+		context.Background(),
+		security.User(1),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ID != 1 || current.Login != "active" {
+		t.Fatalf("current user = %#v", current)
+	}
+
+	for _, actor := range []security.Actor{
+		security.Guest(),
+		security.System(),
+		security.User(2),
+		security.User(999),
+	} {
+		if _, err := service.Current(
+			context.Background(),
+			actor,
+		); !errors.Is(err, security.ErrUnauthenticated) {
+			t.Fatalf("actor %#v error = %v", actor, err)
+		}
+	}
+}
+
 func TestCreateNormalizesIdentityAndReservesSoftDeletedValues(
 	t *testing.T,
 ) {

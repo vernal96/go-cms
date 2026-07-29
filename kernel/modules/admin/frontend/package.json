@@ -1,0 +1,32 @@
+{
+  "name": "@go-cms/admin",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "vite",
+    "test": "vitest run",
+    "typecheck": "vue-go-tsc -p tsconfig.json --noEmit",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "2.3.2",
+    "element-plus": "2.14.3",
+    "vue": "3.5.40"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.2",
+    "@vitejs/plugin-vue": "6.0.8",
+    "typescript": "7.0.2",
+    "vite": "8.1.5",
+    "vitest": "4.1.10",
+    "vue-go-tsc": "0.2.1"
+  },
+  "allowScripts": {
+    "vue-go-tsc@0.2.1": true
+  }
+}

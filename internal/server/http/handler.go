@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/httplog/v3"
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/app"
+	"github.com/vernal96/go-cms/kernel/modules/admin"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/security"
@@ -139,6 +140,11 @@ func NewHandler(
 		return nil, err
 	}
 	root.Method(http.MethodPost, "/api/auth/login", login)
+	adminSession, err := newAdminSessionHandler(application)
+	if err != nil {
+		return nil, err
+	}
+	root.Method(http.MethodGet, "/api/admin/session", adminSession)
 
 	platform := chi.NewRouter()
 	platform.HandleFunc("/files/*", handler.serveFile)
@@ -149,6 +155,29 @@ func NewHandler(
 	root.NotFound(http.HandlerFunc(handler.dispatchProfile))
 	handler.root = root
 	return handler, nil
+}
+
+func newAdminSessionHandler(
+	application *app.App,
+) (http.Handler, error) {
+	for _, profile := range application.Definition().Profiles {
+		runtime, exists := application.ProfileRuntime(profile.Code)
+		if !exists {
+			return nil, errors.New(
+				"admin profile runtime is unavailable",
+			)
+		}
+		moduleRuntime, exists := runtime.Registry().Module(admin.ModuleCode)
+		if !exists {
+			return nil, errors.New("admin module runtime is unavailable")
+		}
+		adminRuntime, valid := moduleRuntime.(*admin.Runtime)
+		if !valid {
+			return nil, errors.New("admin module runtime has invalid type")
+		}
+		return adminRuntime.SessionHandler()
+	}
+	return nil, errors.New("admin profile is unavailable")
 }
 
 func (h *Handler) ServeHTTP(

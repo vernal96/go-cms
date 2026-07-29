@@ -23,6 +23,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/logging"
+	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	coreaccess "github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
@@ -517,6 +518,7 @@ func TestHandlerLooksUpCompiledRuntimeByRequestHost(t *testing.T) {
 			Code: "dev",
 			Modules: []kernel.ProfileModule{
 				{Module: core.Module{}},
+				{Module: admin.Module{}},
 			},
 		}},
 	})
@@ -594,6 +596,7 @@ func TestHandlerHidesRuntimeWithoutGuestPermissionOrPublicFlag(
 						Code: "dev",
 						Modules: []kernel.ProfileModule{
 							{Module: core.Module{}},
+							{Module: admin.Module{}},
 						},
 					}},
 				},
@@ -693,6 +696,7 @@ func TestHandlerDeliversPublicAndSignedPrivateLocalFiles(t *testing.T) {
 						Code: "dev",
 						Modules: []kernel.ProfileModule{
 							{Module: core.Module{}},
+							{Module: admin.Module{}},
 						},
 					}},
 				},
@@ -965,6 +969,7 @@ func newTransportTestApp(
 				Code: "dev",
 				Modules: []kernel.ProfileModule{
 					{Module: core.Module{}},
+					{Module: admin.Module{}},
 					{Module: module},
 				},
 			}},
@@ -1371,6 +1376,7 @@ func TestPlatformRuntimeMethodMismatchKeeps405AndAllow(t *testing.T) {
 			Code: "dev",
 			Modules: []kernel.ProfileModule{
 				{Module: core.Module{}},
+				{Module: admin.Module{}},
 			},
 		}},
 	})
@@ -1420,6 +1426,7 @@ func TestPublicAndProtectedModuleRoutesUseJWTActor(t *testing.T) {
 			Code: "dev",
 			Modules: []kernel.ProfileModule{
 				{Module: core.Module{}},
+				{Module: admin.Module{}},
 				{Module: module},
 			},
 		}},
@@ -1496,6 +1503,7 @@ func TestLoginRouteIsAvailableBeforePrivateSiteResolution(t *testing.T) {
 			Code: "dev",
 			Modules: []kernel.ProfileModule{
 				{Module: core.Module{}},
+				{Module: admin.Module{}},
 			},
 		}},
 	})
@@ -1527,6 +1535,24 @@ func TestLoginRouteIsAvailableBeforePrivateSiteResolution(t *testing.T) {
 			response.Body.String(),
 		)
 	}
+
+	request = httptest.NewRequest(
+		http.MethodGet,
+		"/api/admin/session",
+		nil,
+	)
+	request.Host = "example.com"
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized ||
+		response.Header().Get("WWW-Authenticate") != "Bearer" {
+		t.Fatalf(
+			"admin session route = %d, %#v, %q",
+			response.Code,
+			response.Header(),
+			response.Body.String(),
+		)
+	}
 }
 
 func TestPlatformMiddlewareCannotBypassJWTAuthentication(
@@ -1546,6 +1572,7 @@ func TestPlatformMiddlewareCannotBypassJWTAuthentication(
 			Code: "dev",
 			Modules: []kernel.ProfileModule{
 				{Module: core.Module{}},
+				{Module: admin.Module{}},
 			},
 		}},
 	})
@@ -1633,6 +1660,7 @@ func TestJWTAuthenticationActorPrecedesPrivateSiteResolution(
 						Code: "dev",
 						Modules: []kernel.ProfileModule{
 							{Module: core.Module{}},
+							{Module: admin.Module{}},
 						},
 					}},
 				},
@@ -1722,6 +1750,7 @@ func TestStandardLinkResourceHandlersRedirect(t *testing.T) {
 			Code: "dev",
 			Modules: []kernel.ProfileModule{
 				{Module: core.Module{}},
+				{Module: admin.Module{}},
 			},
 		}},
 	})
@@ -1780,6 +1809,7 @@ func TestHTTPAccessLogsSafeStructuredMetadataAndLevels(t *testing.T) {
 				Code: "dev",
 				Modules: []kernel.ProfileModule{
 					{Module: core.Module{}},
+					{Module: admin.Module{}},
 				},
 			}},
 		},

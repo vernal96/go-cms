@@ -6,6 +6,7 @@ import (
 	"github.com/vernal96/go-cms/internal/connectors/corecache"
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/cache"
+	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 )
 
@@ -26,6 +27,9 @@ var Profile = kernel.Profile{
 					Namespace: "core/repository",
 				},
 			},
+		},
+		{
+			Module: admin.Module{},
 		},
 	},
 }

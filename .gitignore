@@ -2,3 +2,5 @@
 .env
 .codebase-memory/
 var/log/
+kernel/modules/admin/frontend/node_modules/
+kernel/modules/admin/frontend/dist/

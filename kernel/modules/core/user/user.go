@@ -122,6 +122,7 @@ type Service interface {
 		CreateInput,
 	) (User, error)
 	Get(context.Context, security.Actor, ID) (User, error)
+	Current(context.Context, security.Actor) (User, error)
 	List(context.Context, security.Actor) ([]User, error)
 	Update(
 		context.Context,

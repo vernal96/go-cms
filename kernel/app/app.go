@@ -16,6 +16,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/logging"
 	"github.com/vernal96/go-cms/kernel/migrations"
+	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	coreaccess "github.com/vernal96/go-cms/kernel/modules/core/access"
 	corecommands "github.com/vernal96/go-cms/kernel/modules/core/commands"
@@ -37,6 +38,11 @@ var (
 	ErrClosed    = errors.New("app is closed")
 	ErrNotBooted = errors.New("app is not booted")
 )
+
+var requiredModuleCodes = [...]kernel.ModuleCode{
+	core.ModuleCode,
+	admin.ModuleCode,
+}
 
 type ConnectorFactory = kernel.ConnectorFactory
 type ModuleDatabaseFactory = kernel.ModuleDatabaseFactory
@@ -432,12 +438,14 @@ func (a *App) boot(ctx context.Context) error {
 			)
 		}
 
-		if _, exists := runtime.Registry().Module(core.ModuleCode); !exists {
-			return fmt.Errorf(
-				"profile %q does not contain required module %q",
-				profile.Code,
-				core.ModuleCode,
-			)
+		for _, moduleCode := range requiredModuleCodes {
+			if _, exists := runtime.Registry().Module(moduleCode); !exists {
+				return fmt.Errorf(
+					"profile %q does not contain required module %q",
+					profile.Code,
+					moduleCode,
+				)
+			}
 		}
 
 		profileRuntimes[profile.Code] = runtime

@@ -9,6 +9,7 @@ import (
 	"github.com/vernal96/go-cms/internal/connectors/mainpostgres"
 	configloader "github.com/vernal96/go-cms/kernel/config"
 	"github.com/vernal96/go-cms/kernel/filesystem"
+	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 )
 
@@ -100,7 +101,9 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		definition.Caches[0].Code() != corecache.Code {
 		t.Fatalf("cache factories = %#v", definition.Caches)
 	}
-	if len(definition.Profiles[0].Modules) != 1 ||
+	if len(definition.Profiles[0].Modules) != 2 ||
+		definition.Profiles[0].Modules[0].Module.Code() != core.ModuleCode ||
+		definition.Profiles[0].Modules[1].Module.Code() != admin.ModuleCode ||
 		len(definition.Profiles[0].Modules[0].Caches) != 1 ||
 		definition.Profiles[0].Modules[0].Caches[0].Code != corecache.Code {
 		t.Fatalf(
