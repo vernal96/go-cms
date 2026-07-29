@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,15 +11,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/app"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/security"
+	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
 
 type Handler struct {
-	app *app.App
+	app      *app.App
+	root     http.Handler
+	profiles map[kernel.ProfileCode]http.Handler
+}
+
+type Option func(*handlerOptions) error
+
+type handlerOptions struct {
+	platformMiddleware []httptransport.Middleware
 }
 
 type runtimeResponse struct {
@@ -29,37 +41,120 @@ type runtimeResponse struct {
 	Settings    map[string]any     `json:"settings"`
 }
 
-func NewHandler(app *app.App) (*Handler, error) {
-	if app == nil {
+func WithPlatformMiddleware(
+	middleware ...httptransport.Middleware,
+) Option {
+	return func(options *handlerOptions) error {
+		for index, current := range middleware {
+			if current == nil {
+				return errors.New(
+					"platform middleware at index " +
+						strconv.Itoa(index) + " is nil",
+				)
+			}
+		}
+		options.platformMiddleware = append(
+			options.platformMiddleware,
+			middleware...,
+		)
+		return nil
+	}
+}
+
+func NewHandler(
+	application *app.App,
+	options ...Option,
+) (*Handler, error) {
+	if application == nil {
 		return nil, errors.New("app is nil")
 	}
 
-	return &Handler{app: app}, nil
+	config := handlerOptions{}
+	for index, option := range options {
+		if option == nil {
+			return nil, errors.New(
+				"HTTP handler option at index " +
+					strconv.Itoa(index) + " is nil",
+			)
+		}
+		if err := option(&config); err != nil {
+			return nil, err
+		}
+	}
+
+	handler := &Handler{
+		app: application,
+		profiles: make(
+			map[kernel.ProfileCode]http.Handler,
+		),
+	}
+	for _, profile := range application.Definition().Profiles {
+		runtime, exists := application.ProfileRuntime(profile.Code)
+		if !exists {
+			return nil, errors.New(
+				"profile runtime " + strconv.Quote(string(profile.Code)) +
+					" is unavailable; app must be booted",
+			)
+		}
+		compiled, err := CompileProfile(
+			context.Background(),
+			runtime,
+		)
+		if err != nil {
+			return nil, err
+		}
+		handler.profiles[profile.Code] = compiled
+	}
+
+	root := chi.NewRouter()
+	root.Use(chimiddleware.Recoverer)
+	for _, middleware := range config.platformMiddleware {
+		root.Use(middleware)
+	}
+	root.Use(ensureActor)
+
+	platform := chi.NewRouter()
+	platform.HandleFunc("/files/*", handler.serveFile)
+	platform.Get("/runtime", handler.serveRuntime)
+	platform.NotFound(http.NotFound)
+	root.Mount("/_cms", platform)
+
+	root.NotFound(http.HandlerFunc(handler.dispatchProfile))
+	handler.root = root
+	return handler, nil
 }
 
 func (h *Handler) ServeHTTP(
 	response http.ResponseWriter,
 	request *http.Request,
 ) {
-	if strings.HasPrefix(request.URL.Path, "/_cms/files/") {
-		h.serveFile(response, request)
+	if h == nil || h.root == nil {
+		http.Error(
+			response,
+			"HTTP handler is unavailable",
+			http.StatusInternalServerError,
+		)
 		return
 	}
+	h.root.ServeHTTP(response, request)
+}
 
-	if request.URL.Path != "/_cms/runtime" {
-		http.NotFound(response, request)
+func (h *Handler) serveRuntime(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	actor, exists := httptransport.ActorFromContext(request.Context())
+	if !exists {
+		http.Error(
+			response,
+			"request actor is unavailable",
+			http.StatusInternalServerError,
+		)
 		return
 	}
-
-	if request.Method != http.MethodGet {
-		response.Header().Set("Allow", http.MethodGet)
-		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	runtime, err := h.app.RuntimeByDomain(
 		request.Context(),
-		security.Guest(),
+		actor,
 		request.Host,
 	)
 	if err != nil {
@@ -99,6 +194,85 @@ func (h *Handler) ServeHTTP(
 	}); err != nil {
 		http.Error(response, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (h *Handler) dispatchProfile(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	actor, exists := httptransport.ActorFromContext(request.Context())
+	if !exists {
+		http.Error(
+			response,
+			"request actor is unavailable",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+	runtime, err := h.app.RuntimeByDomain(
+		request.Context(),
+		actor,
+		request.Host,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, site.ErrNotFound):
+			http.NotFound(response, request)
+		case errors.Is(err, security.ErrForbidden),
+			errors.Is(err, security.ErrUnauthenticated):
+			http.Error(response, "site forbidden", http.StatusForbidden)
+		default:
+			http.Error(
+				response,
+				"site runtime failed",
+				http.StatusInternalServerError,
+			)
+		}
+		return
+	}
+
+	profileCode := runtime.Profile().Profile().Code
+	profileHandler, exists := h.profiles[profileCode]
+	if !exists {
+		http.Error(
+			response,
+			"profile HTTP handler is unavailable",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+	profileHandler.ServeHTTP(
+		response,
+		request.WithContext(
+			httptransport.WithSiteRuntime(
+				request.Context(),
+				runtime,
+			),
+		),
+	)
+}
+
+func ensureActor(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		if _, exists := httptransport.ActorFromContext(
+			request.Context(),
+		); exists {
+			next.ServeHTTP(response, request)
+			return
+		}
+		next.ServeHTTP(
+			response,
+			request.WithContext(
+				httptransport.WithActor(
+					request.Context(),
+					security.Guest(),
+				),
+			),
+		)
+	})
 }
 
 func (h *Handler) serveFile(

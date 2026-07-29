@@ -17,6 +17,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/permission"
+	"github.com/vernal96/go-cms/kernel/security"
 )
 
 const ModuleCode kernel.ModuleCode = "core"
@@ -27,6 +28,7 @@ const defaultRepositoryCacheTTL = 5 * time.Minute
 
 type Config struct {
 	RepositoryCacheTTL time.Duration
+	ResourcePreview    resource.PreviewPolicy
 }
 
 type RepositoryCacheDescriptor struct {
@@ -103,6 +105,9 @@ func (Module) Build(
 	if database.Access() == nil {
 		return nil, errors.New("core access repository is nil")
 	}
+	if ctx.Authorization() == nil {
+		return nil, errors.New("core authorization service is nil")
+	}
 
 	config, err := kernel.ModuleConfigFrom[Config](ctx)
 	if err != nil {
@@ -141,12 +146,16 @@ func (Module) Build(
 	return &Runtime{
 		database:        database,
 		repositoryCache: descriptor,
+		authorization:   ctx.Authorization(),
+		resourcePreview: config.ResourcePreview,
 	}, nil
 }
 
 type Runtime struct {
 	database        Database
 	repositoryCache *RepositoryCacheDescriptor
+	authorization   security.Authorizer
+	resourcePreview resource.PreviewPolicy
 }
 
 func (r *Runtime) ModuleCode() kernel.ModuleCode {

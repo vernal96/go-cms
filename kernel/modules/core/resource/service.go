@@ -929,21 +929,8 @@ func resourceID(value *int64) *ID {
 }
 
 func validLookupPath(path string) bool {
-	if path == "/" {
-		return true
-	}
-	if !strings.HasPrefix(path, "/") ||
-		strings.HasSuffix(path, "/") ||
-		strings.Contains(path, "//") {
-		return false
-	}
-
-	for _, segment := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
-		if !slugPattern.MatchString(segment) {
-			return false
-		}
-	}
-	return true
+	_, err := NormalizeLookupPath(path)
+	return err == nil
 }
 
 func equalStrings(left, right *string) bool {

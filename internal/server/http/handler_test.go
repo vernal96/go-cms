@@ -21,10 +21,12 @@ import (
 	coregroup "github.com/vernal96/go-cms/kernel/modules/core/group"
 	coremedia "github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
+	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
+	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
 
 type connector struct{}
@@ -65,9 +67,10 @@ func (repository) Update(
 }
 
 type database struct {
-	files  corefile.Repository
-	sites  site.Repository
-	access coreaccess.Repository
+	files     corefile.Repository
+	sites     site.Repository
+	resources resource.Repository
+	access    coreaccess.Repository
 }
 
 func (database) ModuleCode() kernel.ModuleCode { return core.ModuleCode }
@@ -77,7 +80,10 @@ func (d database) Sites() site.Repository {
 	}
 	return repository{isPublic: true}
 }
-func (database) Resources() resource.Repository {
+func (d database) Resources() resource.Repository {
+	if d.resources != nil {
+		return d.resources
+	}
 	return resourceRepository{}
 }
 func (d database) Files() corefile.Repository {
@@ -135,6 +141,10 @@ func (accessRepository) GuestAllowed(
 		"core",
 		"site",
 		permission.Read,
+	) || code == permission.MustCode(
+		"core",
+		"resource",
+		permission.Read,
 	), nil
 }
 
@@ -170,7 +180,25 @@ func (deniedAccessRepository) GuestAllowed(
 	return false, nil
 }
 
-type resourceRepository struct{}
+type privilegedUserAccessRepository struct {
+	accessRepository
+}
+
+func (privilegedUserAccessRepository) Subject(
+	context.Context,
+	security.UserID,
+) (coreaccess.Subject, error) {
+	return coreaccess.Subject{
+		Exists:  true,
+		Active:  true,
+		IsSuper: true,
+	}, nil
+}
+
+type resourceRepository struct {
+	byPath map[string]resource.Resource
+	byID   map[resource.ID]resource.Resource
+}
 
 func (resourceRepository) Create(
 	context.Context,
@@ -181,18 +209,26 @@ func (resourceRepository) Create(
 	return resource.Resource{}, resource.ErrNotFound
 }
 
-func (resourceRepository) ByID(
-	context.Context,
-	resource.ID,
+func (r resourceRepository) ByID(
+	_ context.Context,
+	id resource.ID,
 ) (resource.Resource, error) {
+	item, exists := r.byID[id]
+	if exists {
+		return resource.Clone(item), nil
+	}
 	return resource.Resource{}, resource.ErrNotFound
 }
 
-func (resourceRepository) ByPath(
-	context.Context,
-	site.ID,
-	string,
+func (r resourceRepository) ByPath(
+	_ context.Context,
+	siteID site.ID,
+	path string,
 ) (resource.Resource, error) {
+	item, exists := r.byPath[path]
+	if exists && item.SiteID == siteID {
+		return resource.Clone(item), nil
+	}
 	return resource.Resource{}, resource.ErrNotFound
 }
 
@@ -221,17 +257,19 @@ func (resourceRepository) Delete(
 }
 
 type databaseFactory struct {
-	files  corefile.Repository
-	sites  site.Repository
-	access coreaccess.Repository
+	files     corefile.Repository
+	sites     site.Repository
+	resources resource.Repository
+	access    coreaccess.Repository
 }
 
 func (databaseFactory) ModuleCode() kernel.ModuleCode { return core.ModuleCode }
 func (f databaseFactory) Build(kernel.DBConnector) (kernel.ModuleDatabase, error) {
 	return database{
-		files:  f.files,
-		sites:  f.sites,
-		access: f.access,
+		files:     f.files,
+		sites:     f.sites,
+		resources: f.resources,
+		access:    f.access,
 	}, nil
 }
 
@@ -554,5 +592,482 @@ func TestHandlerDeliversPublicAndSignedPrivateLocalFiles(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+type transportResourceType struct {
+	code resourcetype.Code
+}
+
+func (t transportResourceType) Code() resourcetype.Code {
+	return t.code
+}
+
+func (transportResourceType) PathMode() resourcetype.PathMode {
+	return resourcetype.PathRoute
+}
+
+func (transportResourceType) Normalize(
+	payload resourcetype.Payload,
+) (resourcetype.Payload, error) {
+	return payload, nil
+}
+
+type transportModule struct {
+	code         kernel.ModuleCode
+	resourceType resourcetype.Type
+	order        *[]string
+}
+
+func (m transportModule) Code() kernel.ModuleCode {
+	return m.code
+}
+
+func (m transportModule) Registry() kernel.ModuleRegistry {
+	return kernel.ModuleRegistry{
+		ResourceTypes: []resourcetype.Type{m.resourceType},
+	}
+}
+
+func (m transportModule) Build(
+	context.Context,
+	kernel.ModuleContext,
+) (kernel.ModuleRuntime, error) {
+	return &transportRuntime{
+		code:         m.code,
+		resourceType: m.resourceType.Code(),
+		order:        m.order,
+	}, nil
+}
+
+type transportRuntime struct {
+	code         kernel.ModuleCode
+	resourceType resourcetype.Code
+	order        *[]string
+}
+
+func (r *transportRuntime) ModuleCode() kernel.ModuleCode {
+	return r.code
+}
+
+func (r *transportRuntime) HTTP() httptransport.Builder {
+	return httptransport.BuilderFunc(func(
+		context.Context,
+	) (httptransport.Contribution, error) {
+		return httptransport.Contribution{
+			Middleware: []httptransport.MiddlewareDefinition{
+				{
+					Code:       "transport.profile",
+					Scope:      httptransport.MiddlewareProfile,
+					Middleware: recordHTTPOrder(r.order, "profile"),
+				},
+				{
+					Code:       "transport.module",
+					Scope:      httptransport.MiddlewareModule,
+					Middleware: recordHTTPOrder(r.order, "module"),
+				},
+				{
+					Code:       "transport.route",
+					Scope:      httptransport.MiddlewareLocal,
+					Middleware: recordHTTPOrder(r.order, "route"),
+				},
+				{
+					Code:       "transport.resource",
+					Scope:      httptransport.MiddlewareLocal,
+					Middleware: recordHTTPOrder(r.order, "resource"),
+				},
+			},
+			Routes: func(registrar httptransport.Registrar) error {
+				return registrar.Route(httptransport.Route{
+					Name:    "transport.custom",
+					Method:  http.MethodGet,
+					Pattern: "/custom",
+					Handler: http.HandlerFunc(func(
+						response http.ResponseWriter,
+						_ *http.Request,
+					) {
+						*r.order = append(*r.order, "handler")
+						response.WriteHeader(http.StatusNoContent)
+					}),
+					Middleware: []httptransport.MiddlewareCode{
+						"transport.route",
+					},
+				})
+			},
+			ResourceHandlers: []httptransport.ResourceHandler{{
+				Type: r.resourceType,
+				Handler: http.HandlerFunc(func(
+					response http.ResponseWriter,
+					_ *http.Request,
+				) {
+					*r.order = append(*r.order, "handler")
+					response.WriteHeader(http.StatusNoContent)
+				}),
+				Middleware: []httptransport.MiddlewareCode{
+					"transport.resource",
+				},
+			}},
+		}, nil
+	})
+}
+
+func recordHTTPOrder(
+	order *[]string,
+	marker string,
+) httptransport.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(
+			response http.ResponseWriter,
+			request *http.Request,
+		) {
+			*order = append(*order, marker)
+			next.ServeHTTP(response, request)
+		})
+	}
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
+
+func newTransportTestApp(
+	t *testing.T,
+	module transportModule,
+	resources resource.Repository,
+) *appkernel.App {
+	t.Helper()
+	runtimeApp, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{
+			MainDatabase: appkernel.DatabaseDefinition{
+				Connector: connectorFactory{},
+				Adapters: []kernel.ModuleDatabaseFactory{
+					databaseFactory{resources: resources},
+				},
+			},
+			Profiles: []kernel.Profile{{
+				Code: "dev",
+				Modules: []kernel.ProfileModule{
+					{Module: core.Module{}},
+					{Module: module},
+				},
+			}},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtimeApp.Close() })
+	if err := runtimeApp.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return runtimeApp
+}
+
+func TestHandlerMiddlewareOrderForRoutesAndResources(t *testing.T) {
+	order := make([]string, 0, 5)
+	resourceType := transportResourceType{code: "transport_test"}
+	module := transportModule{
+		code:         "transport",
+		resourceType: resourceType,
+		order:        &order,
+	}
+	runtimeApp := newTransportTestApp(
+		t,
+		module,
+		resourceRepository{
+			byPath: map[string]resource.Resource{
+				"/article": {
+					ID:       1,
+					SiteID:   1,
+					Type:     resourceType.Code(),
+					Path:     stringPointer("/article"),
+					IsPublic: true,
+				},
+			},
+		},
+	)
+	handler, err := httpserver.NewHandler(
+		runtimeApp,
+		httpserver.WithPlatformMiddleware(
+			recordHTTPOrder(&order, "platform"),
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/custom", nil)
+	request.Host = "example.com"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent ||
+		strings.Join(order, ",") !=
+			"platform,profile,module,route,handler" {
+		t.Fatalf("custom response = %d, order = %v", response.Code, order)
+	}
+
+	order = order[:0]
+	request = httptest.NewRequest(http.MethodGet, "/article", nil)
+	request.Host = "example.com"
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent ||
+		strings.Join(order, ",") !=
+			"platform,profile,module,resource,handler" {
+		t.Fatalf("resource response = %d, order = %v", response.Code, order)
+	}
+}
+
+func TestResourceRootTrailingSlashAndQueryPolicy(t *testing.T) {
+	order := make([]string, 0)
+	resourceType := transportResourceType{code: "route_policy"}
+	module := transportModule{
+		code:         "transport",
+		resourceType: resourceType,
+		order:        &order,
+	}
+	repository := resourceRepository{
+		byPath: map[string]resource.Resource{
+			"/": {
+				ID:       1,
+				SiteID:   1,
+				Type:     resourceType.Code(),
+				Path:     stringPointer("/"),
+				IsPublic: true,
+			},
+			"/section": {
+				ID:       2,
+				SiteID:   1,
+				Type:     resourceType.Code(),
+				Path:     stringPointer("/section"),
+				IsPublic: true,
+			},
+			"/_cms/claimed": {
+				ID:       3,
+				SiteID:   1,
+				Type:     resourceType.Code(),
+				Path:     stringPointer("/_cms/claimed"),
+				IsPublic: true,
+			},
+		},
+	}
+	handler, err := httpserver.NewHandler(
+		newTransportTestApp(t, module, repository),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		path string
+		want int
+	}{
+		{path: "/", want: http.StatusNoContent},
+		{path: "/section", want: http.StatusNoContent},
+		{path: "/section?from=query", want: http.StatusNoContent},
+		{path: "/section/", want: http.StatusNotFound},
+		{path: "/_cms/claimed", want: http.StatusNotFound},
+	}
+	for _, test := range tests {
+		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		request.Host = "example.com"
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != test.want {
+			t.Fatalf(
+				"path %q status = %d, want %d",
+				test.path,
+				response.Code,
+				test.want,
+			)
+		}
+	}
+}
+
+func TestPlatformRuntimeMethodMismatchKeeps405AndAllow(t *testing.T) {
+	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
+		MainDatabase: appkernel.DatabaseDefinition{
+			Connector: connectorFactory{},
+			Adapters:  []kernel.ModuleDatabaseFactory{databaseFactory{}},
+		},
+		Profiles: []kernel.Profile{{
+			Code: "dev",
+			Modules: []kernel.ProfileModule{
+				{Module: core.Module{}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runtimeApp.Close() }()
+	if err := runtimeApp.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := httpserver.NewHandler(runtimeApp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/_cms/runtime", nil)
+	request.Host = "example.com"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusMethodNotAllowed ||
+		!strings.Contains(response.Header().Get("Allow"), http.MethodGet) {
+		t.Fatalf(
+			"status = %d, Allow = %q",
+			response.Code,
+			response.Header().Get("Allow"),
+		)
+	}
+}
+
+func TestPlatformAuthenticationActorPrecedesPrivateSiteResolution(
+	t *testing.T,
+) {
+	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
+		MainDatabase: appkernel.DatabaseDefinition{
+			Connector: connectorFactory{},
+			Adapters: []kernel.ModuleDatabaseFactory{databaseFactory{
+				sites:  repository{isPublic: false},
+				access: privilegedUserAccessRepository{},
+			}},
+		},
+		Profiles: []kernel.Profile{{
+			Code: "dev",
+			Modules: []kernel.ProfileModule{
+				{Module: core.Module{}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runtimeApp.Close() }()
+	if err := runtimeApp.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	handler, err := httpserver.NewHandler(
+		runtimeApp,
+		httpserver.WithPlatformMiddleware(
+			func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(
+					response http.ResponseWriter,
+					request *http.Request,
+				) {
+					next.ServeHTTP(
+						response,
+						request.WithContext(
+							httptransport.WithActor(
+								request.Context(),
+								security.User(42),
+							),
+						),
+					)
+				})
+			},
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/_cms/runtime", nil)
+	request.Host = "example.com"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"status = %d, body = %q",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+}
+
+func TestStandardLinkResourceHandlersRedirect(t *testing.T) {
+	externalURL := "https://example.org/article"
+	externalPath := "/external"
+	shortcutPath := "/shortcut"
+	targetPath := "/target"
+	targetID := resource.ID(3)
+	resources := resourceRepository{
+		byPath: map[string]resource.Resource{
+			externalPath: {
+				ID:          1,
+				SiteID:      1,
+				Type:        resourcetype.Link,
+				Path:        &externalPath,
+				ExternalURL: &externalURL,
+				IsPublic:    true,
+			},
+			shortcutPath: {
+				ID:               2,
+				SiteID:           1,
+				Type:             resourcetype.ResourceLink,
+				Path:             &shortcutPath,
+				TargetResourceID: &targetID,
+				IsPublic:         true,
+			},
+		},
+		byID: map[resource.ID]resource.Resource{
+			targetID: {
+				ID:       targetID,
+				SiteID:   1,
+				Type:     resourcetype.Page,
+				Path:     &targetPath,
+				IsPublic: true,
+			},
+		},
+	}
+	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
+		MainDatabase: appkernel.DatabaseDefinition{
+			Connector: connectorFactory{},
+			Adapters: []kernel.ModuleDatabaseFactory{
+				databaseFactory{resources: resources},
+			},
+		},
+		Profiles: []kernel.Profile{{
+			Code: "dev",
+			Modules: []kernel.ProfileModule{
+				{Module: core.Module{}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runtimeApp.Close() }()
+	if err := runtimeApp.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := httpserver.NewHandler(runtimeApp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		path     string
+		location string
+	}{
+		{path: externalPath, location: externalURL},
+		{path: shortcutPath, location: targetPath},
+	}
+	for _, test := range tests {
+		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		request.Host = "example.com"
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusFound ||
+			response.Header().Get("Location") != test.location {
+			t.Fatalf(
+				"path %q response = %d, Location = %q",
+				test.path,
+				response.Code,
+				response.Header().Get("Location"),
+			)
+		}
 	}
 }
