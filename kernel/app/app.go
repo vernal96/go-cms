@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,7 +12,9 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/console"
+	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/filesystem"
+	"github.com/vernal96/go-cms/kernel/logging"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	coreaccess "github.com/vernal96/go-cms/kernel/modules/core/access"
@@ -44,6 +47,8 @@ type DatabaseDefinition struct {
 }
 
 type Definition struct {
+	Logger              logging.Factory
+	EventBus            eventbus.Factory
 	MainDatabase        DatabaseDefinition
 	AdditionalDatabases []DatabaseDefinition
 	Filesystems         []filesystem.Factory
@@ -59,16 +64,19 @@ type bindingRuntime struct {
 type App struct {
 	definition Definition
 
-	main          *bindingRuntime
-	additional    map[kernel.ConnectionCode]*bindingRuntime
-	connectors    []kernel.DBConnector
-	filesystems   *filesystem.Manager
-	caches        *cache.Manager
-	coreDatabase  core.Database
-	migrationPlan []migrations.Plan
-	seedPlan      []seeds.Plan
-	providers     []console.Provider
-	console       *console.Console
+	loggerConnector logging.Connector
+	logger          *slog.Logger
+	eventBus        eventbus.Connector
+	main            *bindingRuntime
+	additional      map[kernel.ConnectionCode]*bindingRuntime
+	connectors      []kernel.DBConnector
+	filesystems     *filesystem.Manager
+	caches          *cache.Manager
+	coreDatabase    core.Database
+	migrationPlan   []migrations.Plan
+	seedPlan        []seeds.Plan
+	providers       []console.Provider
+	console         *console.Console
 
 	profileRuntimes map[kernel.ProfileCode]*kernel.ProfileRuntime
 	sites           *site.Catalog
@@ -116,8 +124,57 @@ func New(
 			return
 		}
 
+		reported := application.logger != nil
+		if application.logger != nil {
+			application.logger.ErrorContext(
+				context.WithoutCancel(ctx),
+				"application initialization failed",
+				slog.String("event", "app.initialization.failed"),
+				slog.Any("error", resultErr),
+			)
+		}
 		resultErr = errors.Join(resultErr, application.Close())
+		if reported {
+			resultErr = logging.Reported(resultErr)
+		}
 	}()
+
+	loggerConnector, err := definition.Logger.Open(ctx)
+	if loggerConnector != nil {
+		application.loggerConnector = loggerConnector
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open project logger: %w", err)
+	}
+	if loggerConnector == nil {
+		return nil, errors.New("logger factory returned nil connector")
+	}
+	application.logger = loggerConnector.Logger()
+	if application.logger == nil {
+		return nil, errors.New("logger connector returned nil logger")
+	}
+	if err := loggerConnector.Ping(ctx); err != nil {
+		return nil, fmt.Errorf("ping project logger: %w", err)
+	}
+	application.logger.InfoContext(
+		ctx,
+		"application initialization started",
+		slog.String("event", "app.initialization.started"),
+	)
+
+	eventBusConnector, err := definition.EventBus.Open(ctx)
+	if eventBusConnector != nil {
+		application.eventBus = eventBusConnector
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open project event bus: %w", err)
+	}
+	if eventBusConnector == nil {
+		return nil, errors.New("event bus factory returned nil connector")
+	}
+	if err := eventBusConnector.Ping(ctx); err != nil {
+		return nil, fmt.Errorf("ping project event bus: %w", err)
+	}
 
 	filesystems, err := filesystem.NewManager(ctx, definition.Filesystems)
 	if err != nil {
@@ -223,6 +280,11 @@ func New(
 	}
 	application.console = runner
 
+	application.logger.InfoContext(
+		ctx,
+		"application initialized",
+		slog.String("event", "app.initialization.completed"),
+	)
 	return application, nil
 }
 
@@ -232,7 +294,35 @@ func (a *App) Boot(ctx context.Context) error {
 	}
 
 	a.bootOnce.Do(func() {
+		logContext := ctx
+		if logContext == nil {
+			logContext = context.Background()
+		}
+		if a.logger != nil {
+			a.logger.InfoContext(
+				logContext,
+				"application boot started",
+				slog.String("event", "app.boot.started"),
+			)
+		}
 		a.bootErr = a.boot(ctx)
+		if a.logger == nil {
+			return
+		}
+		if a.bootErr != nil {
+			a.logger.ErrorContext(
+				logContext,
+				"application boot failed",
+				slog.String("event", "app.boot.failed"),
+				slog.Any("error", a.bootErr),
+			)
+			return
+		}
+		a.logger.InfoContext(
+			logContext,
+			"application boot completed",
+			slog.String("event", "app.boot.completed"),
+		)
 	})
 
 	return a.bootErr
@@ -318,6 +408,9 @@ func (a *App) boot(ctx context.Context) error {
 			Groups:        groupService,
 			Authorization: accessService,
 			Caches:        a.caches,
+			Filesystems:   a.filesystems,
+			EventBus:      a.eventBus,
+			Logger:        a.logger,
 		},
 	)
 	if err != nil {
@@ -399,6 +492,22 @@ func (a *App) Definition() Definition {
 	}
 
 	return cloneDefinition(a.definition)
+}
+
+func (a *App) Logger() *slog.Logger {
+	if a == nil {
+		return nil
+	}
+
+	return a.logger
+}
+
+func (a *App) EventBus() eventbus.Bus {
+	if a == nil {
+		return nil
+	}
+
+	return a.eventBus
 }
 
 func (a *App) Console() *console.Console {
@@ -1465,12 +1574,25 @@ func (a *App) Close() error {
 	}
 
 	a.closeOnce.Do(func() {
-		a.lifecycleMu.Lock()
-		defer a.lifecycleMu.Unlock()
-
 		a.closed.Store(true)
+		if a.logger != nil {
+			a.logger.Info(
+				"application shutdown started",
+				slog.String("event", "app.shutdown.started"),
+			)
+		}
 
 		var closeErrors []error
+		if a.eventBus != nil {
+			if err := a.eventBus.Close(); err != nil {
+				closeErrors = append(closeErrors, fmt.Errorf(
+					"close project event bus: %w",
+					err,
+				))
+			}
+		}
+
+		a.lifecycleMu.Lock()
 		for index := len(a.connectors) - 1; index >= 0; index-- {
 			connector := a.connectors[index]
 			if err := connector.Close(); err != nil {
@@ -1489,6 +1611,31 @@ func (a *App) Close() error {
 		if a.filesystems != nil {
 			if err := a.filesystems.Close(); err != nil {
 				closeErrors = append(closeErrors, err)
+			}
+		}
+		a.lifecycleMu.Unlock()
+
+		dependencyCloseErr := errors.Join(closeErrors...)
+		if a.logger != nil {
+			if dependencyCloseErr != nil {
+				a.logger.Error(
+					"application shutdown failed",
+					slog.String("event", "app.shutdown.failed"),
+					slog.Any("error", dependencyCloseErr),
+				)
+			} else {
+				a.logger.Info(
+					"application shutdown completed",
+					slog.String("event", "app.shutdown.completed"),
+				)
+			}
+		}
+		if a.loggerConnector != nil {
+			if err := a.loggerConnector.Close(); err != nil {
+				closeErrors = append(
+					closeErrors,
+					fmt.Errorf("close project logger: %w", err),
+				)
 			}
 		}
 
@@ -1900,6 +2047,13 @@ func validateSource(
 }
 
 func validateDefinition(definition Definition) error {
+	if definition.Logger == nil {
+		return errors.New("logger factory is nil")
+	}
+	if definition.EventBus == nil {
+		return errors.New("event bus factory is nil")
+	}
+
 	filesystemCodes := make(
 		map[filesystem.Code]struct{},
 		len(definition.Filesystems),
@@ -2091,6 +2245,10 @@ func cloneDefinition(definition Definition) Definition {
 			definition.Profiles[index].Modules[moduleIndex].Caches = append(
 				[]cache.Binding(nil),
 				definition.Profiles[index].Modules[moduleIndex].Caches...,
+			)
+			definition.Profiles[index].Modules[moduleIndex].Filesystems = append(
+				[]filesystem.Binding(nil),
+				definition.Profiles[index].Modules[moduleIndex].Filesystems...,
 			)
 		}
 		definition.Profiles[index].Params = field.CloneDefinitions(

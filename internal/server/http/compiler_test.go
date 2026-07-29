@@ -3,6 +3,8 @@ package httpserver_test
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,11 +12,26 @@ import (
 
 	httpserver "github.com/vernal96/go-cms/internal/server/http"
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
 
 type compilerResolver struct{}
+
+type compilerEventBus struct{}
+
+func (compilerEventBus) Publish(context.Context, eventbus.Message) error {
+	return nil
+}
+
+func (compilerEventBus) Consume(
+	context.Context,
+	eventbus.Subscription,
+	eventbus.Handler,
+) error {
+	return nil
+}
 
 func (compilerResolver) MainModuleDatabase(
 	kernel.ModuleCode,
@@ -100,7 +117,13 @@ func makeCompilerProfile(
 	modules ...compilerModule,
 ) *kernel.ProfileRuntime {
 	t.Helper()
-	factory, err := kernel.NewProfileRuntimeFactory(compilerResolver{})
+	factory, err := kernel.NewProfileRuntimeFactory(
+		compilerResolver{},
+		kernel.RuntimeServices{
+			EventBus: compilerEventBus{},
+			Logger:   slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,16 +3,33 @@ package site
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type testResolver struct{}
+
+type testEventBus struct{}
+
+func (testEventBus) Publish(context.Context, eventbus.Message) error {
+	return nil
+}
+
+func (testEventBus) Consume(
+	context.Context,
+	eventbus.Subscription,
+	eventbus.Handler,
+) error {
+	return nil
+}
 
 func (testResolver) MainModuleDatabase(
 	kernel.ModuleCode,
@@ -96,7 +113,13 @@ func newCatalogForTest(
 	access Access,
 ) *Catalog {
 	t.Helper()
-	factory, err := kernel.NewProfileRuntimeFactory(testResolver{})
+	factory, err := kernel.NewProfileRuntimeFactory(
+		testResolver{},
+		kernel.RuntimeServices{
+			EventBus: testEventBus{},
+			Logger:   slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

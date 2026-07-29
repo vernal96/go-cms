@@ -1,3 +1,4 @@
 .idea
 .env
 .codebase-memory/
+var/log/

@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/httplog/v3"
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/app"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
@@ -31,6 +32,7 @@ type Option func(*handlerOptions) error
 
 type handlerOptions struct {
 	platformMiddleware []httptransport.Middleware
+	accessTokens       security.AccessTokens
 }
 
 type runtimeResponse struct {
@@ -61,6 +63,16 @@ func WithPlatformMiddleware(
 	}
 }
 
+func WithAccessTokens(tokens security.AccessTokens) Option {
+	return func(options *handlerOptions) error {
+		if isNilHTTPValue(tokens) {
+			return errors.New("HTTP access token service is nil")
+		}
+		options.accessTokens = tokens
+		return nil
+	}
+}
+
 func NewHandler(
 	application *app.App,
 	options ...Option,
@@ -80,6 +92,9 @@ func NewHandler(
 		if err := option(&config); err != nil {
 			return nil, err
 		}
+	}
+	if config.accessTokens == nil {
+		return nil, errors.New("HTTP access token service is required")
 	}
 
 	handler := &Handler{
@@ -107,11 +122,23 @@ func NewHandler(
 	}
 
 	root := chi.NewRouter()
-	root.Use(chimiddleware.Recoverer)
+	root.Use(chimiddleware.RequestID)
+	root.Use(chimiddleware.ClientIPFromRemoteAddr)
+	root.Use(httplog.RequestLogger(
+		accessLogger(application.Logger()),
+		accessLogOptions(),
+	))
+	root.Use(requestLogMetadata)
 	for _, middleware := range config.platformMiddleware {
 		root.Use(middleware)
 	}
-	root.Use(ensureActor)
+	root.Use(optionalAuthentication(config.accessTokens))
+	root.Use(requestActorLogAttributes)
+	login, err := newLoginHandler(application, config.accessTokens)
+	if err != nil {
+		return nil, err
+	}
+	root.Method(http.MethodPost, "/api/auth/login", login)
 
 	platform := chi.NewRouter()
 	platform.HandleFunc("/files/*", handler.serveFile)
@@ -250,29 +277,6 @@ func (h *Handler) dispatchProfile(
 			),
 		),
 	)
-}
-
-func ensureActor(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(
-		response http.ResponseWriter,
-		request *http.Request,
-	) {
-		if _, exists := httptransport.ActorFromContext(
-			request.Context(),
-		); exists {
-			next.ServeHTTP(response, request)
-			return
-		}
-		next.ServeHTTP(
-			response,
-			request.WithContext(
-				httptransport.WithActor(
-					request.Context(),
-					security.Guest(),
-				),
-			),
-		)
-	})
 }
 
 func (h *Handler) serveFile(

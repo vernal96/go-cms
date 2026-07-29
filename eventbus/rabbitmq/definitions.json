@@ -1,0 +1,48 @@
+{
+  "rabbit_version": "4.3.4",
+  "users": [
+    {
+      "name": "cms",
+      "password_hash": "3VIY6Qy8WVbAuD6kZLNbnTsWwZXX4iDIS3jut1i7b2aoCkU4",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": [
+        "administrator"
+      ],
+      "limits": {}
+    }
+  ],
+  "vhosts": [
+    {
+      "name": "cms",
+      "description": "CMS event bus",
+      "tags": [],
+      "default_queue_type": "classic"
+    }
+  ],
+  "permissions": [
+    {
+      "user": "cms",
+      "vhost": "cms",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
+  "topic_permissions": [],
+  "parameters": [],
+  "global_parameters": [],
+  "policies": [],
+  "queues": [],
+  "exchanges": [
+    {
+      "name": "cms.events",
+      "vhost": "cms",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "bindings": []
+}

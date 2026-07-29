@@ -11,6 +11,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
@@ -128,6 +129,13 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 			SiteID:   3,
 			Title:    "cached",
 			Settings: map[string]any{"count": json.Number("2")},
+			Widgets: []resource.WidgetBinding{{
+				Code:     widget.Code("content_summary"),
+				Position: 0,
+				Params: map[string]any{
+					"limit": json.Number("3"),
+				},
+			}},
 		},
 	}
 	repository := &cachedResourceRepository{
@@ -136,16 +144,27 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 		ttl:   5 * time.Minute,
 	}
 
-	if _, err := repository.ByID(context.Background(), 7); err != nil {
+	first, err := repository.ByID(context.Background(), 7)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.ByID(context.Background(), 7); err != nil {
+	first.Widgets[0].Params["limit"] = json.Number("99")
+	second, err := repository.ByID(context.Background(), 7)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if base.byIDCalls != 1 {
 		t.Fatalf("resource ByID calls = %d", base.byIDCalls)
 	}
-	key := "core:resource:id:v1:7"
+	if len(second.Widgets) != 1 ||
+		second.Widgets[0].Code != "content_summary" {
+		t.Fatalf("cached widgets = %#v", second.Widgets)
+	}
+	if value, ok := second.Widgets[0].Params["limit"].(json.Number); !ok ||
+		value.String() != "3" {
+		t.Fatalf("cached widget params = %#v", second.Widgets[0].Params)
+	}
+	key := "core:resource:id:v2:7"
 	if !reflect.DeepEqual(
 		store.options[key].Tags,
 		[]cache.Tag{siteTag(3), resourceTag(7)},

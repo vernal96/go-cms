@@ -2,25 +2,44 @@ package resource
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type testAuthorizer struct{}
+
+type testEventBus struct{}
+
+func (testEventBus) Publish(context.Context, eventbus.Message) error {
+	return nil
+}
+
+func (testEventBus) Consume(
+	context.Context,
+	eventbus.Subscription,
+	eventbus.Handler,
+) error {
+	return nil
+}
 
 func (testAuthorizer) Check(
 	context.Context,
@@ -57,6 +76,51 @@ type testModuleRuntime struct{}
 
 func (testModuleRuntime) ModuleCode() kernel.ModuleCode {
 	return "test"
+}
+
+func (testModuleRuntime) Widgets() []widget.Widget {
+	return []widget.Widget{testWidget{}}
+}
+
+type testWidget struct{}
+
+func (testWidget) Definition() widget.Definition {
+	required := true
+	return widget.Definition{
+		Code:        "summary",
+		Label:       "Summary",
+		Description: "Resource summary",
+		Fields: []field.Definition{
+			{
+				Key:      "title",
+				Type:     field.TypeString,
+				Label:    "Title",
+				Required: &required,
+			},
+			{
+				Key:   "limit",
+				Type:  field.TypeInteger,
+				Label: "Limit",
+			},
+		},
+	}
+}
+
+func (testWidget) New(
+	values map[string]any,
+) (widget.Instance, error) {
+	return testWidgetInstance{values: values}, nil
+}
+
+type testWidgetInstance struct {
+	values map[string]any
+}
+
+func (i testWidgetInstance) Render(
+	context.Context,
+	widget.RenderInput,
+) (map[string]any, error) {
+	return i.values, nil
 }
 
 type noPathType struct{}
@@ -444,7 +508,13 @@ func newTestService(
 	t.Helper()
 
 	required := true
-	factory, err := kernel.NewProfileRuntimeFactory(testDatabaseResolver{})
+	factory, err := kernel.NewProfileRuntimeFactory(
+		testDatabaseResolver{},
+		kernel.RuntimeServices{
+			EventBus: testEventBus{},
+			Logger:   slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,6 +663,123 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "slug") {
 		t.Fatalf("invalid slug error = %v", err)
+	}
+}
+
+func TestServiceValidatesNormalizesAndReplacesWidgets(t *testing.T) {
+	service, _, _ := newTestService(t)
+	ctx := context.Background()
+	templateCode := template.Code("empty")
+
+	created, err := service.Create(ctx, security.System(), CreateInput{
+		SiteID:   1,
+		Template: &templateCode,
+		Title:    "Home",
+		Widgets: []WidgetInput{
+			{
+				Code: "test_summary",
+				Params: map[string]any{
+					"title": "Primary",
+					"limit": json.Number("3"),
+				},
+			},
+			{
+				Code: "test_summary",
+				Params: map[string]any{
+					"title": "Secondary",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(created.Widgets) != 2 ||
+		created.Widgets[0].Position != 0 ||
+		created.Widgets[1].Position != 1 ||
+		created.Widgets[0].Params["limit"] != int64(3) {
+		t.Fatalf("created widgets = %#v", created.Widgets)
+	}
+
+	created.Widgets[0].Params["title"] = "Mutated"
+	stored, err := service.Get(ctx, security.System(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Widgets[0].Params["title"] != "Primary" {
+		t.Fatal("resource widgets share caller memory")
+	}
+
+	updated, err := service.Update(ctx, security.System(), UpdateInput{
+		ID:           created.ID,
+		Type:         resourcetype.Page,
+		Template:     &templateCode,
+		Title:        "Home",
+		IsPublic:     true,
+		IsSearchable: true,
+		InMenu:       true,
+		InSitemap:    true,
+		Widgets: []WidgetInput{{
+			Code: "test_summary",
+			Params: map[string]any{
+				"title": "Replacement",
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Widgets) != 1 ||
+		updated.Widgets[0].Position != 0 ||
+		updated.Widgets[0].Params["title"] != "Replacement" {
+		t.Fatalf("updated widgets = %#v", updated.Widgets)
+	}
+
+	testCases := []struct {
+		name   string
+		widget WidgetInput
+		match  string
+	}{
+		{
+			name: "unknown widget",
+			widget: WidgetInput{
+				Code: "missing_widget",
+			},
+			match: "unknown widget",
+		},
+		{
+			name: "missing required param",
+			widget: WidgetInput{
+				Code: "test_summary",
+			},
+			match: "required",
+		},
+		{
+			name: "unknown param",
+			widget: WidgetInput{
+				Code: "test_summary",
+				Params: map[string]any{
+					"title":   "Title",
+					"unknown": true,
+				},
+			},
+			match: "defined",
+		},
+	}
+	for _, test := range testCases {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := service.Create(ctx, security.System(), CreateInput{
+				SiteID:   2,
+				Template: &templateCode,
+				Title:    "Invalid",
+				Widgets: []WidgetInput{
+					test.widget,
+				},
+			})
+			if err == nil || !strings.Contains(err.Error(), test.match) {
+				t.Fatalf("error = %v", err)
+			}
+		})
 	}
 }
 

@@ -3,11 +3,15 @@ package kernel_test
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/cache"
+	"github.com/vernal96/go-cms/kernel/eventbus"
+	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
@@ -16,11 +20,33 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type emptyDatabaseResolver struct{}
+
+type testEventBus struct{}
+
+func (testEventBus) Publish(context.Context, eventbus.Message) error {
+	return nil
+}
+
+func (testEventBus) Consume(
+	context.Context,
+	eventbus.Subscription,
+	eventbus.Handler,
+) error {
+	return nil
+}
+
+func testRuntimeServices() kernel.RuntimeServices {
+	return kernel.RuntimeServices{
+		EventBus: testEventBus{},
+		Logger:   slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+}
 
 func (emptyDatabaseResolver) MainModuleDatabase(
 	kernel.ModuleCode,
@@ -98,6 +124,63 @@ type registryRuntime struct {
 	code kernel.ModuleCode
 }
 
+type widgetProviderModule struct {
+	code    kernel.ModuleCode
+	widgets []widget.Widget
+}
+
+func (m widgetProviderModule) Code() kernel.ModuleCode {
+	return m.code
+}
+
+func (m widgetProviderModule) Build(
+	context.Context,
+	kernel.ModuleContext,
+) (kernel.ModuleRuntime, error) {
+	return widgetProviderRuntime{
+		code:    m.code,
+		widgets: append([]widget.Widget(nil), m.widgets...),
+	}, nil
+}
+
+type widgetProviderRuntime struct {
+	code    kernel.ModuleCode
+	widgets []widget.Widget
+}
+
+func (r widgetProviderRuntime) ModuleCode() kernel.ModuleCode {
+	return r.code
+}
+
+func (r widgetProviderRuntime) Widgets() []widget.Widget {
+	return append([]widget.Widget(nil), r.widgets...)
+}
+
+type runtimeWidget struct {
+	definition widget.Definition
+}
+
+func (w runtimeWidget) Definition() widget.Definition {
+	return widget.CloneDefinition(w.definition)
+}
+
+func (runtimeWidget) New(
+	values map[string]any,
+) (widget.Instance, error) {
+	return runtimeWidgetInstance{values: values}, nil
+}
+
+type runtimeWidgetInstance struct {
+	values map[string]any
+}
+
+func (i runtimeWidgetInstance) Render(
+	context.Context,
+	widget.RenderInput,
+) (map[string]any, error) {
+	return i.values, nil
+}
+
 type markerFileService struct {
 	corefile.Service
 }
@@ -133,6 +216,54 @@ type fileAwareModule struct {
 }
 
 type cacheAwareModule struct{}
+
+type infrastructureAwareModule struct {
+	eventBus eventbus.Bus
+	disk     filesystem.Disk
+}
+
+type loggerAwareModule struct {
+	code kernel.ModuleCode
+}
+
+func (*infrastructureAwareModule) Code() kernel.ModuleCode {
+	return "infrastructure-aware"
+}
+
+func (m *infrastructureAwareModule) Build(
+	_ context.Context,
+	ctx kernel.ModuleContext,
+) (kernel.ModuleRuntime, error) {
+	if ctx.EventBus() != m.eventBus {
+		return nil, errors.New("module event bus does not match")
+	}
+	if ctx.Filesystems() == nil {
+		return nil, errors.New("module filesystem manager is nil")
+	}
+	disk, exists := ctx.Filesystems().Disk("assets")
+	if !exists || disk != m.disk {
+		return nil, errors.New("module filesystem alias is missing")
+	}
+	if _, exists := ctx.Filesystems().Disk("private"); exists {
+		return nil, errors.New("module resolved unbound filesystem")
+	}
+	return registryRuntime{code: m.Code()}, nil
+}
+
+func (m loggerAwareModule) Code() kernel.ModuleCode {
+	return m.code
+}
+
+func (m loggerAwareModule) Build(
+	_ context.Context,
+	ctx kernel.ModuleContext,
+) (kernel.ModuleRuntime, error) {
+	if ctx.Logger() == nil {
+		return nil, errors.New("module logger is nil")
+	}
+	ctx.Logger().Info("module log")
+	return registryRuntime{code: m.code}, nil
+}
 
 func (*cacheAwareModule) Code() kernel.ModuleCode {
 	return "cache-aware"
@@ -220,6 +351,29 @@ func (runtimeCacheStore) Close() error {
 	return nil
 }
 
+type runtimeFilesystemResolver map[filesystem.Code]filesystem.Disk
+
+func (r runtimeFilesystemResolver) Disk(
+	code filesystem.Code,
+) (filesystem.Disk, bool) {
+	disk, exists := r[code]
+	return disk, exists
+}
+
+type runtimeDisk struct {
+	filesystem.Disk
+	code       filesystem.Code
+	visibility filesystem.Visibility
+}
+
+func (d *runtimeDisk) Code() filesystem.Code {
+	return d.code
+}
+
+func (d *runtimeDisk) Visibility() filesystem.Visibility {
+	return d.visibility
+}
+
 func (*fileAwareModule) Code() kernel.ModuleCode {
 	return "file-aware"
 }
@@ -262,6 +416,8 @@ func TestProfileRuntimeInjectsCoreServicePorts(t *testing.T) {
 			Users:         users,
 			Groups:        groups,
 			Authorization: authorization,
+			EventBus:      testEventBus{},
+			Logger:        testRuntimeServices().Logger,
 		},
 	)
 	if err != nil {
@@ -291,7 +447,11 @@ func TestProfileRuntimeInjectsOnlyBoundCacheAliases(t *testing.T) {
 	}
 	factory, err := kernel.NewProfileRuntimeFactory(
 		emptyDatabaseResolver{},
-		kernel.RuntimeServices{Caches: resolver},
+		kernel.RuntimeServices{
+			Caches:   resolver,
+			EventBus: testEventBus{},
+			Logger:   testRuntimeServices().Logger,
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -314,6 +474,103 @@ func TestProfileRuntimeInjectsOnlyBoundCacheAliases(t *testing.T) {
 		},
 	); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProfileRuntimeInjectsScopedInfrastructure(t *testing.T) {
+	bus := testEventBus{}
+	public := &runtimeDisk{
+		code:       "public",
+		visibility: filesystem.VisibilityPublic,
+	}
+	private := &runtimeDisk{
+		code:       "private",
+		visibility: filesystem.VisibilityPrivate,
+	}
+	module := &infrastructureAwareModule{
+		eventBus: bus,
+		disk:     public,
+	}
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		kernel.RuntimeServices{
+			Filesystems: runtimeFilesystemResolver{
+				"public":  public,
+				"private": private,
+			},
+			EventBus: bus,
+			Logger:   testRuntimeServices().Logger,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := factory.Make(
+		context.Background(),
+		kernel.Profile{
+			Code: "infrastructure",
+			Modules: []kernel.ProfileModule{{
+				Module: module,
+				Filesystems: []filesystem.Binding{{
+					Alias: "assets",
+					Code:  "public",
+				}},
+			}},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := runtime.Profile()
+	profile.Modules[0].Filesystems[0].Alias = "changed"
+	if runtime.Profile().Modules[0].Filesystems[0].Alias != "assets" {
+		t.Fatal("profile filesystem bindings share caller memory")
+	}
+}
+
+func TestProfileRuntimeScopesModuleLogger(t *testing.T) {
+	var output strings.Builder
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		kernel.RuntimeServices{
+			EventBus: testEventBus{},
+			Logger:   slog.New(slog.NewJSONHandler(&output, nil)),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := factory.Make(context.Background(), kernel.Profile{
+		Code: "profile-one",
+		Modules: []kernel.ProfileModule{{
+			Module: loggerAwareModule{code: "module-one"},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		`"profile.code":"profile-one"`,
+		`"module.code":"module-one"`,
+		`"msg":"module log"`,
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("scoped log does not contain %q: %s", expected, output.String())
+		}
+	}
+
+	if _, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		kernel.RuntimeServices{},
+	); err == nil || !strings.Contains(err.Error(), "runtime logger is nil") {
+		t.Fatalf("nil runtime logger error = %v", err)
+	}
+	if _, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		kernel.RuntimeServices{
+			Logger: testRuntimeServices().Logger,
+		},
+	); err == nil || !strings.Contains(err.Error(), "runtime event bus is nil") {
+		t.Fatalf("nil runtime event bus error = %v", err)
 	}
 }
 
@@ -379,7 +636,10 @@ func (customResourceType) Normalize(
 }
 
 func TestProfileRuntimeCollectsFieldTypesBeforeModuleBuild(t *testing.T) {
-	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{})
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		testRuntimeServices(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +697,10 @@ func TestProfileRuntimeCollectsDeclaredPermissionsBeforeBuild(
 ) {
 	t.Parallel()
 
-	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{})
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		testRuntimeServices(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,8 +739,67 @@ func TestProfileRuntimeCollectsDeclaredPermissionsBeforeBuild(
 	}
 }
 
+func TestProfileRuntimeCollectsOnlyProfileModuleWidgets(t *testing.T) {
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		testRuntimeServices(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := factory.Make(
+		context.Background(),
+		kernel.Profile{
+			Code: "with-widgets",
+			Modules: []kernel.ProfileModule{{
+				Module: widgetProviderModule{
+					code: "content",
+					widgets: []widget.Widget{runtimeWidget{
+						definition: widget.Definition{
+							Code:        "summary",
+							Label:       "Summary",
+							Description: "Article summary",
+						},
+					}},
+				},
+			}},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := current.Widget("content_summary"); !exists {
+		t.Fatal("profile widget is unavailable")
+	}
+	definitions := current.Widgets()
+	if len(definitions) != 1 ||
+		definitions[0].Code != "content_summary" {
+		t.Fatalf("profile widgets = %#v", definitions)
+	}
+	definitions[0].Label = "Changed"
+	if current.Widgets()[0].Label != "Summary" {
+		t.Fatal("profile widgets share caller memory")
+	}
+
+	empty, err := factory.Make(
+		context.Background(),
+		kernel.Profile{Code: "without-widgets"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := empty.Widget("content_summary"); exists ||
+		len(empty.Widgets()) != 0 {
+		t.Fatalf("unconnected widget leaked into profile: %#v", empty.Widgets())
+	}
+}
+
 func TestProfileRuntimeRejectsInvalidFieldRegistrations(t *testing.T) {
-	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{})
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		testRuntimeServices(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +884,10 @@ func TestProfileRuntimeRejectsInvalidFieldRegistrations(t *testing.T) {
 func TestProfileRuntimeCollectsResourceTypesBeforeModuleBuild(
 	t *testing.T,
 ) {
-	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{})
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		testRuntimeServices(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,7 +927,10 @@ func TestProfileRuntimeCollectsResourceTypesBeforeModuleBuild(
 func TestProfileRuntimeRejectsInvalidResourceTypeRegistrations(
 	t *testing.T,
 ) {
-	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{})
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		testRuntimeServices(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +998,10 @@ func TestProfileRuntimeRejectsInvalidResourceTypeRegistrations(
 }
 
 func TestProfileRuntimeCompilesAndClonesTemplates(t *testing.T) {
-	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{})
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		testRuntimeServices(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -756,7 +1087,10 @@ func TestProfileRuntimeCompilesAndClonesTemplates(t *testing.T) {
 }
 
 func TestProfileRuntimeRejectsInvalidTemplates(t *testing.T) {
-	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{})
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		testRuntimeServices(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

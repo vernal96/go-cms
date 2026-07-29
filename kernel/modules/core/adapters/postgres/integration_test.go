@@ -23,6 +23,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
@@ -75,14 +76,16 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 12 {
+	if len(entries) != 14 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	expected := map[string]bool{
-		"000005_identity.up.sql":      false,
-		"000005_identity.down.sql":    false,
-		"000006_permissions.up.sql":   false,
-		"000006_permissions.down.sql": false,
+		"000005_identity.up.sql":           false,
+		"000005_identity.down.sql":         false,
+		"000006_permissions.up.sql":        false,
+		"000006_permissions.down.sql":      false,
+		"000007_resource_widgets.up.sql":   false,
+		"000007_resource_widgets.down.sql": false,
 	}
 	for _, entry := range entries {
 		if _, exists := expected[entry.Name()]; exists {
@@ -168,7 +171,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 6 || !hasVersion || dirty {
+	if version != 7 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,
@@ -179,6 +182,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 
 	var sitesTable *string
 	var resourcesTable *string
+	var resourceWidgetsTable *string
 	var resourcePathIndex *string
 	var fileFoldersTable *string
 	var filesTable *string
@@ -189,6 +193,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 SELECT
     to_regclass('core.sites')::text,
     to_regclass('core.resources')::text,
+    to_regclass('core.resource_widgets')::text,
     to_regclass('core.uq_resources_site_path')::text,
     to_regclass('core.file_folders')::text,
     to_regclass('core.files')::text,
@@ -197,6 +202,7 @@ SELECT
 	).Scan(
 		&sitesTable,
 		&resourcesTable,
+		&resourceWidgetsTable,
 		&resourcePathIndex,
 		&fileFoldersTable,
 		&filesTable,
@@ -210,6 +216,10 @@ SELECT
 	if resourcesTable == nil ||
 		*resourcesTable != "core.resources" {
 		t.Fatalf("core.resources = %#v", resourcesTable)
+	}
+	if resourceWidgetsTable == nil ||
+		*resourceWidgetsTable != "core.resource_widgets" {
+		t.Fatalf("core.resource_widgets = %#v", resourceWidgetsTable)
 	}
 	if resourcePathIndex == nil ||
 		*resourcePathIndex != "core.uq_resources_site_path" {
@@ -645,10 +655,31 @@ WHERE id = $1;
 		InMenu:       true,
 		InSitemap:    true,
 		Settings:     map[string]any{"headline": "Home"},
+		Widgets: []resource.WidgetBinding{
+			{
+				Code:     widget.Code("content_summary"),
+				Position: 0,
+				Params:   map[string]any{"title": "Primary"},
+			},
+			{
+				Code:     widget.Code("content_summary"),
+				Position: 1,
+				Params:   map[string]any{"title": "Secondary"},
+			},
+		},
 	}, validateImageMedia)
 
 	if err != nil {
 		t.Fatalf("create root resource: %v", err)
+	}
+	if len(root.Widgets) != 2 ||
+		root.Widgets[1].Params["title"] != "Secondary" {
+		t.Fatalf("created root widgets = %#v", root.Widgets)
+	}
+	loadedRoot, err := resourceRepository.ByID(ctx, root.ID)
+	if err != nil || len(loadedRoot.Widgets) != 2 ||
+		loadedRoot.Widgets[0].Code != "content_summary" {
+		t.Fatalf("loaded root widgets = %#v, %v", loadedRoot.Widgets, err)
 	}
 
 	documentRootPath := "/"
@@ -691,6 +722,11 @@ WHERE id = $1;
 
 	nextRoot := resource.Clone(root)
 	nextRoot.ImageMediaID = &replacementMedia.ID
+	nextRoot.Widgets = []resource.WidgetBinding{{
+		Code:     "content_summary",
+		Position: 0,
+		Params:   map[string]any{"title": "Replacement"},
+	}}
 	root, err = resourceRepository.Update(
 		ctx,
 		nil,
@@ -700,6 +736,74 @@ WHERE id = $1;
 	)
 	if err != nil {
 		t.Fatalf("replace root media: %v", err)
+	}
+	if len(root.Widgets) != 1 ||
+		root.Widgets[0].Params["title"] != "Replacement" {
+		t.Fatalf("updated root widgets = %#v", root.Widgets)
+	}
+	loadedRoot, err = resourceRepository.ByID(ctx, root.ID)
+	if err != nil || len(loadedRoot.Widgets) != 1 ||
+		loadedRoot.Widgets[0].Position != 0 {
+		t.Fatalf("reloaded root widgets = %#v, %v", loadedRoot.Widgets, err)
+	}
+	listedResources, err := resourceRepository.ListBySite(ctx, root.SiteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listedRootFound := false
+	for _, listed := range listedResources {
+		if listed.ID != root.ID {
+			continue
+		}
+		listedRootFound = true
+		if len(listed.Widgets) != 1 ||
+			listed.Widgets[0].Params["title"] != "Replacement" {
+			t.Fatalf("listed root widgets = %#v", listed.Widgets)
+		}
+	}
+	if !listedRootFound {
+		t.Fatal("root resource missing from list")
+	}
+
+	widgetChildPath := "/widget-child"
+	widgetChild, err := resourceRepository.Create(
+		ctx,
+		nil,
+		resource.Resource{
+			SiteID:       root.SiteID,
+			ParentID:     &root.ID,
+			Type:         resourcetype.Page,
+			Title:        "Widget child",
+			Slug:         "widget-child",
+			Path:         &widgetChildPath,
+			IsPublic:     true,
+			IsSearchable: true,
+			InMenu:       true,
+			InSitemap:    true,
+			Widgets: []resource.WidgetBinding{{
+				Code:     "content_summary",
+				Position: 0,
+				Params:   map[string]any{},
+			}},
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create widget child: %v", err)
+	}
+	if err := resourceRepository.Delete(ctx, widgetChild.ID); err != nil {
+		t.Fatalf("delete widget child: %v", err)
+	}
+	var widgetRows int
+	if err := connector.Pool().QueryRow(ctx, `
+SELECT count(*)
+FROM core.resource_widgets
+WHERE resource_id = $1;
+`, widgetChild.ID).Scan(&widgetRows); err != nil {
+		t.Fatal(err)
+	}
+	if widgetRows != 0 {
+		t.Fatalf("widget rows after resource delete = %d", widgetRows)
 	}
 	if _, err := mediaRepository.ByID(
 		ctx,
@@ -1170,7 +1274,7 @@ WHERE id = ANY($2);
 	}
 
 	restoreMigration = true
-	if err := manager.Down(ctx, plan, 6); err != nil {
+	if err := manager.Down(ctx, plan, 7); err != nil {
 		t.Fatalf("down: %v", err)
 	}
 

@@ -134,7 +134,7 @@ func (r *cachedResourceRepository) ByID(
 	ctx context.Context,
 	id resource.ID,
 ) (resource.Resource, error) {
-	key := fmt.Sprintf("core:resource:id:v1:%d", id)
+	key := fmt.Sprintf("core:resource:id:v2:%d", id)
 	if result, ok := cacheRead[resource.Resource](
 		ctx,
 		r.store,
@@ -164,7 +164,7 @@ func (r *cachedResourceRepository) ByPath(
 ) (resource.Resource, error) {
 	sum := sha256.Sum256([]byte(pathValue))
 	key := fmt.Sprintf(
-		"core:resource:path:v1:%d:%s",
+		"core:resource:path:v2:%d:%s",
 		siteID,
 		hex.EncodeToString(sum[:]),
 	)
@@ -194,7 +194,7 @@ func (r *cachedResourceRepository) ListBySite(
 	ctx context.Context,
 	siteID site.ID,
 ) ([]resource.Resource, error) {
-	key := fmt.Sprintf("core:resource:list:v1:%d", siteID)
+	key := fmt.Sprintf("core:resource:list:v2:%d", siteID)
 	if result, ok := cacheRead[[]resource.Resource](
 		ctx,
 		r.store,

@@ -16,6 +16,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
@@ -170,6 +171,15 @@ RETURNING
 	if err != nil {
 		return resource.Resource{}, translateError(err)
 	}
+	if err := replaceResourceWidgets(
+		ctx,
+		transaction,
+		result.ID,
+		item.Widgets,
+	); err != nil {
+		return resource.Resource{}, err
+	}
+	result.Widgets = resource.Clone(item).Widgets
 
 	if err := transaction.Commit(ctx); err != nil {
 		return resource.Resource{}, translateError(err)
@@ -208,8 +218,16 @@ WHERE id = $1;
 			err,
 		)
 	}
+	items := []resource.Resource{result}
+	if err := loadResourceWidgets(
+		ctx,
+		r.connector.Pool(),
+		items,
+	); err != nil {
+		return resource.Resource{}, err
+	}
 
-	return result, nil
+	return items[0], nil
 }
 
 func (r *Repository) ByPath(
@@ -245,8 +263,16 @@ WHERE site_id = $1
 			err,
 		)
 	}
+	items := []resource.Resource{result}
+	if err := loadResourceWidgets(
+		ctx,
+		r.connector.Pool(),
+		items,
+	); err != nil {
+		return resource.Resource{}, err
+	}
 
-	return result, nil
+	return items[0], nil
 }
 
 func (r *Repository) ListBySite(
@@ -284,6 +310,14 @@ ORDER BY parent_id NULLS FIRST, sort, id;
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate core resources: %w", err)
+	}
+	rows.Close()
+	if err := loadResourceWidgets(
+		ctx,
+		r.connector.Pool(),
+		result,
+	); err != nil {
+		return nil, err
 	}
 
 	return result, nil
@@ -542,6 +576,16 @@ WHERE item.id = tree.id
 		return resource.Resource{}, translateError(err)
 	}
 
+	if err := replaceResourceWidgets(
+		ctx,
+		transaction,
+		updated.ID,
+		item.Widgets,
+	); err != nil {
+		return resource.Resource{}, err
+	}
+	updated.Widgets = resource.Clone(item).Widgets
+
 	if !sameMediaID(current.ImageMediaID, item.ImageMediaID) &&
 		current.ImageMediaID != nil {
 		if _, err := transaction.Exec(ctx, `
@@ -646,6 +690,158 @@ WHERE id = $1;
 
 type rowScanner interface {
 	Scan(...any) error
+}
+
+type rowQueryer interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func replaceResourceWidgets(
+	ctx context.Context,
+	transaction pgx.Tx,
+	resourceID resource.ID,
+	widgets []resource.WidgetBinding,
+) error {
+	if _, err := transaction.Exec(ctx, `
+DELETE FROM core.resource_widgets
+WHERE resource_id = $1;
+`, resourceID); err != nil {
+		return fmt.Errorf(
+			"delete widgets for resource %d: %w",
+			resourceID,
+			err,
+		)
+	}
+
+	for index, binding := range widgets {
+		if binding.Position != index {
+			return fmt.Errorf(
+				"resource %d widget %q has position %d instead of %d",
+				resourceID,
+				binding.Code,
+				binding.Position,
+				index,
+			)
+		}
+		params := binding.Params
+		if params == nil {
+			params = map[string]any{}
+		}
+		rawParams, err := json.Marshal(params)
+		if err != nil {
+			return fmt.Errorf(
+				"encode params for resource %d widget %q: %w",
+				resourceID,
+				binding.Code,
+				err,
+			)
+		}
+
+		if _, err := transaction.Exec(ctx, `
+INSERT INTO core.resource_widgets
+(
+    resource_id,
+    widget_code,
+    position,
+    params
+)
+VALUES ($1, $2, $3, $4::jsonb);
+`,
+			resourceID,
+			binding.Code,
+			binding.Position,
+			string(rawParams),
+		); err != nil {
+			return fmt.Errorf(
+				"insert resource %d widget %q at position %d: %w",
+				resourceID,
+				binding.Code,
+				binding.Position,
+				err,
+			)
+		}
+	}
+
+	return nil
+}
+
+func loadResourceWidgets(
+	ctx context.Context,
+	queryer rowQueryer,
+	items []resource.Resource,
+) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	indexes := make(map[resource.ID]int, len(items))
+	ids := make([]int64, len(items))
+	for index := range items {
+		indexes[items[index].ID] = index
+		ids[index] = int64(items[index].ID)
+		items[index].Widgets = nil
+	}
+
+	rows, err := queryer.Query(ctx, `
+SELECT resource_id, widget_code, position, params
+FROM core.resource_widgets
+WHERE resource_id = ANY($1::bigint[])
+ORDER BY resource_id, position;
+`, ids)
+	if err != nil {
+		return fmt.Errorf("query resource widgets: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			resourceID resource.ID
+			code       string
+			position   int
+			rawParams  []byte
+		)
+		if err := rows.Scan(
+			&resourceID,
+			&code,
+			&position,
+			&rawParams,
+		); err != nil {
+			return fmt.Errorf("scan resource widget: %w", err)
+		}
+
+		index, exists := indexes[resourceID]
+		if !exists {
+			return fmt.Errorf(
+				"resource widget references unexpected resource %d",
+				resourceID,
+			)
+		}
+		params := make(map[string]any)
+		decoder := json.NewDecoder(bytes.NewReader(rawParams))
+		decoder.UseNumber()
+		if err := decoder.Decode(&params); err != nil {
+			return fmt.Errorf(
+				"decode params for resource %d widget %q: %w",
+				resourceID,
+				code,
+				err,
+			)
+		}
+
+		items[index].Widgets = append(
+			items[index].Widgets,
+			resource.WidgetBinding{
+				Code:     widget.Code(code),
+				Position: position,
+				Params:   params,
+			},
+		)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate resource widgets: %w", err)
+	}
+
+	return nil
 }
 
 func scanResource(scanner rowScanner) (resource.Resource, error) {

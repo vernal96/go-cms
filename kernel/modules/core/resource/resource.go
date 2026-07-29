@@ -10,6 +10,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
@@ -48,6 +49,7 @@ type Resource struct {
 	PublishedAt      *time.Time
 	UnpublishedAt    *time.Time
 	Settings         map[string]any
+	Widgets          []WidgetBinding
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	CreatedBy        *security.UserID
@@ -75,6 +77,7 @@ type CreateInput struct {
 	PublishedAt      *time.Time
 	UnpublishedAt    *time.Time
 	Settings         map[string]any
+	Widgets          []WidgetInput
 }
 
 type UpdateInput struct {
@@ -98,6 +101,18 @@ type UpdateInput struct {
 	PublishedAt      *time.Time
 	UnpublishedAt    *time.Time
 	Settings         map[string]any
+	Widgets          []WidgetInput
+}
+
+type WidgetInput struct {
+	Code   widget.Code
+	Params map[string]any
+}
+
+type WidgetBinding struct {
+	Code     widget.Code
+	Position int
+	Params   map[string]any
 }
 
 type Node struct {
@@ -142,9 +157,23 @@ func Clone(item Resource) Resource {
 	item.PublishedAt = cloneTime(item.PublishedAt)
 	item.UnpublishedAt = cloneTime(item.UnpublishedAt)
 	item.Settings = cloneMap(item.Settings)
+	item.Widgets = cloneWidgetBindings(item.Widgets)
 	item.CreatedBy = cloneUserID(item.CreatedBy)
 	item.UpdatedBy = cloneUserID(item.UpdatedBy)
 	return item
+}
+
+func cloneWidgetBindings(source []WidgetBinding) []WidgetBinding {
+	if source == nil {
+		return nil
+	}
+
+	result := make([]WidgetBinding, len(source))
+	for index, binding := range source {
+		result[index] = binding
+		result[index].Params = cloneMap(binding.Params)
+	}
+	return result
 }
 
 func cloneUserID(value *security.UserID) *security.UserID {

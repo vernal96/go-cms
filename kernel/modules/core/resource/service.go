@@ -11,6 +11,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -125,6 +126,7 @@ func (s *Service) Create(
 		PublishedAt:      cloneTime(input.PublishedAt),
 		UnpublishedAt:    cloneTime(input.UnpublishedAt),
 		Settings:         cloneMap(input.Settings),
+		Widgets:          widgetBindings(input.Widgets),
 		CreatedBy:        actor.AuditUserID(),
 		UpdatedBy:        actor.AuditUserID(),
 	}
@@ -273,6 +275,7 @@ func (s *Service) Update(
 		PublishedAt:      cloneTime(input.PublishedAt),
 		UnpublishedAt:    cloneTime(input.UnpublishedAt),
 		Settings:         cloneMap(input.Settings),
+		Widgets:          widgetBindings(input.Widgets),
 		CreatedAt:        current.CreatedAt,
 		UpdatedAt:        current.UpdatedAt,
 		CreatedBy:        cloneUserID(current.CreatedBy),
@@ -489,6 +492,14 @@ func (s *Service) normalize(
 	}
 
 	profileRuntime := siteRuntime.Profile()
+	widgets, err := normalizeWidgetBindings(
+		profileRuntime,
+		item.Widgets,
+	)
+	if err != nil {
+		return Resource{}, err
+	}
+
 	resourceType, exists := profileRuntime.Registry().ResourceType(
 		item.Type,
 	)
@@ -598,7 +609,73 @@ func (s *Service) normalize(
 	item.TargetResourceID = resourceID(payload.TargetResourceID)
 	item.ExternalURL = cloneString(payload.ExternalURL)
 	item.Settings = cloneMap(payload.Settings)
+	item.Widgets = widgets
 	return item, nil
+}
+
+func widgetBindings(source []WidgetInput) []WidgetBinding {
+	if source == nil {
+		return nil
+	}
+
+	result := make([]WidgetBinding, len(source))
+	for index, input := range source {
+		result[index] = WidgetBinding{
+			Code:     input.Code,
+			Position: index,
+			Params:   cloneMap(input.Params),
+		}
+	}
+	return result
+}
+
+func normalizeWidgetBindings(
+	profileRuntime interface {
+		Widget(widget.Code) (*widget.Runtime, bool)
+	},
+	source []WidgetBinding,
+) ([]WidgetBinding, error) {
+	if profileRuntime == nil {
+		return nil, errors.New("resource widget profile runtime is nil")
+	}
+	if source == nil {
+		return nil, nil
+	}
+
+	result := make([]WidgetBinding, len(source))
+	for index, binding := range source {
+		if binding.Position != index {
+			return nil, fmt.Errorf(
+				"resource widget %q has position %d instead of %d",
+				binding.Code,
+				binding.Position,
+				index,
+			)
+		}
+
+		runtime, exists := profileRuntime.Widget(binding.Code)
+		if !exists {
+			return nil, fmt.Errorf(
+				"resource references unknown widget %q",
+				binding.Code,
+			)
+		}
+		params, err := runtime.FieldSchema().Validate(binding.Params)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"validate resource widget %q params: %w",
+				binding.Code,
+				err,
+			)
+		}
+
+		result[index] = WidgetBinding{
+			Code:     binding.Code,
+			Position: index,
+			Params:   params,
+		}
+	}
+	return result, nil
 }
 
 func (s *Service) validateImageMedia(

@@ -8,6 +8,7 @@ import (
 )
 
 type Code string
+type Alias string
 
 type Visibility string
 
@@ -71,6 +72,20 @@ type TemporaryURLVerifier interface {
 type Factory interface {
 	Code() Code
 	Open(context.Context) (Disk, error)
+}
+
+type Resolver interface {
+	Disk(Code) (Disk, bool)
+}
+
+type Binding struct {
+	Alias Alias
+	Code  Code
+}
+
+type ModuleManager interface {
+	Disk(Alias) (Disk, bool)
+	Binding(Alias) (Binding, bool)
 }
 
 func ValidVisibility(value Visibility) bool {

@@ -1,7 +1,13 @@
 package httpserver_test
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,9 +20,12 @@ import (
 	httpserver "github.com/vernal96/go-cms/internal/server/http"
 	"github.com/vernal96/go-cms/kernel"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
+	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/filesystem"
+	"github.com/vernal96/go-cms/kernel/logging"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	coreaccess "github.com/vernal96/go-cms/kernel/modules/core/access"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
 	coregroup "github.com/vernal96/go-cms/kernel/modules/core/group"
 	coremedia "github.com/vernal96/go-cms/kernel/modules/core/media"
@@ -24,12 +33,76 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
 
 type connector struct{}
+
+type loggerFactory struct {
+	writer io.Writer
+}
+
+type loggerConnector struct {
+	logger *slog.Logger
+}
+
+func (f loggerFactory) Open(context.Context) (logging.Connector, error) {
+	writer := f.writer
+	if writer == nil {
+		writer = io.Discard
+	}
+	return &loggerConnector{
+		logger: slog.New(slog.NewJSONHandler(writer, nil)),
+	}, nil
+}
+
+func (c *loggerConnector) Logger() *slog.Logger {
+	return c.logger
+}
+
+func (*loggerConnector) Ping(context.Context) error {
+	return nil
+}
+
+func (*loggerConnector) Close() error {
+	return nil
+}
+
+type eventBusFactory struct{}
+type eventBusConnector struct{}
+
+func (eventBusFactory) Open(
+	context.Context,
+) (eventbus.Connector, error) {
+	return eventBusConnector{}, nil
+}
+
+func (eventBusConnector) Ping(context.Context) error {
+	return nil
+}
+
+func (eventBusConnector) Publish(
+	context.Context,
+	eventbus.Message,
+) error {
+	return nil
+}
+
+func (eventBusConnector) Consume(
+	ctx context.Context,
+	_ eventbus.Subscription,
+	_ eventbus.Handler,
+) error {
+	<-ctx.Done()
+	return nil
+}
+
+func (eventBusConnector) Close() error {
+	return nil
+}
 
 func (connector) Code() kernel.ConnectionCode { return "test" }
 func (connector) Ping(context.Context) error  { return nil }
@@ -193,6 +266,81 @@ func (privilegedUserAccessRepository) Subject(
 		Active:  true,
 		IsSuper: true,
 	}, nil
+}
+
+type knownUserAccessRepository struct {
+	accessRepository
+}
+
+func (knownUserAccessRepository) Subject(
+	context.Context,
+	security.UserID,
+) (coreaccess.Subject, error) {
+	return coreaccess.Subject{
+		Exists: true,
+		Active: true,
+	}, nil
+}
+
+type groupUserAccessRepository struct {
+	accessRepository
+	allowed bool
+}
+
+func (groupUserAccessRepository) Subject(
+	context.Context,
+	security.UserID,
+) (coreaccess.Subject, error) {
+	return coreaccess.Subject{
+		Exists:    true,
+		Active:    true,
+		HasGroups: true,
+	}, nil
+}
+
+func (r groupUserAccessRepository) GroupAllowed(
+	context.Context,
+	security.UserID,
+	permission.Code,
+) (bool, error) {
+	return r.allowed, nil
+}
+
+type staticAccessTokens struct {
+	verified  security.Actor
+	verifyErr error
+}
+
+func (s staticAccessTokens) IssueAccessToken(
+	context.Context,
+	security.Actor,
+) (security.AccessToken, error) {
+	return security.AccessToken{
+		Value:     "signed",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}, nil
+}
+
+func (s staticAccessTokens) VerifyAccessToken(
+	context.Context,
+	string,
+) (security.Actor, error) {
+	return s.verified, s.verifyErr
+}
+
+func newTestHandler(
+	application *appkernel.App,
+	options ...httpserver.Option,
+) (*httpserver.Handler, error) {
+	return httpserver.NewHandler(
+		application,
+		append(
+			[]httpserver.Option{
+				httpserver.WithAccessTokens(staticAccessTokens{}),
+			},
+			options...,
+		)...,
+	)
 }
 
 type resourceRepository struct {
@@ -359,6 +507,8 @@ func (fileRepository) DeleteFolder(
 
 func TestHandlerLooksUpCompiledRuntimeByRequestHost(t *testing.T) {
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
+		Logger:   loggerFactory{},
+		EventBus: eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: connectorFactory{},
 			Adapters:  []kernel.ModuleDatabaseFactory{databaseFactory{}},
@@ -378,7 +528,10 @@ func TestHandlerLooksUpCompiledRuntimeByRequestHost(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, err := httpserver.NewHandler(runtimeApp)
+	if _, err := httpserver.NewHandler(runtimeApp); err == nil {
+		t.Fatal("handler accepted a missing access token service")
+	}
+	handler, err := newTestHandler(runtimeApp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,6 +582,8 @@ func TestHandlerHidesRuntimeWithoutGuestPermissionOrPublicFlag(
 			runtimeApp, err := appkernel.New(
 				context.Background(),
 				appkernel.Definition{
+					Logger:   loggerFactory{},
+					EventBus: eventBusFactory{},
 					MainDatabase: appkernel.DatabaseDefinition{
 						Connector: connectorFactory{},
 						Adapters: []kernel.ModuleDatabaseFactory{
@@ -450,7 +605,7 @@ func TestHandlerHidesRuntimeWithoutGuestPermissionOrPublicFlag(
 			if err := runtimeApp.Boot(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			handler, err := httpserver.NewHandler(runtimeApp)
+			handler, err := newTestHandler(runtimeApp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -517,6 +672,8 @@ func TestHandlerDeliversPublicAndSignedPrivateLocalFiles(t *testing.T) {
 			runtimeApp, err := appkernel.New(
 				context.Background(),
 				appkernel.Definition{
+					Logger:   loggerFactory{},
+					EventBus: eventBusFactory{},
 					MainDatabase: appkernel.DatabaseDefinition{
 						Connector: connectorFactory{},
 						Adapters: []kernel.ModuleDatabaseFactory{
@@ -560,7 +717,7 @@ func TestHandlerDeliversPublicAndSignedPrivateLocalFiles(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			handler, err := httpserver.NewHandler(runtimeApp)
+			handler, err := newTestHandler(runtimeApp)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -617,6 +774,7 @@ type transportModule struct {
 	code         kernel.ModuleCode
 	resourceType resourcetype.Type
 	order        *[]string
+	widgets      []widget.Widget
 }
 
 func (m transportModule) Code() kernel.ModuleCode {
@@ -637,6 +795,7 @@ func (m transportModule) Build(
 		code:         m.code,
 		resourceType: m.resourceType.Code(),
 		order:        m.order,
+		widgets:      append([]widget.Widget(nil), m.widgets...),
 	}, nil
 }
 
@@ -644,10 +803,44 @@ type transportRuntime struct {
 	code         kernel.ModuleCode
 	resourceType resourcetype.Code
 	order        *[]string
+	widgets      []widget.Widget
 }
 
 func (r *transportRuntime) ModuleCode() kernel.ModuleCode {
 	return r.code
+}
+
+func (r *transportRuntime) Widgets() []widget.Widget {
+	return append([]widget.Widget(nil), r.widgets...)
+}
+
+type handlerWidget struct {
+	definition widget.Definition
+	new        func(map[string]any) (widget.Instance, error)
+}
+
+func (w handlerWidget) Definition() widget.Definition {
+	return widget.CloneDefinition(w.definition)
+}
+
+func (w handlerWidget) New(
+	values map[string]any,
+) (widget.Instance, error) {
+	return w.new(values)
+}
+
+type handlerWidgetInstance struct {
+	render func(
+		context.Context,
+		widget.RenderInput,
+	) (map[string]any, error)
+}
+
+func (i handlerWidgetInstance) Render(
+	ctx context.Context,
+	input widget.RenderInput,
+) (map[string]any, error) {
+	return i.render(ctx, input)
 }
 
 func (r *transportRuntime) HTTP() httptransport.Builder {
@@ -676,9 +869,14 @@ func (r *transportRuntime) HTTP() httptransport.Builder {
 					Scope:      httptransport.MiddlewareLocal,
 					Middleware: recordHTTPOrder(r.order, "resource"),
 				},
+				{
+					Code:       "transport.authenticated",
+					Scope:      httptransport.MiddlewareLocal,
+					Middleware: httptransport.RequireAuthenticated,
+				},
 			},
 			Routes: func(registrar httptransport.Registrar) error {
-				return registrar.Route(httptransport.Route{
+				if err := registrar.Route(httptransport.Route{
 					Name:    "transport.custom",
 					Method:  http.MethodGet,
 					Pattern: "/custom",
@@ -691,6 +889,22 @@ func (r *transportRuntime) HTTP() httptransport.Builder {
 					}),
 					Middleware: []httptransport.MiddlewareCode{
 						"transport.route",
+					},
+				}); err != nil {
+					return err
+				}
+				return registrar.Route(httptransport.Route{
+					Name:    "transport.protected",
+					Method:  http.MethodGet,
+					Pattern: "/protected",
+					Handler: http.HandlerFunc(func(
+						response http.ResponseWriter,
+						_ *http.Request,
+					) {
+						response.WriteHeader(http.StatusNoContent)
+					}),
+					Middleware: []httptransport.MiddlewareCode{
+						"transport.authenticated",
 					},
 				})
 			},
@@ -739,6 +953,8 @@ func newTransportTestApp(
 	runtimeApp, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
+			Logger:   loggerFactory{},
+			EventBus: eventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
 				Connector: connectorFactory{},
 				Adapters: []kernel.ModuleDatabaseFactory{
@@ -787,7 +1003,7 @@ func TestHandlerMiddlewareOrderForRoutesAndResources(t *testing.T) {
 			},
 		},
 	)
-	handler, err := httpserver.NewHandler(
+	handler, err := newTestHandler(
 		runtimeApp,
 		httpserver.WithPlatformMiddleware(
 			recordHTTPOrder(&order, "platform"),
@@ -816,6 +1032,264 @@ func TestHandlerMiddlewareOrderForRoutesAndResources(t *testing.T) {
 		strings.Join(order, ",") !=
 			"platform,profile,module,resource,handler" {
 		t.Fatalf("resource response = %d, order = %v", response.Code, order)
+	}
+}
+
+func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
+	t *testing.T,
+) {
+	required := true
+	success := handlerWidget{
+		definition: widget.Definition{
+			Code:        "success",
+			Label:       "Success",
+			Description: "Successful widget",
+		},
+		new: func(map[string]any) (widget.Instance, error) {
+			return handlerWidgetInstance{
+				render: func(
+					context.Context,
+					widget.RenderInput,
+				) (map[string]any, error) {
+					return map[string]any{"value": "ok"}, nil
+				},
+			}, nil
+		},
+	}
+	invalidParams := handlerWidget{
+		definition: widget.Definition{
+			Code:        "params",
+			Label:       "Params",
+			Description: "Widget with required params",
+			Fields: []field.Definition{{
+				Key:      "title",
+				Type:     field.TypeString,
+				Label:    "Title",
+				Required: &required,
+			}},
+		},
+		new: func(map[string]any) (widget.Instance, error) {
+			return handlerWidgetInstance{}, nil
+		},
+	}
+	instanceFailed := handlerWidget{
+		definition: widget.Definition{
+			Code:        "instance",
+			Label:       "Instance",
+			Description: "Widget with a failed constructor",
+		},
+		new: func(map[string]any) (widget.Instance, error) {
+			return nil, errors.New("private constructor failure")
+		},
+	}
+	renderFailed := handlerWidget{
+		definition: widget.Definition{
+			Code:        "render",
+			Label:       "Render",
+			Description: "Widget with a failed renderer",
+		},
+		new: func(map[string]any) (widget.Instance, error) {
+			return handlerWidgetInstance{
+				render: func(
+					context.Context,
+					widget.RenderInput,
+				) (map[string]any, error) {
+					return nil, errors.New("private render failure")
+				},
+			}, nil
+		},
+	}
+	invalidResult := handlerWidget{
+		definition: widget.Definition{
+			Code:        "result",
+			Label:       "Result",
+			Description: "Widget with invalid JSON data",
+		},
+		new: func(map[string]any) (widget.Instance, error) {
+			return handlerWidgetInstance{
+				render: func(
+					context.Context,
+					widget.RenderInput,
+				) (map[string]any, error) {
+					return map[string]any{"invalid": make(chan int)}, nil
+				},
+			}, nil
+		},
+	}
+
+	order := make([]string, 0)
+	module := transportModule{
+		code:         "widgets",
+		resourceType: transportResourceType{code: "widget_test"},
+		order:        &order,
+		widgets: []widget.Widget{
+			success,
+			invalidParams,
+			instanceFailed,
+			renderFailed,
+			invalidResult,
+		},
+	}
+	runtimeApp := newTransportTestApp(
+		t,
+		module,
+		resourceRepository{
+			byPath: map[string]resource.Resource{
+				"/page": {
+					ID:       7,
+					SiteID:   1,
+					Type:     resourcetype.Page,
+					Title:    "Page",
+					Path:     stringPointer("/page"),
+					Content:  "Content",
+					IsPublic: true,
+					Widgets: []resource.WidgetBinding{
+						{Code: "widgets_success", Position: 0},
+						{Code: "missing_widget", Position: 1},
+						{Code: "widgets_params", Position: 2},
+						{Code: "widgets_instance", Position: 3},
+						{Code: "widgets_render", Position: 4},
+						{Code: "widgets_result", Position: 5},
+						{Code: "widgets_success", Position: 6},
+					},
+				},
+				"/empty": {
+					ID:       8,
+					SiteID:   1,
+					Type:     resourcetype.Page,
+					Title:    "Empty",
+					Path:     stringPointer("/empty"),
+					IsPublic: true,
+				},
+				"/core-content": {
+					ID:       9,
+					SiteID:   1,
+					Type:     resourcetype.Page,
+					Title:    "Core content",
+					Path:     stringPointer("/core-content"),
+					Content:  "Content from resource",
+					IsPublic: true,
+					Widgets: []resource.WidgetBinding{{
+						Code:     "core_content",
+						Position: 0,
+					}},
+				},
+			},
+		},
+	)
+	handler, err := newTestHandler(runtimeApp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/page", nil)
+	request.Host = "example.com"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"status = %d, body = %q",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+	if response.Header().Get("Content-Type") !=
+		"application/json; charset=utf-8" {
+		t.Fatalf("content type = %q", response.Header().Get("Content-Type"))
+	}
+	if strings.Contains(response.Body.String(), "private") {
+		t.Fatalf("response leaked internal error: %s", response.Body.String())
+	}
+
+	var payload struct {
+		Resource map[string]any   `json:"resource"`
+		Widgets  []map[string]any `json:"widgets"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Resource) != 6 ||
+		payload.Resource["id"] != float64(7) ||
+		payload.Resource["title"] != "Page" ||
+		payload.Resource["content"] != "Content" {
+		t.Fatalf("resource payload = %#v", payload.Resource)
+	}
+	if len(payload.Widgets) != 7 {
+		t.Fatalf("widgets = %#v", payload.Widgets)
+	}
+
+	expectedErrors := map[int]string{
+		1: "widget_unavailable",
+		2: "invalid_params",
+		3: "instance_failed",
+		4: "render_failed",
+		5: "invalid_result",
+	}
+	for index, current := range payload.Widgets {
+		if _, exists := current["params"]; exists {
+			t.Fatalf("widget %d leaked params: %#v", index, current)
+		}
+		if current["position"] != float64(index) {
+			t.Fatalf("widget %d position = %#v", index, current["position"])
+		}
+		expectedError, failed := expectedErrors[index]
+		if !failed {
+			data, ok := current["data"].(map[string]any)
+			if !ok || data["value"] != "ok" {
+				t.Fatalf("widget %d data = %#v", index, current)
+			}
+			continue
+		}
+
+		publicError, ok := current["error"].(map[string]any)
+		if !ok || publicError["code"] != expectedError ||
+			len(publicError) != 1 {
+			t.Fatalf("widget %d error = %#v", index, current)
+		}
+		if _, exists := current["data"]; exists {
+			t.Fatalf("failed widget %d has data: %#v", index, current)
+		}
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/empty", nil)
+	request.Host = "example.com"
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), `"widgets":[]`) {
+		t.Fatalf(
+			"empty widgets response = %d, %s",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/core-content", nil)
+	request.Host = "example.com"
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"core content status = %d, body = %q",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var contentPayload struct {
+		Widgets []struct {
+			Code widget.Code    `json:"code"`
+			Data map[string]any `json:"data"`
+		} `json:"widgets"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &contentPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(contentPayload.Widgets) != 1 ||
+		contentPayload.Widgets[0].Code != "core_content" ||
+		contentPayload.Widgets[0].Data["content"] !=
+			"Content from resource" {
+		t.Fatalf("core content payload = %#v", contentPayload)
 	}
 }
 
@@ -852,7 +1326,7 @@ func TestResourceRootTrailingSlashAndQueryPolicy(t *testing.T) {
 			},
 		},
 	}
-	handler, err := httpserver.NewHandler(
+	handler, err := newTestHandler(
 		newTransportTestApp(t, module, repository),
 	)
 	if err != nil {
@@ -887,6 +1361,8 @@ func TestResourceRootTrailingSlashAndQueryPolicy(t *testing.T) {
 
 func TestPlatformRuntimeMethodMismatchKeeps405AndAllow(t *testing.T) {
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
+		Logger:   loggerFactory{},
+		EventBus: eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: connectorFactory{},
 			Adapters:  []kernel.ModuleDatabaseFactory{databaseFactory{}},
@@ -905,7 +1381,7 @@ func TestPlatformRuntimeMethodMismatchKeeps405AndAllow(t *testing.T) {
 	if err := runtimeApp.Boot(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	handler, err := httpserver.NewHandler(runtimeApp)
+	handler, err := newTestHandler(runtimeApp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -924,10 +1400,141 @@ func TestPlatformRuntimeMethodMismatchKeeps405AndAllow(t *testing.T) {
 	}
 }
 
-func TestPlatformAuthenticationActorPrecedesPrivateSiteResolution(
+func TestPublicAndProtectedModuleRoutesUseJWTActor(t *testing.T) {
+	order := make([]string, 0)
+	module := transportModule{
+		code:         "auth_routes",
+		resourceType: transportResourceType{code: "auth_routes"},
+		order:        &order,
+	}
+	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
+		Logger:   loggerFactory{},
+		EventBus: eventBusFactory{},
+		MainDatabase: appkernel.DatabaseDefinition{
+			Connector: connectorFactory{},
+			Adapters: []kernel.ModuleDatabaseFactory{databaseFactory{
+				access: knownUserAccessRepository{},
+			}},
+		},
+		Profiles: []kernel.Profile{{
+			Code: "dev",
+			Modules: []kernel.ProfileModule{
+				{Module: core.Module{}},
+				{Module: module},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runtimeApp.Close() }()
+	if err := runtimeApp.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newTestHandler(
+		runtimeApp,
+		httpserver.WithAccessTokens(staticAccessTokens{
+			verified: security.User(42),
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/custom", nil)
+	request.Host = "example.com"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf(
+			"public route = %d, %q",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/protected", nil)
+	request.Host = "example.com"
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized ||
+		response.Header().Get("WWW-Authenticate") != "Bearer" {
+		t.Fatalf(
+			"guest protected route = %d, %#v, %q",
+			response.Code,
+			response.Header(),
+			response.Body.String(),
+		)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/protected", nil)
+	request.Host = "example.com"
+	request.Header.Set("Authorization", "Bearer signed")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf(
+			"user protected route = %d, %q",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+}
+
+func TestLoginRouteIsAvailableBeforePrivateSiteResolution(t *testing.T) {
+	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
+		Logger:   loggerFactory{},
+		EventBus: eventBusFactory{},
+		MainDatabase: appkernel.DatabaseDefinition{
+			Connector: connectorFactory{},
+			Adapters: []kernel.ModuleDatabaseFactory{databaseFactory{
+				sites:  repository{isPublic: false},
+				access: deniedAccessRepository{},
+			}},
+		},
+		Profiles: []kernel.Profile{{
+			Code: "dev",
+			Modules: []kernel.ProfileModule{
+				{Module: core.Module{}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runtimeApp.Close() }()
+	if err := runtimeApp.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newTestHandler(runtimeApp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/auth/login",
+		strings.NewReader("{"),
+	)
+	request.Host = "example.com"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest ||
+		!strings.Contains(response.Body.String(), `"code":"invalid_request"`) {
+		t.Fatalf(
+			"login route = %d, %q",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+}
+
+func TestPlatformMiddlewareCannotBypassJWTAuthentication(
 	t *testing.T,
 ) {
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
+		Logger:   loggerFactory{},
+		EventBus: eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: connectorFactory{},
 			Adapters: []kernel.ModuleDatabaseFactory{databaseFactory{
@@ -950,7 +1557,7 @@ func TestPlatformAuthenticationActorPrecedesPrivateSiteResolution(
 		t.Fatal(err)
 	}
 
-	handler, err := httpserver.NewHandler(
+	handler, err := newTestHandler(
 		runtimeApp,
 		httpserver.WithPlatformMiddleware(
 			func(next http.Handler) http.Handler {
@@ -978,12 +1585,92 @@ func TestPlatformAuthenticationActorPrecedesPrivateSiteResolution(
 	request.Host = "example.com"
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
+	if response.Code != http.StatusForbidden {
 		t.Fatalf(
 			"status = %d, body = %q",
 			response.Code,
 			response.Body.String(),
 		)
+	}
+}
+
+func TestJWTAuthenticationActorPrecedesPrivateSiteResolution(
+	t *testing.T,
+) {
+	tests := []struct {
+		name       string
+		access     coreaccess.Repository
+		wantStatus int
+	}{
+		{
+			name:       "user without permission",
+			access:     groupUserAccessRepository{allowed: false},
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "user with permission",
+			access:     groupUserAccessRepository{allowed: true},
+			wantStatus: http.StatusOK,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtimeApp, err := appkernel.New(
+				context.Background(),
+				appkernel.Definition{
+					Logger:   loggerFactory{},
+					EventBus: eventBusFactory{},
+					MainDatabase: appkernel.DatabaseDefinition{
+						Connector: connectorFactory{},
+						Adapters: []kernel.ModuleDatabaseFactory{
+							databaseFactory{
+								sites:  repository{isPublic: false},
+								access: test.access,
+							},
+						},
+					},
+					Profiles: []kernel.Profile{{
+						Code: "dev",
+						Modules: []kernel.ProfileModule{
+							{Module: core.Module{}},
+						},
+					}},
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = runtimeApp.Close() }()
+			if err := runtimeApp.Boot(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+
+			handler, err := newTestHandler(
+				runtimeApp,
+				httpserver.WithAccessTokens(staticAccessTokens{
+					verified: security.User(42),
+				}),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(
+				http.MethodGet,
+				"/_cms/runtime",
+				nil,
+			)
+			request.Host = "example.com"
+			request.Header.Set("Authorization", "Bearer signed")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf(
+					"status = %d, body = %q",
+					response.Code,
+					response.Body.String(),
+				)
+			}
+		})
 	}
 }
 
@@ -1023,6 +1710,8 @@ func TestStandardLinkResourceHandlersRedirect(t *testing.T) {
 		},
 	}
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
+		Logger:   loggerFactory{},
+		EventBus: eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: connectorFactory{},
 			Adapters: []kernel.ModuleDatabaseFactory{
@@ -1043,7 +1732,7 @@ func TestStandardLinkResourceHandlersRedirect(t *testing.T) {
 	if err := runtimeApp.Boot(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	handler, err := httpserver.NewHandler(runtimeApp)
+	handler, err := newTestHandler(runtimeApp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1070,4 +1759,209 @@ func TestStandardLinkResourceHandlersRedirect(t *testing.T) {
 			)
 		}
 	}
+}
+
+func TestHTTPAccessLogsSafeStructuredMetadataAndLevels(t *testing.T) {
+	var logs bytes.Buffer
+	runtimeApp, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{
+			Logger:   loggerFactory{writer: &logs},
+			EventBus: eventBusFactory{},
+			MainDatabase: appkernel.DatabaseDefinition{
+				Connector: connectorFactory{},
+				Adapters: []kernel.ModuleDatabaseFactory{
+					databaseFactory{
+						access: groupUserAccessRepository{allowed: true},
+					},
+				},
+			},
+			Profiles: []kernel.Profile{{
+				Code: "dev",
+				Modules: []kernel.ProfileModule{
+					{Module: core.Module{}},
+				},
+			}},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runtimeApp.Close() }()
+	if err := runtimeApp.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	queryReachedHandler := false
+	testEndpoints := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(
+			response http.ResponseWriter,
+			request *http.Request,
+		) {
+			switch request.URL.Path {
+			case "/warn":
+				http.Error(response, "warn", http.StatusBadRequest)
+			case "/rate":
+				http.Error(response, "rate", http.StatusTooManyRequests)
+			case "/error":
+				http.Error(response, "error", http.StatusServiceUnavailable)
+			case "/redirect":
+				response.WriteHeader(http.StatusFound)
+			case "/options":
+				response.WriteHeader(http.StatusNoContent)
+			case "/panic":
+				panic("panic-secret")
+			default:
+				if request.URL.Query().Get("private") == "query-secret" {
+					queryReachedHandler = true
+				}
+				next.ServeHTTP(response, request)
+			}
+		})
+	}
+	handler, err := httpserver.NewHandler(
+		runtimeApp,
+		httpserver.WithAccessTokens(staticAccessTokens{
+			verified: security.User(42),
+		}),
+		httpserver.WithPlatformMiddleware(testEndpoints),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/_cms/runtime?private=query-secret",
+		strings.NewReader("body-secret"),
+	)
+	request.Host = "example.com"
+	request.Header.Set("Authorization", "Bearer token-secret")
+	request.Header.Set("Cookie", "session=cookie-secret")
+	request.Header.Set("User-Agent", "agent-secret")
+	request.Header.Set("Referer", "https://referer-secret.example")
+	request.Header.Set("X-Private", "header-secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %q", response.Code, response.Body.String())
+	}
+	if !queryReachedHandler {
+		t.Fatal("query was not available to the HTTP middleware")
+	}
+
+	for path, expectedStatus := range map[string]int{
+		"/warn":     http.StatusBadRequest,
+		"/rate":     http.StatusTooManyRequests,
+		"/error":    http.StatusServiceUnavailable,
+		"/redirect": http.StatusFound,
+		"/panic":    http.StatusInternalServerError,
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(
+			response,
+			httptest.NewRequest(http.MethodGet, path, nil),
+		)
+		if response.Code != expectedStatus {
+			t.Fatalf("%s status = %d", path, response.Code)
+		}
+	}
+	optionsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(
+		optionsResponse,
+		httptest.NewRequest(http.MethodOptions, "/options", nil),
+	)
+	if optionsResponse.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS status = %d", optionsResponse.Code)
+	}
+
+	records := accessLogRecords(t, logs.String())
+	if len(records) != 7 {
+		t.Fatalf("access records = %d: %s", len(records), logs.String())
+	}
+	byPath := make(map[string]map[string]any, len(records))
+	for _, record := range records {
+		path, _ := record["url.path"].(string)
+		byPath[path] = record
+	}
+
+	success := byPath["/_cms/runtime"]
+	if success["level"] != "INFO" ||
+		success["http.request.method"] != http.MethodGet ||
+		success["http.response.status_code"] != float64(http.StatusOK) ||
+		success["actor.kind"] != "user" ||
+		success["actor.user.id"] != float64(42) ||
+		success["client.address"] == "" ||
+		success["http.request.id"] == "" ||
+		success["http.route"] != "/_cms/runtime" ||
+		success["http.server.request.duration"] == nil ||
+		success["http.request.body.size"] == nil ||
+		success["http.response.body.size"] == nil {
+		t.Fatalf("success access record = %#v", success)
+	}
+	if byPath["/warn"]["level"] != "WARN" {
+		t.Fatalf("warn access record = %#v", byPath["/warn"])
+	}
+	if byPath["/rate"]["level"] != "WARN" {
+		t.Fatalf("rate-limit access record = %#v", byPath["/rate"])
+	}
+	if byPath["/error"]["level"] != "ERROR" {
+		t.Fatalf("error access record = %#v", byPath["/error"])
+	}
+	if byPath["/redirect"]["level"] != "INFO" ||
+		byPath["/options"]["level"] != "INFO" {
+		t.Fatalf(
+			"success access records = redirect %#v, OPTIONS %#v",
+			byPath["/redirect"],
+			byPath["/options"],
+		)
+	}
+	panicRecord := byPath["/panic"]
+	if panicRecord["level"] != "ERROR" ||
+		panicRecord["exception.stacktrace"] == nil {
+		t.Fatalf("panic access record = %#v", panicRecord)
+	}
+
+	serialized, err := json.Marshal(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{
+		"query-secret",
+		"body-secret",
+		"token-secret",
+		"cookie-secret",
+		"agent-secret",
+		"referer-secret",
+		"header-secret",
+		"panic-secret",
+		"Authorization",
+		"Cookie",
+	} {
+		if bytes.Contains(serialized, []byte(secret)) {
+			t.Fatalf("access logs leaked %q: %s", secret, serialized)
+		}
+	}
+}
+
+func accessLogRecords(
+	t *testing.T,
+	output string,
+) []map[string]any {
+	t.Helper()
+	var records []map[string]any
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		var record map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			t.Fatalf("decode log: %v; line = %q", err, scanner.Text())
+		}
+		if record["msg"] == "HTTP request completed" {
+			records = append(records, record)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return records
 }

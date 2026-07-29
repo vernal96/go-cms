@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/vernal96/go-cms/kernel"
@@ -148,6 +149,7 @@ func (Module) Build(
 		repositoryCache: descriptor,
 		authorization:   ctx.Authorization(),
 		resourcePreview: config.ResourcePreview,
+		logger:          ctx.Logger(),
 	}, nil
 }
 
@@ -156,6 +158,7 @@ type Runtime struct {
 	repositoryCache *RepositoryCacheDescriptor
 	authorization   security.Authorizer
 	resourcePreview resource.PreviewPolicy
+	logger          *slog.Logger
 }
 
 func (r *Runtime) ModuleCode() kernel.ModuleCode {

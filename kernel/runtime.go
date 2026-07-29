@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 
 	"github.com/vernal96/go-cms/kernel/cache"
+	"github.com/vernal96/go-cms/kernel/eventbus"
+	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/group"
@@ -14,6 +17,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -29,9 +33,10 @@ type Profile struct {
 }
 
 type ProfileModule struct {
-	Module Module
-	Config any
-	Caches []cache.Binding
+	Module      Module
+	Config      any
+	Caches      []cache.Binding
+	Filesystems []filesystem.Binding
 }
 
 type Module interface {
@@ -225,6 +230,9 @@ type ModuleContext struct {
 	groups        group.Service
 	authorization security.Authorizer
 	caches        cache.ModuleManager
+	filesystems   filesystem.ModuleManager
+	eventBus      eventbus.Bus
+	logger        *slog.Logger
 }
 
 func newModuleContext(
@@ -234,6 +242,7 @@ func newModuleContext(
 	config any,
 	services RuntimeServices,
 	caches cache.ModuleManager,
+	filesystems filesystem.ModuleManager,
 ) ModuleContext {
 	return ModuleContext{
 		resolver:      resolver,
@@ -246,6 +255,9 @@ func newModuleContext(
 		groups:        services.Groups,
 		authorization: services.Authorization,
 		caches:        caches,
+		filesystems:   filesystems,
+		eventBus:      services.EventBus,
+		logger:        services.Logger,
 	}
 }
 
@@ -288,6 +300,19 @@ func (c ModuleContext) Authorization() security.Authorizer {
 // Caches exposes only aliases explicitly bound to this module.
 func (c ModuleContext) Caches() cache.ModuleManager {
 	return c.caches
+}
+
+// Filesystems exposes only aliases explicitly bound to this module.
+func (c ModuleContext) Filesystems() filesystem.ModuleManager {
+	return c.filesystems
+}
+
+func (c ModuleContext) EventBus() eventbus.Bus {
+	return c.eventBus
+}
+
+func (c ModuleContext) Logger() *slog.Logger {
+	return c.logger
 }
 
 func ModuleConfigFrom[T any](ctx ModuleContext) (T, error) {
@@ -364,6 +389,7 @@ type ProfileRuntime struct {
 	registry    Registry
 	paramSchema *field.Schema
 	templates   *template.Catalog
+	widgets     *widget.Catalog
 }
 
 func newProfileRuntime(
@@ -371,12 +397,14 @@ func newProfileRuntime(
 	registry Registry,
 	paramSchema *field.Schema,
 	templates *template.Catalog,
+	widgets *widget.Catalog,
 ) *ProfileRuntime {
 	return &ProfileRuntime{
 		profile:     cloneProfile(profile),
 		registry:    registry,
 		paramSchema: paramSchema,
 		templates:   templates,
+		widgets:     widgets,
 	}
 }
 
@@ -410,6 +438,24 @@ func (r *ProfileRuntime) Templates() []template.Definition {
 	return r.templates.Definitions()
 }
 
+func (r *ProfileRuntime) Widget(
+	code widget.Code,
+) (*widget.Runtime, bool) {
+	if r == nil || r.widgets == nil {
+		return nil, false
+	}
+
+	return r.widgets.Widget(code)
+}
+
+func (r *ProfileRuntime) Widgets() []widget.Definition {
+	if r == nil || r.widgets == nil {
+		return nil
+	}
+
+	return r.widgets.Definitions()
+}
+
 type ProfileRuntimeFactory struct {
 	resolver DatabaseResolver
 	services RuntimeServices
@@ -422,26 +468,29 @@ type RuntimeServices struct {
 	Groups        group.Service
 	Authorization security.Authorizer
 	Caches        cache.Resolver
+	Filesystems   filesystem.Resolver
+	EventBus      eventbus.Bus
+	Logger        *slog.Logger
 }
 
 func NewProfileRuntimeFactory(
 	resolver DatabaseResolver,
-	services ...RuntimeServices,
+	services RuntimeServices,
 ) (*ProfileRuntimeFactory, error) {
 	if resolver == nil {
 		return nil, errors.New("database resolver is nil")
 	}
 
-	factory := &ProfileRuntimeFactory{resolver: resolver}
-	if len(services) > 1 {
-		return nil, errors.New(
-			"more than one runtime services set was provided",
-		)
+	if services.Logger == nil {
+		return nil, errors.New("runtime logger is nil")
 	}
-	if len(services) == 1 {
-		factory.services = services[0]
+	if services.EventBus == nil || isNilValue(services.EventBus) {
+		return nil, errors.New("runtime event bus is nil")
 	}
-	return factory, nil
+	return &ProfileRuntimeFactory{
+		resolver: resolver,
+		services: services,
+	}, nil
 }
 
 func (f *ProfileRuntimeFactory) Make(
@@ -569,6 +618,7 @@ func (f *ProfileRuntimeFactory) Make(
 		)
 	}
 
+	widgetSources := make([]widget.Source, 0, len(profile.Modules))
 	for _, profileModule := range profile.Modules {
 		module := profileModule.Module
 
@@ -587,13 +637,40 @@ func (f *ProfileRuntimeFactory) Make(
 			)
 		}
 
+		moduleFilesystems, err := filesystem.NewModuleManager(
+			f.services.Filesystems,
+			profileModule.Filesystems,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"configure filesystems for module %q in profile %q: %w",
+				module.Code(),
+				profile.Code,
+				err,
+			)
+		}
+
 		moduleContext := newModuleContext(
 			f.resolver,
 			profile,
 			registry,
 			profileModule.Config,
-			f.services,
+			RuntimeServices{
+				Files:         f.services.Files,
+				Media:         f.services.Media,
+				Users:         f.services.Users,
+				Groups:        f.services.Groups,
+				Authorization: f.services.Authorization,
+				Caches:        f.services.Caches,
+				Filesystems:   f.services.Filesystems,
+				EventBus:      f.services.EventBus,
+				Logger: f.services.Logger.With(
+					slog.String("profile.code", string(profile.Code)),
+					slog.String("module.code", string(module.Code())),
+				),
+			},
 			moduleCaches,
+			moduleFilesystems,
 		)
 
 		runtime, err := module.Build(ctx, moduleContext)
@@ -606,7 +683,7 @@ func (f *ProfileRuntimeFactory) Make(
 			)
 		}
 
-		if runtime == nil {
+		if runtime == nil || isNilValue(runtime) {
 			return nil, fmt.Errorf(
 				"module %q returned nil runtime",
 				module.Code(),
@@ -624,6 +701,22 @@ func (f *ProfileRuntimeFactory) Make(
 		if err := registry.add(runtime); err != nil {
 			return nil, err
 		}
+
+		if provider, ok := runtime.(widget.Provider); ok {
+			widgetSources = append(widgetSources, widget.Source{
+				Module:  string(module.Code()),
+				Widgets: provider.Widgets(),
+			})
+		}
+	}
+
+	widgets, err := widget.Compile(widgetSources, registry)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"compile widgets for profile %q: %w",
+			profile.Code,
+			err,
+		)
 	}
 
 	return newProfileRuntime(
@@ -631,6 +724,7 @@ func (f *ProfileRuntimeFactory) Make(
 		registry,
 		paramSchema,
 		templates,
+		widgets,
 	), nil
 }
 
@@ -643,6 +737,10 @@ func cloneProfile(profile Profile) Profile {
 		profile.Modules[index].Caches = append(
 			[]cache.Binding(nil),
 			profile.Modules[index].Caches...,
+		)
+		profile.Modules[index].Filesystems = append(
+			[]filesystem.Binding(nil),
+			profile.Modules[index].Filesystems...,
 		)
 	}
 	profile.Params = field.CloneDefinitions(profile.Params)

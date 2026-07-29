@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"io/fs"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +20,8 @@ import (
 	appkernel "github.com/vernal96/go-cms/kernel/app"
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/console"
+	"github.com/vernal96/go-cms/kernel/eventbus"
+	"github.com/vernal96/go-cms/kernel/logging"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	coreaccess "github.com/vernal96/go-cms/kernel/modules/core/access"
@@ -36,13 +40,174 @@ import (
 
 const featureModuleCode kernel.ModuleCode = "feature"
 
+type fakeLoggerFactory struct {
+	connector *fakeLoggerConnector
+	err       error
+	onOpen    func()
+}
+
+type fakeLoggerConnector struct {
+	logger   *slog.Logger
+	pingErr  error
+	closeErr error
+	onPing   func()
+	onClose  func()
+}
+
+func (f fakeLoggerFactory) Open(
+	context.Context,
+) (logging.Connector, error) {
+	if f.onOpen != nil {
+		f.onOpen()
+	}
+	connector := f.connector
+	if connector == nil {
+		connector = &fakeLoggerConnector{
+			logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		}
+	}
+	return connector, f.err
+}
+
+func (c *fakeLoggerConnector) Logger() *slog.Logger {
+	return c.logger
+}
+
+func (c *fakeLoggerConnector) Ping(context.Context) error {
+	if c.onPing != nil {
+		c.onPing()
+	}
+	return c.pingErr
+}
+
+func (c *fakeLoggerConnector) Close() error {
+	if c.onClose != nil {
+		c.onClose()
+	}
+	return c.closeErr
+}
+
+type fakeEventBusFactory struct {
+	connector eventbus.Connector
+	err       error
+	onOpen    func()
+}
+
+type fakeEventBusConnector struct {
+	pingErr  error
+	closeErr error
+	onPing   func()
+	onClose  func()
+}
+
+func (f fakeEventBusFactory) Open(
+	context.Context,
+) (eventbus.Connector, error) {
+	if f.onOpen != nil {
+		f.onOpen()
+	}
+	connector := f.connector
+	if connector == nil {
+		connector = &fakeEventBusConnector{}
+	}
+	return connector, f.err
+}
+
+func (c *fakeEventBusConnector) Ping(context.Context) error {
+	if c.onPing != nil {
+		c.onPing()
+	}
+	return c.pingErr
+}
+
+func (*fakeEventBusConnector) Publish(
+	context.Context,
+	eventbus.Message,
+) error {
+	return nil
+}
+
+func (*fakeEventBusConnector) Consume(
+	ctx context.Context,
+	_ eventbus.Subscription,
+	_ eventbus.Handler,
+) error {
+	<-ctx.Done()
+	return nil
+}
+
+func (c *fakeEventBusConnector) Close() error {
+	if c.onClose != nil {
+		c.onClose()
+	}
+	return c.closeErr
+}
+
+type lifecycleEventBusConnector struct {
+	rootContext context.Context
+	cancel      context.CancelFunc
+	consumers   sync.WaitGroup
+	closeOnce   sync.Once
+}
+
+func newLifecycleEventBusConnector() *lifecycleEventBusConnector {
+	rootContext, cancel := context.WithCancel(context.Background())
+	return &lifecycleEventBusConnector{
+		rootContext: rootContext,
+		cancel:      cancel,
+	}
+}
+
+func (*lifecycleEventBusConnector) Ping(context.Context) error {
+	return nil
+}
+
+func (*lifecycleEventBusConnector) Publish(
+	context.Context,
+	eventbus.Message,
+) error {
+	return nil
+}
+
+func (c *lifecycleEventBusConnector) Consume(
+	ctx context.Context,
+	_ eventbus.Subscription,
+	handler eventbus.Handler,
+) error {
+	c.consumers.Add(1)
+	defer c.consumers.Done()
+
+	consumeContext, cancel := context.WithCancel(ctx)
+	stopRootCancel := context.AfterFunc(c.rootContext, cancel)
+	defer func() {
+		stopRootCancel()
+		cancel()
+	}()
+	_ = handler(consumeContext, eventbus.Message{Topic: "topic"})
+	if consumeContext.Err() != nil {
+		return nil
+	}
+	return nil
+}
+
+func (c *lifecycleEventBusConnector) Close() error {
+	c.closeOnce.Do(func() {
+		c.cancel()
+		c.consumers.Wait()
+	})
+	return nil
+}
+
 type fakeConnector struct {
 	code kernel.ConnectionCode
 
-	mu      sync.Mutex
-	drivers map[string]*stub.Stub
-	pings   atomic.Int32
-	closes  atomic.Int32
+	mu       sync.Mutex
+	drivers  map[string]*stub.Stub
+	pings    atomic.Int32
+	closes   atomic.Int32
+	closeErr error
+	onPing   func()
+	onClose  func()
 }
 
 type fakeCacheFactory struct {
@@ -126,12 +291,18 @@ func (c *fakeConnector) Code() kernel.ConnectionCode { return c.code }
 
 func (c *fakeConnector) Ping(context.Context) error {
 	c.pings.Add(1)
+	if c.onPing != nil {
+		c.onPing()
+	}
 	return nil
 }
 
 func (c *fakeConnector) Close() error {
 	c.closes.Add(1)
-	return nil
+	if c.onClose != nil {
+		c.onClose()
+	}
+	return c.closeErr
 }
 
 func (c *fakeConnector) OpenMigrationDriver(
@@ -170,6 +341,7 @@ type fakeConnectorFactory struct {
 	connector *fakeConnector
 	opens     atomic.Int32
 	err       error
+	onOpen    func()
 }
 
 func (f *fakeConnectorFactory) Code() kernel.ConnectionCode {
@@ -180,6 +352,9 @@ func (f *fakeConnectorFactory) Open(
 	context.Context,
 ) (kernel.DBConnector, error) {
 	f.opens.Add(1)
+	if f.onOpen != nil {
+		f.onOpen()
+	}
 	return f.connector, f.err
 }
 
@@ -707,6 +882,383 @@ func seedSource(
 	}
 }
 
+func TestAppRequiresHealthyLoggerBeforeInfrastructure(t *testing.T) {
+	loggerClosed := false
+	databaseOpened := false
+	loggerConnector := &fakeLoggerConnector{
+		logger:  slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		pingErr: errors.New("Loki is not ready"),
+		onClose: func() {
+			loggerClosed = true
+		},
+	}
+	databaseConnector := newFakeConnector("main")
+	_, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{
+			Logger:   fakeLoggerFactory{connector: loggerConnector},
+			EventBus: fakeEventBusFactory{},
+			MainDatabase: appkernel.DatabaseDefinition{
+				Connector: &fakeConnectorFactory{
+					connector: databaseConnector,
+					onOpen: func() {
+						databaseOpened = true
+					},
+				},
+			},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "Loki is not ready") {
+		t.Fatalf("New error = %v", err)
+	}
+	if databaseOpened {
+		t.Fatal("database opened before logger readiness succeeded")
+	}
+	if !loggerClosed {
+		t.Fatal("failed logger connector was not closed")
+	}
+
+	if _, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{},
+	); err == nil || !strings.Contains(err.Error(), "logger factory is nil") {
+		t.Fatalf("nil logger error = %v", err)
+	}
+	if _, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{Logger: fakeLoggerFactory{}},
+	); err == nil || !strings.Contains(
+		err.Error(),
+		"event bus factory is nil",
+	) {
+		t.Fatalf("nil event bus error = %v", err)
+	}
+}
+
+func TestAppRequiresHealthyEventBusBeforeOtherInfrastructure(t *testing.T) {
+	eventBusClosed := false
+	databaseOpened := false
+	eventBusConnector := &fakeEventBusConnector{
+		pingErr: errors.New("Kafka is not ready"),
+		onClose: func() {
+			eventBusClosed = true
+		},
+	}
+	_, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{
+			Logger: fakeLoggerFactory{},
+			EventBus: fakeEventBusFactory{
+				connector: eventBusConnector,
+			},
+			MainDatabase: appkernel.DatabaseDefinition{
+				Connector: &fakeConnectorFactory{
+					connector: newFakeConnector("main"),
+					onOpen: func() {
+						databaseOpened = true
+					},
+				},
+			},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "Kafka is not ready") {
+		t.Fatalf("New error = %v", err)
+	}
+	if databaseOpened {
+		t.Fatal("database opened before event bus readiness succeeded")
+	}
+	if !eventBusClosed {
+		t.Fatal("failed event bus connector was not closed")
+	}
+
+	partiallyOpenedClosed := false
+	_, err = appkernel.New(
+		context.Background(),
+		appkernel.Definition{
+			Logger: fakeLoggerFactory{},
+			EventBus: fakeEventBusFactory{
+				connector: &fakeEventBusConnector{
+					onClose: func() {
+						partiallyOpenedClosed = true
+					},
+				},
+				err: errors.New("event bus open failed"),
+			},
+			MainDatabase: appkernel.DatabaseDefinition{
+				Connector: &fakeConnectorFactory{
+					connector: newFakeConnector("main"),
+				},
+			},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "event bus open failed") {
+		t.Fatalf("partial event bus open error = %v", err)
+	}
+	if !partiallyOpenedClosed {
+		t.Fatal("partially opened event bus connector was not closed")
+	}
+}
+
+func TestAppOpensLoggerThenEventBusAndClosesLoggerLast(t *testing.T) {
+	var events []string
+	record := func(event string) func() {
+		return func() {
+			events = append(events, event)
+		}
+	}
+	loggerConnector := &fakeLoggerConnector{
+		logger:  slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		onPing:  record("logger.ping"),
+		onClose: record("logger.close"),
+	}
+	eventBusConnector := &fakeEventBusConnector{
+		onPing:  record("eventbus.ping"),
+		onClose: record("eventbus.close"),
+	}
+	databaseConnector := newFakeConnector("main")
+	databaseConnector.onPing = record("database.ping")
+	databaseConnector.onClose = record("database.close")
+
+	application, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{
+			Logger: fakeLoggerFactory{
+				connector: loggerConnector,
+				onOpen:    record("logger.open"),
+			},
+			EventBus: fakeEventBusFactory{
+				connector: eventBusConnector,
+				onOpen:    record("eventbus.open"),
+			},
+			MainDatabase: appkernel.DatabaseDefinition{
+				Connector: &fakeConnectorFactory{
+					connector: databaseConnector,
+					onOpen:    record("database.open"),
+				},
+				Adapters: []kernel.ModuleDatabaseFactory{
+					&fakeDatabaseFactory{
+						code: core.ModuleCode,
+						database: &fakeCoreDatabase{
+							repository: &fakeSiteRepository{},
+						},
+					},
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := application.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	expected := []string{
+		"logger.open",
+		"logger.ping",
+		"eventbus.open",
+		"eventbus.ping",
+		"database.open",
+		"database.ping",
+		"eventbus.close",
+		"database.close",
+		"logger.close",
+	}
+	if strings.Join(events, ",") != strings.Join(expected, ",") {
+		t.Fatalf("lifecycle order = %v", events)
+	}
+	if application.EventBus() != eventBusConnector {
+		t.Fatal("App.EventBus did not expose the configured bus")
+	}
+}
+
+func TestAppCloseStopsActiveEventBusConsumerBeforeDatabase(t *testing.T) {
+	eventBusConnector := newLifecycleEventBusConnector()
+	databaseConnector := newFakeConnector("main")
+	handlerStarted := make(chan struct{})
+	handlerStopped := atomic.Bool{}
+	databaseClosedTooEarly := atomic.Bool{}
+	databaseConnector.onClose = func() {
+		if !handlerStopped.Load() {
+			databaseClosedTooEarly.Store(true)
+		}
+	}
+
+	application, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{
+			Logger: fakeLoggerFactory{},
+			EventBus: fakeEventBusFactory{
+				connector: eventBusConnector,
+			},
+			MainDatabase: appkernel.DatabaseDefinition{
+				Connector: &fakeConnectorFactory{
+					connector: databaseConnector,
+				},
+				Adapters: []kernel.ModuleDatabaseFactory{
+					&fakeDatabaseFactory{
+						code: core.ModuleCode,
+						database: &fakeCoreDatabase{
+							repository: &fakeSiteRepository{},
+						},
+					},
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	consumerResult := make(chan error, 1)
+	go func() {
+		consumerResult <- application.EventBus().Consume(
+			context.Background(),
+			eventbus.Subscription{
+				Topics: []string{"topic"},
+				Group:  "group",
+			},
+			func(ctx context.Context, _ eventbus.Message) error {
+				close(handlerStarted)
+				<-ctx.Done()
+				handlerStopped.Store(true)
+				return ctx.Err()
+			},
+		)
+	}()
+	select {
+	case <-handlerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("event bus handler did not start")
+	}
+
+	closeResult := make(chan error, 1)
+	go func() {
+		closeResult <- application.Close()
+	}()
+	select {
+	case err := <-closeResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("App.Close deadlocked with an active event bus handler")
+	}
+	if err := <-consumerResult; err != nil {
+		t.Fatal(err)
+	}
+	if databaseClosedTooEarly.Load() {
+		t.Fatal("database closed before the event bus handler stopped")
+	}
+}
+
+func TestAppCloseJoinsEventBusDatabaseAndLoggerErrors(t *testing.T) {
+	eventBusCloseErr := errors.New("event bus close failed")
+	databaseCloseErr := errors.New("database close failed")
+	loggerCloseErr := errors.New("logger close failed")
+	databaseConnector := newFakeConnector("main")
+	databaseConnector.closeErr = databaseCloseErr
+
+	application, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{
+			Logger: fakeLoggerFactory{
+				connector: &fakeLoggerConnector{
+					logger: slog.New(
+						slog.NewJSONHandler(io.Discard, nil),
+					),
+					closeErr: loggerCloseErr,
+				},
+			},
+			EventBus: fakeEventBusFactory{
+				connector: &fakeEventBusConnector{
+					closeErr: eventBusCloseErr,
+				},
+			},
+			MainDatabase: appkernel.DatabaseDefinition{
+				Connector: &fakeConnectorFactory{
+					connector: databaseConnector,
+				},
+				Adapters: []kernel.ModuleDatabaseFactory{
+					&fakeDatabaseFactory{
+						code: core.ModuleCode,
+						database: &fakeCoreDatabase{
+							repository: &fakeSiteRepository{},
+						},
+					},
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	closeErr := application.Close()
+	for _, expected := range []error{
+		eventBusCloseErr,
+		databaseCloseErr,
+		loggerCloseErr,
+	} {
+		if !errors.Is(closeErr, expected) {
+			t.Fatalf("close error %q was lost: %v", expected, closeErr)
+		}
+	}
+	if secondCloseErr := application.Close(); secondCloseErr != closeErr {
+		t.Fatalf(
+			"idempotent Close returned different error: first=%v second=%v",
+			closeErr,
+			secondCloseErr,
+		)
+	}
+}
+
+func TestAppLogsBootAndCloseFailures(t *testing.T) {
+	var logs bytes.Buffer
+	loggerConnector := &fakeLoggerConnector{
+		logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+	}
+	databaseConnector := newFakeConnector("main")
+	databaseConnector.closeErr = errors.New("database close failed")
+	application, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{
+			Logger:   fakeLoggerFactory{connector: loggerConnector},
+			EventBus: fakeEventBusFactory{},
+			MainDatabase: appkernel.DatabaseDefinition{
+				Connector: &fakeConnectorFactory{
+					connector: databaseConnector,
+				},
+				Adapters: []kernel.ModuleDatabaseFactory{
+					&fakeDatabaseFactory{
+						code: core.ModuleCode,
+						database: &fakeCoreDatabase{
+							repository: &fakeSiteRepository{},
+						},
+					},
+				},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := application.Boot(nil); err == nil {
+		t.Fatal("nil boot context was accepted")
+	}
+	if err := application.Close(); err == nil {
+		t.Fatal("database close failure was lost")
+	}
+	for _, event := range []string{
+		"app.boot.failed",
+		"app.shutdown.failed",
+	} {
+		if !strings.Contains(logs.String(), event) {
+			t.Fatalf("event %q is missing from logs: %s", event, logs.String())
+		}
+	}
+}
+
 func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	ctx := context.Background()
 	mainConnector := newFakeConnector("main")
@@ -748,6 +1300,8 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	module := &featureModule{builds: &moduleBuilds, selected: &selected}
 
 	application, err := appkernel.New(ctx, appkernel.Definition{
+		Logger:   fakeLoggerFactory{},
+		EventBus: fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: &fakeConnectorFactory{connector: mainConnector},
 			Adapters: []kernel.ModuleDatabaseFactory{
@@ -1163,6 +1717,8 @@ func TestAppResourceFacades(t *testing.T) {
 	templateCode := template.Code("article")
 
 	application, err := appkernel.New(ctx, appkernel.Definition{
+		Logger:   fakeLoggerFactory{},
+		EventBus: fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: &fakeConnectorFactory{connector: connector},
 			Adapters: []kernel.ModuleDatabaseFactory{
@@ -1289,6 +1845,8 @@ func TestAppMediaFacades(t *testing.T) {
 	}
 
 	application, err := appkernel.New(ctx, appkernel.Definition{
+		Logger:   fakeLoggerFactory{},
+		EventBus: fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: &fakeConnectorFactory{connector: connector},
 			Adapters: []kernel.ModuleDatabaseFactory{
@@ -1391,6 +1949,8 @@ func TestNewClosesPreviouslyOpenedConnectorOnFactoryError(t *testing.T) {
 	brokenConnector := newFakeConnector("broken")
 
 	_, err := appkernel.New(context.Background(), appkernel.Definition{
+		Logger:   fakeLoggerFactory{},
+		EventBus: fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: &fakeConnectorFactory{connector: mainConnector},
 			Adapters: []kernel.ModuleDatabaseFactory{
@@ -1431,6 +1991,8 @@ func TestAppNewRequiresCachePingAndClosesFailedStore(t *testing.T) {
 	_, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
+			Logger:   fakeLoggerFactory{},
+			EventBus: fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
 				Connector: &fakeConnectorFactory{
 					connector: newFakeConnector("main"),
@@ -1468,6 +2030,8 @@ func TestAppBootRejectsDifferentCoreRepositoryCachesAcrossProfiles(
 	application, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
+			Logger:   fakeLoggerFactory{},
+			EventBus: fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
 				Connector: &fakeConnectorFactory{
 					connector: newFakeConnector("main"),
@@ -1567,6 +2131,8 @@ func TestAppCollectsSeedSourcesAcrossConnectionsAndClonesTags(t *testing.T) {
 	application, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
+			Logger:   fakeLoggerFactory{},
+			EventBus: fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
 				Connector: &fakeConnectorFactory{connector: mainConnector},
 				Adapters: []kernel.ModuleDatabaseFactory{
@@ -1651,6 +2217,8 @@ func TestAppRejectsSeedHistoryCollision(t *testing.T) {
 	_, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
+			Logger:   fakeLoggerFactory{},
+			EventBus: fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
 				Connector: &fakeConnectorFactory{connector: connector},
 				Adapters: []kernel.ModuleDatabaseFactory{
@@ -1681,6 +2249,8 @@ func TestBootFailureIsRememberedAndNotRetried(t *testing.T) {
 	repository := &fakeSiteRepository{err: errors.New("list failed")}
 
 	application, err := appkernel.New(context.Background(), appkernel.Definition{
+		Logger:   fakeLoggerFactory{},
+		EventBus: fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: &fakeConnectorFactory{connector: connector},
 			Adapters: []kernel.ModuleDatabaseFactory{

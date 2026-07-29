@@ -2,11 +2,16 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
+	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
@@ -40,10 +45,8 @@ func (r *Runtime) HTTP() httptransport.Builder {
 		return httptransport.Contribution{
 			ResourceHandlers: []httptransport.ResourceHandler{
 				{
-					Type: resourcetype.Page,
-					Handler: http.HandlerFunc(
-						unavailablePageRenderer,
-					),
+					Type:    resourcetype.Page,
+					Handler: pageResourceHandler{logger: r.logger},
 				},
 				{
 					Type:    resourcetype.Link,
@@ -131,14 +134,213 @@ func (h *terminalResourceHandler) ServeHTTP(
 	)
 }
 
-// Page rendering is deliberately a transport integration point. The project
-// does not yet contain a template engine, so the registered standard handler
-// preserves the existing public 404 instead of inventing a response format.
-func unavailablePageRenderer(
+const (
+	widgetUnavailableError = "widget_unavailable"
+	invalidParamsError     = "invalid_params"
+	instanceFailedError    = "instance_failed"
+	renderFailedError      = "render_failed"
+	invalidResultError     = "invalid_result"
+)
+
+type pageResourceResponse struct {
+	Resource pageResourcePayload  `json:"resource"`
+	Widgets  []pageWidgetResponse `json:"widgets"`
+}
+
+type pageResourcePayload struct {
+	ID       resource.ID       `json:"id"`
+	Type     resourcetype.Code `json:"type"`
+	Template *template.Code    `json:"template"`
+	Title    string            `json:"title"`
+	Path     *string           `json:"path"`
+	Content  string            `json:"content"`
+}
+
+type pageWidgetResponse struct {
+	Code     widget.Code      `json:"code"`
+	Position int              `json:"position"`
+	Data     json.RawMessage  `json:"data,omitempty"`
+	Error    *pageWidgetError `json:"error,omitempty"`
+}
+
+type pageWidgetError struct {
+	Code string `json:"code"`
+}
+
+type pageResourceHandler struct {
+	logger *slog.Logger
+}
+
+func (h pageResourceHandler) ServeHTTP(
 	response http.ResponseWriter,
 	request *http.Request,
 ) {
-	http.NotFound(response, request)
+	ctx := request.Context()
+	item, resourceExists := httptransport.ResourceFromContext(ctx)
+	siteRuntime, siteExists := httptransport.SiteRuntimeFromContext(ctx)
+	if !resourceExists || !siteExists {
+		http.Error(
+			response,
+			"resource request context is incomplete",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	result := pageResourceResponse{
+		Resource: pageResourcePayload{
+			ID:       item.ID,
+			Type:     item.Type,
+			Template: item.Template,
+			Title:    item.Title,
+			Path:     item.Path,
+			Content:  item.Content,
+		},
+		Widgets: make([]pageWidgetResponse, 0, len(item.Widgets)),
+	}
+
+	for _, binding := range item.Widgets {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+
+		rendered := pageWidgetResponse{
+			Code:     binding.Code,
+			Position: binding.Position,
+		}
+		runtime, exists := siteRuntime.Profile().Widget(binding.Code)
+		if !exists {
+			rendered.Error = h.widgetError(
+				ctx,
+				item,
+				binding,
+				widgetUnavailableError,
+				fmt.Errorf("widget %q is unavailable", binding.Code),
+			)
+			result.Widgets = append(result.Widgets, rendered)
+			continue
+		}
+
+		instance, err := runtime.New(binding.Params)
+		if err != nil {
+			code := instanceFailedError
+			if errors.Is(err, widget.ErrInvalidParams) {
+				code = invalidParamsError
+			}
+			rendered.Error = h.widgetError(
+				ctx,
+				item,
+				binding,
+				code,
+				err,
+			)
+			result.Widgets = append(result.Widgets, rendered)
+			continue
+		}
+
+		data, err := instance.Render(ctx, widget.RenderInput{
+			Resource: widget.ResourceSnapshot{
+				ID:      int64(item.ID),
+				Content: item.Content,
+			},
+		})
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			rendered.Error = h.widgetError(
+				ctx,
+				item,
+				binding,
+				renderFailedError,
+				err,
+			)
+			result.Widgets = append(result.Widgets, rendered)
+			continue
+		}
+		if data == nil {
+			rendered.Error = h.widgetError(
+				ctx,
+				item,
+				binding,
+				invalidResultError,
+				errors.New("widget returned nil data"),
+			)
+			result.Widgets = append(result.Widgets, rendered)
+			continue
+		}
+		rawData, err := json.Marshal(data)
+		if err != nil {
+			rendered.Error = h.widgetError(
+				ctx,
+				item,
+				binding,
+				invalidResultError,
+				err,
+			)
+			result.Widgets = append(result.Widgets, rendered)
+			continue
+		}
+
+		rendered.Data = rawData
+		result.Widgets = append(result.Widgets, rendered)
+	}
+
+	raw, err := json.Marshal(result)
+	if err != nil {
+		h.logError(
+			ctx,
+			"resource response encoding failed",
+			item,
+			resource.WidgetBinding{},
+			err,
+		)
+		http.Error(
+			response,
+			"resource response failed",
+			http.StatusInternalServerError,
+		)
+		return
+	}
+
+	response.Header().Set(
+		"Content-Type",
+		"application/json; charset=utf-8",
+	)
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(append(raw, '\n'))
+}
+
+func (h pageResourceHandler) widgetError(
+	ctx context.Context,
+	item resource.Resource,
+	binding resource.WidgetBinding,
+	code string,
+	err error,
+) *pageWidgetError {
+	h.logError(ctx, "resource widget failed", item, binding, err)
+	return &pageWidgetError{Code: code}
+}
+
+func (h pageResourceHandler) logError(
+	ctx context.Context,
+	message string,
+	item resource.Resource,
+	binding resource.WidgetBinding,
+	err error,
+) {
+	if h.logger == nil {
+		return
+	}
+
+	attributes := []any{
+		slog.String("event", "resource.widget.failed"),
+		slog.Int64("resource.id", int64(item.ID)),
+		slog.String("widget.code", string(binding.Code)),
+		slog.Int("widget.position", binding.Position),
+		slog.Any("error", err),
+	}
+	h.logger.ErrorContext(ctx, message, attributes...)
 }
 
 type externalLinkHandler struct{}

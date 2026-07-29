@@ -7,8 +7,11 @@ import (
 
 	"github.com/vernal96/go-cms/internal/connectors/corecache"
 	"github.com/vernal96/go-cms/internal/connectors/corefiles"
+	"github.com/vernal96/go-cms/internal/connectors/maineventbus"
+	"github.com/vernal96/go-cms/internal/connectors/mainlogger"
 	"github.com/vernal96/go-cms/internal/connectors/mainpostgres"
 	"github.com/vernal96/go-cms/internal/profiles/dev"
+	jwtsecurity "github.com/vernal96/go-cms/internal/security/jwt"
 	"github.com/vernal96/go-cms/kernel"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
 	"github.com/vernal96/go-cms/kernel/cache"
@@ -17,10 +20,13 @@ import (
 )
 
 type Config struct {
+	Logger    mainlogger.Config   `envconfig:"LOGGER"`
+	EventBus  maineventbus.Config `envconfig:"EVENT_BUS"`
 	Server    ServerConfig        `envconfig:"SERVER"`
 	Postgres  mainpostgres.Config `envconfig:"POSTGRES"`
 	Files     FilesConfig         `envconfig:"FILES"`
 	CoreCache corecache.Config    `envconfig:"CORE_CACHE"`
+	JWT       jwtsecurity.Config  `envconfig:"JWT"`
 }
 
 type FilesConfig struct {
@@ -44,6 +50,8 @@ func (c ServerConfig) Address() string {
 // Application is a declarative description of this application instance.
 func (c Config) Application() appkernel.Definition {
 	return appkernel.Definition{
+		Logger:   mainlogger.NewFactory(c.Logger),
+		EventBus: maineventbus.NewFactory(c.EventBus),
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: mainpostgres.Factory(c.Postgres),
 			Adapters: []kernel.ModuleDatabaseFactory{

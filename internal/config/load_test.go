@@ -11,7 +11,12 @@ import (
 func TestLoadReadsDotEnvAndPreservesProcessEnvironment(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	dotEnv := "POSTGRES_HOST=file-host\r\n" +
+	dotEnv := "LOGGER_DRIVER=file\r\n" +
+		"LOGGER_LEVEL=info\r\n" +
+		"LOGGER_SERVICE_NAME=go-cms-test\r\n" +
+		"LOGGER_ENVIRONMENT=test\r\n" +
+		"EVENT_BUS_DRIVER=kafka\r\n" +
+		"POSTGRES_HOST=file-host\r\n" +
 		"POSTGRES_PORT=5432\r\n" +
 		"POSTGRES_DB=cms\r\n" +
 		"POSTGRES_USER=cms\r\n" +
@@ -21,6 +26,11 @@ func TestLoadReadsDotEnvAndPreservesProcessEnvironment(t *testing.T) {
 	}
 
 	keys := []string{
+		"LOGGER_DRIVER",
+		"LOGGER_LEVEL",
+		"LOGGER_SERVICE_NAME",
+		"LOGGER_ENVIRONMENT",
+		"EVENT_BUS_DRIVER",
 		"POSTGRES_HOST",
 		"POSTGRES_PORT",
 		"POSTGRES_DB",
@@ -54,5 +64,8 @@ func TestLoadReadsDotEnvAndPreservesProcessEnvironment(t *testing.T) {
 	}
 	if config.Postgres.Port != 5432 || config.Postgres.Database != "cms" {
 		t.Fatalf("postgres config = %#v", config.Postgres)
+	}
+	if config.EventBus.Driver != "kafka" {
+		t.Fatalf("event bus driver = %q", config.EventBus.Driver)
 	}
 }
