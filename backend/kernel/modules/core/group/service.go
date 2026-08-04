@@ -121,6 +121,40 @@ func (s *ApplicationService) List(
 	return result, nil
 }
 
+func (s *ApplicationService) ValidateUserAssignment(
+	ctx context.Context,
+	actor security.Actor,
+	ids []ID,
+) ([]Group, error) {
+	if err := s.access.Check(ctx, actor, updatePermission); err != nil {
+		return nil, err
+	}
+
+	result := make([]Group, 0, len(ids))
+	seen := make(map[ID]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return nil, errors.New("invalid group id")
+		}
+		if _, exists := seen[id]; exists {
+			return nil, fmt.Errorf("duplicate group id %d", id)
+		}
+		seen[id] = struct{}{}
+
+		item, err := s.byID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if item.IsSuper {
+			if err := s.requirePrivileged(ctx, actor); err != nil {
+				return nil, err
+			}
+		}
+		result = append(result, item)
+	}
+	return result, nil
+}
+
 func (s *ApplicationService) Update(
 	ctx context.Context,
 	actor security.Actor,

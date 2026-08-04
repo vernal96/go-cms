@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
+	"github.com/vernal96/go-cms/kernel/modules/core/group"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
@@ -33,6 +34,7 @@ type ApplicationService struct {
 	repository Repository
 	hasher     PasswordHasher
 	media      MediaService
+	groups     group.AssignmentValidator
 	access     access.Service
 }
 
@@ -40,6 +42,7 @@ func NewService(
 	repository Repository,
 	hasher PasswordHasher,
 	mediaService MediaService,
+	groupAssignments group.AssignmentValidator,
 	accessService access.Service,
 ) (*ApplicationService, error) {
 	switch {
@@ -49,6 +52,8 @@ func NewService(
 		return nil, errors.New("user password hasher is nil")
 	case mediaService == nil:
 		return nil, errors.New("user media service is nil")
+	case groupAssignments == nil:
+		return nil, errors.New("user group assignment validator is nil")
 	case accessService == nil:
 		return nil, errors.New("user access service is nil")
 	}
@@ -57,6 +62,7 @@ func NewService(
 		repository: repository,
 		hasher:     hasher,
 		media:      mediaService,
+		groups:     groupAssignments,
 		access:     accessService,
 	}, nil
 }
@@ -85,6 +91,18 @@ func (s *ApplicationService) Create(
 	if err != nil {
 		return User{}, err
 	}
+
+	groupIDs := append([]group.ID(nil), input.GroupIDs...)
+	if len(groupIDs) > 0 {
+		if _, err := s.groups.ValidateUserAssignment(
+			ctx,
+			actor,
+			groupIDs,
+		); err != nil {
+			return User{}, fmt.Errorf("validate user groups: %w", err)
+		}
+	}
+
 	item.PasswordHash, err = s.hasher.Hash(input.Password)
 	if err != nil {
 		return User{}, fmt.Errorf("hash user password: %w", err)
@@ -94,6 +112,7 @@ func (s *ApplicationService) Create(
 		ctx,
 		actor.AuditUserID(),
 		item,
+		groupIDs,
 		s.validateAvatar,
 	)
 	if err != nil {

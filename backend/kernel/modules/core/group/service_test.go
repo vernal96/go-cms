@@ -14,14 +14,15 @@ import (
 type testAccess struct {
 	privileged bool
 	codes      []permission.Code
+	checks     map[permission.Code]error
 }
 
 func (a testAccess) Check(
-	context.Context,
-	security.Actor,
-	permission.Code,
+	_ context.Context,
+	_ security.Actor,
+	code permission.Code,
 ) error {
-	return nil
+	return a.checks[code]
 }
 func (a testAccess) Codes() []permission.Code {
 	return append([]permission.Code(nil), a.codes...)
@@ -307,6 +308,84 @@ func TestSuperGroupChangesAndMembershipRequirePrivilege(t *testing.T) {
 	)
 	if err != nil || membership.UserID != 7 {
 		t.Fatalf("system membership = %#v, %v", membership, err)
+	}
+}
+
+func TestValidateUserAssignmentRequiresUpdateAndPrivilege(t *testing.T) {
+	t.Parallel()
+
+	repository := newMemoryRepository()
+	service, err := NewService(repository, testAccess{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := service.Create(
+		context.Background(),
+		security.System(),
+		CreateInput{Code: "manager", Name: "Manager"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := service.Create(
+		context.Background(),
+		security.System(),
+		CreateInput{
+			Code:    "admin",
+			Name:    "Administrator",
+			IsSuper: true,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	validated, err := service.ValidateUserAssignment(
+		context.Background(),
+		security.User(1),
+		[]ID{manager.ID},
+	)
+	if err != nil || len(validated) != 1 ||
+		validated[0].ID != manager.ID {
+		t.Fatalf("manager assignment = %#v, %v", validated, err)
+	}
+	if _, err := service.ValidateUserAssignment(
+		context.Background(),
+		security.User(1),
+		[]ID{admin.ID},
+	); !errors.Is(err, access.ErrNotPrivileged) {
+		t.Fatalf("super assignment error = %v", err)
+	}
+	if _, err := service.ValidateUserAssignment(
+		context.Background(),
+		security.System(),
+		[]ID{manager.ID, manager.ID},
+	); err == nil {
+		t.Fatal("duplicate group assignment was accepted")
+	}
+	if _, err := service.ValidateUserAssignment(
+		context.Background(),
+		security.System(),
+		[]ID{999},
+	); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing group error = %v", err)
+	}
+
+	forbidden := errors.New("group update denied")
+	deniedService, err := NewService(repository, testAccess{
+		checks: map[permission.Code]error{
+			updatePermission: forbidden,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := deniedService.ValidateUserAssignment(
+		context.Background(),
+		security.System(),
+		[]ID{manager.ID},
+	); !errors.Is(err, forbidden) {
+		t.Fatalf("update permission error = %v", err)
 	}
 }
 

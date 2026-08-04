@@ -61,6 +61,14 @@ type UpdateInput struct {
 	IsSuper bool
 }
 
+type AssignmentValidator interface {
+	ValidateUserAssignment(
+		context.Context,
+		security.Actor,
+		[]ID,
+	) ([]Group, error)
+}
+
 type Repository interface {
 	Create(context.Context, *security.UserID, Group) (Group, error)
 	ByID(context.Context, ID) (Group, error)
@@ -91,6 +99,7 @@ type Repository interface {
 }
 
 type Service interface {
+	AssignmentValidator
 	Create(context.Context, security.Actor, CreateInput) (Group, error)
 	Get(context.Context, security.Actor, ID) (Group, error)
 	GetByCode(context.Context, security.Actor, string) (Group, error)

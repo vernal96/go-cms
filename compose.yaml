@@ -1,7 +1,7 @@
 services:
   admin:
     build:
-      context: ./kernel/modules/admin/frontend
+      context: ./frontend-admin
     image: go-cms-admin:dev
     container_name: go-cms-admin
     ports:
@@ -11,7 +11,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./kernel/modules/admin/frontend:/app
+      - ./frontend-admin:/app
       - admin_node_modules:/app/node_modules
     healthcheck:
       test:
@@ -87,8 +87,8 @@ services:
       - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
-      - ./eventbus/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
-      - ./eventbus/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./backend/eventbus/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - ./backend/eventbus/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 5s
@@ -103,7 +103,7 @@ services:
     ports:
       - "3100:3100"
     volumes:
-      - ./observability/loki.yaml:/etc/loki/config.yaml:ro
+      - ./backend/observability/loki.yaml:/etc/loki/config.yaml:ro
       - loki_data:/loki
     healthcheck:
       test: ["CMD", "/usr/bin/loki", "-verify-config=true", "-config.file=/etc/loki/config.yaml"]
@@ -121,7 +121,7 @@ services:
       - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./backend/observability/grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       loki:
         condition: service_healthy

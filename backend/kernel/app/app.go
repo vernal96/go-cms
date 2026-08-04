@@ -399,6 +399,7 @@ func (a *App) boot(ctx context.Context) error {
 		a.coreDatabase.Users(),
 		passwordHasher,
 		mediaService,
+		groupService,
 		accessService,
 	)
 	if err != nil {

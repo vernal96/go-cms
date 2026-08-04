@@ -3,12 +3,14 @@ package user
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
+	"github.com/vernal96/go-cms/kernel/modules/core/group"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
@@ -78,6 +80,27 @@ func (testMedia) Resolve(
 	}, nil
 }
 
+type testGroupAssignments struct {
+	validated []group.ID
+	err       error
+}
+
+func (v *testGroupAssignments) ValidateUserAssignment(
+	_ context.Context,
+	_ security.Actor,
+	ids []group.ID,
+) ([]group.Group, error) {
+	v.validated = append([]group.ID(nil), ids...)
+	if v.err != nil {
+		return nil, v.err
+	}
+	result := make([]group.Group, len(ids))
+	for index, id := range ids {
+		result[index] = group.Group{ID: id}
+	}
+	return result, nil
+}
+
 type testHasher struct {
 	verifyCalls int
 	hashCalls   int
@@ -104,6 +127,7 @@ type memoryRepository struct {
 	nextID   ID
 	records  map[ID]Record
 	lastHash *string
+	groupIDs []group.ID
 }
 
 func newMemoryRepository() *memoryRepository {
@@ -117,12 +141,15 @@ func (r *memoryRepository) Create(
 	ctx context.Context,
 	actorID *security.UserID,
 	record Record,
+	groupIDs []group.ID,
 	validate ValidateAvatarMedia,
 ) (Record, error) {
 	for _, existing := range r.records {
-		if existing.Login == record.Login ||
-			existing.Email == record.Email {
-			return Record{}, ErrConflict
+		if existing.Login == record.Login {
+			return Record{}, ErrLoginExists
+		}
+		if existing.Email == record.Email {
+			return Record{}, ErrEmailExists
 		}
 	}
 	if record.AvatarMediaID != nil {
@@ -137,6 +164,7 @@ func (r *memoryRepository) Create(
 	record.CreatedBy = cloneUserID(actorID)
 	record.UpdatedBy = cloneUserID(actorID)
 	r.records[record.ID] = cloneRecord(record)
+	r.groupIDs = append([]group.ID(nil), groupIDs...)
 	return cloneRecord(record), nil
 }
 
@@ -265,10 +293,12 @@ func newService(
 	t.Helper()
 	repository := newMemoryRepository()
 	hasher := &testHasher{}
+	groupAssignments := &testGroupAssignments{}
 	service, err := NewService(
 		repository,
 		hasher,
 		testMedia{},
+		groupAssignments,
 		testAccess{},
 	)
 	if err != nil {
@@ -374,6 +404,153 @@ func TestCreateNormalizesIdentityAndReservesSoftDeletedValues(
 		},
 	); !errors.Is(err, ErrConflict) {
 		t.Fatalf("reserved login error = %v", err)
+	}
+}
+
+func TestCreateValidatesAndPersistsGroupAssignments(t *testing.T) {
+	t.Parallel()
+
+	repository := newMemoryRepository()
+	hasher := &testHasher{}
+	assignments := &testGroupAssignments{}
+	service, err := NewService(
+		repository,
+		hasher,
+		testMedia{},
+		assignments,
+		testAccess{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	groupIDs := []group.ID{2, 7}
+	if _, err := service.Create(
+		context.Background(),
+		security.System(),
+		CreateInput{
+			Login:    "grouped-user",
+			Email:    "grouped@example.test",
+			Password: "a-valid-password",
+			Name:     "Grouped User",
+			GroupIDs: groupIDs,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(assignments.validated, groupIDs) {
+		t.Fatalf("validated groups = %#v", assignments.validated)
+	}
+	if !slices.Equal(repository.groupIDs, groupIDs) {
+		t.Fatalf("persisted groups = %#v", repository.groupIDs)
+	}
+
+	assignments.err = group.ErrNotFound
+	if _, err := service.Create(
+		context.Background(),
+		security.System(),
+		CreateInput{
+			Login:    "missing-group",
+			Email:    "missing-group@example.test",
+			Password: "a-valid-password",
+			Name:     "Missing Group",
+			GroupIDs: []group.ID{99},
+		},
+	); !errors.Is(err, group.ErrNotFound) {
+		t.Fatalf("missing group error = %v", err)
+	}
+}
+
+func TestCreateDistinguishesLoginAndEmailConflicts(t *testing.T) {
+	t.Parallel()
+
+	service, _, _ := newService(t)
+	input := CreateInput{
+		Login:    "existing-user",
+		Email:    "existing@example.test",
+		Password: "a-valid-password",
+		Name:     "Existing User",
+	}
+	if _, err := service.Create(
+		context.Background(),
+		security.System(),
+		input,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	input.Email = "other@example.test"
+	if _, err := service.Create(
+		context.Background(),
+		security.System(),
+		input,
+	); !errors.Is(err, ErrLoginExists) ||
+		!errors.Is(err, ErrConflict) {
+		t.Fatalf("login conflict = %v", err)
+	}
+
+	input.Login = "other-user"
+	input.Email = "existing@example.test"
+	if _, err := service.Create(
+		context.Background(),
+		security.System(),
+		input,
+	); !errors.Is(err, ErrEmailExists) ||
+		!errors.Is(err, ErrConflict) {
+		t.Fatalf("email conflict = %v", err)
+	}
+}
+
+func TestCreateRejectsInvalidIdentityAndPassword(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name  string
+		input CreateInput
+		want  string
+	}{
+		{
+			name: "login",
+			input: CreateInput{
+				Login:    "1invalid",
+				Email:    "user@example.test",
+				Password: "a-valid-password",
+				Name:     "User",
+			},
+			want: "invalid user login",
+		},
+		{
+			name: "email",
+			input: CreateInput{
+				Login:    "valid-user",
+				Email:    "not-an-email",
+				Password: "a-valid-password",
+				Name:     "User",
+			},
+			want: "invalid user email",
+		},
+		{
+			name: "password",
+			input: CreateInput{
+				Login:    "valid-user",
+				Email:    "user@example.test",
+				Password: "too-short",
+				Name:     "User",
+			},
+			want: "password must contain between 12 and 1024 bytes",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			service, _, _ := newService(t)
+			if _, err := service.Create(
+				context.Background(),
+				security.System(),
+				test.input,
+			); err == nil || err.Error() != test.want {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

@@ -3,11 +3,14 @@ package commands
 import (
 	"bufio"
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -171,40 +174,7 @@ func (c *usersCommand) Run(
 
 	switch args[0] {
 	case "create":
-		flags := newFlagSet("users create", streams)
-		login := flags.String("login", "", "unique login")
-		email := flags.String("email", "", "unique email")
-		name := flags.String("name", "", "name")
-		lastName := flags.String("last-name", "", "last name")
-		middleName := flags.String("middle-name", "", "middle name")
-		phone := flags.String("phone", "", "phone")
-		avatar := flags.String("avatar-media-id", "", "avatar media id")
-		if err := parseFlags(flags, args[1:]); err != nil {
-			return err
-		}
-		avatarID, err := optionalMediaID(*avatar)
-		if err != nil {
-			return err
-		}
-		password, err := readPassword(streams.In)
-		if err != nil {
-			return err
-		}
-		created, err := c.application.CreateUser(
-			ctx,
-			security.System(),
-			user.CreateInput{
-				Login:         *login,
-				Email:         *email,
-				Password:      password,
-				Name:          *name,
-				LastName:      optionalString(*lastName),
-				MiddleName:    optionalString(*middleName),
-				Phone:         optionalString(*phone),
-				AvatarMediaID: avatarID,
-			},
-		)
-		return writeResult(streams.Out, created, err)
+		return c.create(ctx, args[1:], streams)
 
 	case "get", "delete", "restore", "password":
 		flags := newFlagSet("users "+args[0], streams)
@@ -252,6 +222,103 @@ func (c *usersCommand) Run(
 	default:
 		return fmt.Errorf("unknown users subcommand %q", args[0])
 	}
+}
+
+type createUserResult struct {
+	User              user.User     `json:"user"`
+	Groups            []group.Group `json:"groups"`
+	GeneratedPassword string        `json:"generated_password,omitempty"`
+}
+
+func (c *usersCommand) create(
+	ctx context.Context,
+	args []string,
+	streams console.IO,
+) error {
+	flags := newFlagSet("users create", streams)
+	login := flags.String("login", "", "unique login")
+	email := flags.String("email", "", "unique email")
+	name := flags.String("name", "", "name")
+	lastName := flags.String("last-name", "", "last name")
+	middleName := flags.String("middle-name", "", "middle name")
+	phone := flags.String("phone", "", "phone")
+	avatar := flags.String("avatar-media-id", "", "avatar media id")
+	generate := flags.Bool(
+		"generate-password",
+		false,
+		"generate and return a password",
+	)
+	var groupCodes stringValues
+	flags.Var(
+		&groupCodes,
+		"group",
+		"group code; repeat for multiple groups",
+	)
+	if err := parseFlags(flags, args); err != nil {
+		return err
+	}
+
+	for _, required := range []struct {
+		name  string
+		value string
+	}{
+		{name: "login", value: *login},
+		{name: "email", value: *email},
+		{name: "name", value: *name},
+	} {
+		if strings.TrimSpace(required.value) == "" {
+			return fmt.Errorf("%s is required", required.name)
+		}
+	}
+	if len(groupCodes) == 0 {
+		return errors.New("at least one group is required")
+	}
+
+	avatarID, err := optionalMediaID(*avatar)
+	if err != nil {
+		return err
+	}
+	available, err := c.application.Groups(ctx, security.System())
+	if err != nil {
+		return fmt.Errorf("list groups: %w", err)
+	}
+	groupIDs, selected, err := selectGroups(groupCodes, available)
+	if err != nil {
+		return err
+	}
+
+	var password string
+	var generatedPassword string
+	if *generate {
+		password, err = generatePassword(cryptorand.Reader)
+		generatedPassword = password
+	} else {
+		password, err = readPassword(streams.In)
+	}
+	if err != nil {
+		return err
+	}
+
+	created, err := c.application.CreateUser(
+		ctx,
+		security.System(),
+		user.CreateInput{
+			Login:         *login,
+			Email:         *email,
+			Password:      password,
+			Name:          *name,
+			LastName:      optionalString(*lastName),
+			MiddleName:    optionalString(*middleName),
+			Phone:         optionalString(*phone),
+			AvatarMediaID: avatarID,
+			GroupIDs:      groupIDs,
+		},
+	)
+	return writeResult(streams.Out, createUserResult{
+		User:              created,
+		Groups:            selected,
+		GeneratedPassword: generatedPassword,
+	}, err)
 }
 
 func (c *usersCommand) update(
@@ -695,6 +762,77 @@ func optionalString(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+type stringValues []string
+
+func (values *stringValues) String() string {
+	if values == nil {
+		return ""
+	}
+	return strings.Join(*values, ",")
+}
+
+func (values *stringValues) Set(value string) error {
+	*values = append(*values, value)
+	return nil
+}
+
+func selectGroups(
+	requested []string,
+	available []group.Group,
+) ([]group.ID, []group.Group, error) {
+	byCode := make(map[string]group.Group, len(available))
+	availableLabels := make([]string, 0, len(available))
+	for _, item := range available {
+		byCode[item.Code] = item
+		availableLabels = append(
+			availableLabels,
+			fmt.Sprintf("%s (%s)", item.Code, item.Name),
+		)
+	}
+	sort.Strings(availableLabels)
+
+	ids := make([]group.ID, 0, len(requested))
+	selected := make([]group.Group, 0, len(requested))
+	seen := make(map[string]struct{}, len(requested))
+	for _, rawCode := range requested {
+		code := strings.ToLower(strings.TrimSpace(rawCode))
+		if code == "" {
+			return nil, nil, errors.New("group code is empty")
+		}
+		if _, exists := seen[code]; exists {
+			return nil, nil, fmt.Errorf("duplicate group code %q", code)
+		}
+		seen[code] = struct{}{}
+
+		item, exists := byCode[code]
+		if !exists {
+			if len(availableLabels) == 0 {
+				return nil, nil, errors.New("no groups are available")
+			}
+			return nil, nil, fmt.Errorf(
+				"unknown group %q; available groups: %s",
+				code,
+				strings.Join(availableLabels, ", "),
+			)
+		}
+		ids = append(ids, item.ID)
+		selected = append(selected, item)
+	}
+	return ids, selected, nil
+}
+
+func generatePassword(entropy io.Reader) (string, error) {
+	if entropy == nil {
+		return "", errors.New("password entropy source is nil")
+	}
+	const generatedPasswordBytes = 24
+	random := make([]byte, generatedPasswordBytes)
+	if _, err := io.ReadFull(entropy, random); err != nil {
+		return "", fmt.Errorf("generate password: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(random), nil
 }
 
 func readPassword(input io.Reader) (string, error) {

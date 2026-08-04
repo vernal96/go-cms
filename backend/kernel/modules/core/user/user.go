@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
+	"github.com/vernal96/go-cms/kernel/modules/core/group"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -17,9 +18,23 @@ const AvatarMediaUsage media.UsageKind = "user.avatar"
 var (
 	ErrNotFound           = errors.New("user not found")
 	ErrConflict           = errors.New("user conflict")
+	ErrLoginExists        = &identityConflictError{field: "login"}
+	ErrEmailExists        = &identityConflictError{field: "email"}
 	ErrInvalidReference   = errors.New("invalid user reference")
 	ErrInvalidCredentials = errors.New("invalid credentials")
 )
+
+type identityConflictError struct {
+	field string
+}
+
+func (e *identityConflictError) Error() string {
+	return "user " + e.field + " already exists"
+}
+
+func (*identityConflictError) Unwrap() error {
+	return ErrConflict
+}
 
 type User struct {
 	ID            ID
@@ -53,6 +68,7 @@ type CreateInput struct {
 	MiddleName    *string
 	Phone         *string
 	AvatarMediaID *media.ID
+	GroupIDs      []group.ID
 }
 
 type UpdateInput struct {
@@ -78,6 +94,7 @@ type Repository interface {
 		context.Context,
 		*security.UserID,
 		Record,
+		[]group.ID,
 		ValidateAvatarMedia,
 	) (Record, error)
 	ByID(context.Context, ID) (Record, error)

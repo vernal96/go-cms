@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres/medialock"
+	"github.com/vernal96/go-cms/kernel/modules/core/group"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/security"
@@ -35,6 +36,7 @@ func (r *Repository) Create(
 	ctx context.Context,
 	actorID *security.UserID,
 	record user.Record,
+	groupIDs []group.ID,
 	validate user.ValidateAvatarMedia,
 ) (_ user.Record, resultErr error) {
 	if ctx == nil {
@@ -44,7 +46,7 @@ func (r *Repository) Create(
 	if err != nil {
 		return user.Record{}, fmt.Errorf("begin user create: %w", err)
 	}
-	defer rollbackOnError(transaction, &resultErr)
+	defer rollbackOnError(transaction, &resultErr)()
 
 	if record.AvatarMediaID != nil {
 		if validate == nil {
@@ -104,10 +106,78 @@ RETURNING
 	if err != nil {
 		return user.Record{}, translateError(err)
 	}
+
+	if err := createGroupMemberships(
+		ctx,
+		transaction,
+		actorID,
+		created.ID,
+		groupIDs,
+	); err != nil {
+		return user.Record{}, err
+	}
+
 	if err := transaction.Commit(ctx); err != nil {
 		return user.Record{}, translateError(err)
 	}
 	return created, nil
+}
+
+func createGroupMemberships(
+	ctx context.Context,
+	transaction pgx.Tx,
+	actorID *security.UserID,
+	userID security.UserID,
+	groupIDs []group.ID,
+) error {
+	if len(groupIDs) == 0 {
+		return nil
+	}
+
+	rawGroupIDs := make([]int64, len(groupIDs))
+	seen := make(map[group.ID]struct{}, len(groupIDs))
+	for index, groupID := range groupIDs {
+		if groupID <= 0 {
+			return group.ErrNotFound
+		}
+		if _, exists := seen[groupID]; exists {
+			return fmt.Errorf("duplicate group id %d", groupID)
+		}
+		seen[groupID] = struct{}{}
+		rawGroupIDs[index] = int64(groupID)
+	}
+
+	var created int64
+	err := transaction.QueryRow(ctx, `
+WITH requested(group_id) AS (
+    SELECT DISTINCT unnest($3::bigint[])
+),
+created AS (
+    INSERT INTO core.user_groups
+    (
+        user_id,
+        group_id,
+        created_by,
+        updated_by
+    )
+    SELECT
+        $1,
+        groups.id,
+        $2,
+        $2
+    FROM requested
+    JOIN core.groups groups ON groups.id = requested.group_id
+    RETURNING group_id
+)
+SELECT count(*) FROM created;
+`, userID, actorID, rawGroupIDs).Scan(&created)
+	if err != nil {
+		return translateError(err)
+	}
+	if created != int64(len(groupIDs)) {
+		return group.ErrNotFound
+	}
+	return nil
 }
 
 func (r *Repository) ByID(
@@ -194,7 +264,7 @@ func (r *Repository) Update(
 	if err != nil {
 		return user.Record{}, fmt.Errorf("begin user update: %w", err)
 	}
-	defer rollbackOnError(transaction, &resultErr)
+	defer rollbackOnError(transaction, &resultErr)()
 
 	locked, err := scanRecord(transaction.QueryRow(ctx, `
 SELECT
@@ -514,6 +584,12 @@ func translateError(err error) error {
 	}
 	switch postgresError.Code {
 	case pgerrcode.UniqueViolation:
+		switch postgresError.ConstraintName {
+		case "uq_users_login":
+			return fmt.Errorf("%w: %s", user.ErrLoginExists, err)
+		case "uq_users_email":
+			return fmt.Errorf("%w: %s", user.ErrEmailExists, err)
+		}
 		return fmt.Errorf("%w: %s", user.ErrConflict, err)
 	case pgerrcode.ForeignKeyViolation, pgerrcode.CheckViolation:
 		return fmt.Errorf("%w: %s", user.ErrInvalidReference, err)
