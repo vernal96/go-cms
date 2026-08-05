@@ -438,7 +438,8 @@ WITH RECURSIVE tree AS
 SELECT
     item.id, item.folder_id, item.storage, item.name,
     item.mime_type, item.size, item.checksum_sha256,
-    item.path, item.parent_id, item.created_at, item.updated_at
+    item.path, item.parent_id, item.created_at, item.updated_at,
+    item.created_by, item.updated_by
 FROM core.files AS item
 JOIN tree ON tree.id = item.id
 ORDER BY item.id
@@ -546,7 +547,8 @@ file_tree AS
 SELECT
     item.id, item.folder_id, item.storage, item.name,
     item.mime_type, item.size, item.checksum_sha256,
-    item.path, item.parent_id, item.created_at, item.updated_at
+    item.path, item.parent_id, item.created_at, item.updated_at,
+    item.created_by, item.updated_by
 FROM core.files AS item
 JOIN file_tree ON file_tree.id = item.id
 ORDER BY item.id

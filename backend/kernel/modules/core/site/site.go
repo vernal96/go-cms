@@ -13,6 +13,7 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
+	"golang.org/x/text/language"
 )
 
 type ID int64
@@ -20,6 +21,7 @@ type ID int64
 var (
 	ErrNotFound = errors.New("site not found")
 	ErrConflict = errors.New("site conflict")
+	ErrInvalid  = errors.New("invalid site")
 
 	readPermission = permission.MustCode(
 		"core",
@@ -30,6 +32,16 @@ var (
 		"core",
 		"site",
 		permission.Update,
+	)
+	createPermission = permission.MustCode(
+		"core",
+		"site",
+		permission.Create,
+	)
+	deletePermission = permission.MustCode(
+		"core",
+		"site",
+		permission.Delete,
 	)
 )
 
@@ -55,17 +67,52 @@ type Repository interface {
 	) (Site, error)
 }
 
+type ManagementRepository interface {
+	Repository
+	FindByID(context.Context, ID) (Site, error)
+	FindByDomain(context.Context, string) (Site, error)
+	ListPage(context.Context, ListQuery) (Page, error)
+	Create(context.Context, *security.UserID, Site) (Site, error)
+	Delete(context.Context, ID) error
+}
+
+type Scope struct {
+	All     bool
+	SiteIDs []ID
+}
+
+type ListQuery struct {
+	Search  string
+	Page    int
+	PerPage int
+	Scope   Scope
+}
+
+type Page struct {
+	Items []Site
+	Total int
+}
+
 type Access interface {
 	security.Authorizer
 	IsGuestSubject(context.Context, security.Actor) (bool, error)
 }
 
 type UpdateInput struct {
-	ID       ID
-	Domain   string
-	Locale   string
-	Settings map[string]any
-	IsPublic bool
+	ID          ID
+	ProfileCode kernel.ProfileCode
+	Domain      string
+	Locale      string
+	Settings    map[string]any
+	IsPublic    bool
+}
+
+type CreateInput struct {
+	ProfileCode kernel.ProfileCode
+	Domain      string
+	Locale      string
+	Settings    map[string]any
+	IsPublic    bool
 }
 
 type Runtime struct {
@@ -92,8 +139,12 @@ func NewRuntime(
 
 	item.Domain = domain
 
+	item.Locale = strings.TrimSpace(item.Locale)
 	if item.Locale == "" {
 		return nil, errors.New("site locale is empty")
+	}
+	if _, err := language.Parse(item.Locale); err != nil {
+		return nil, fmt.Errorf("site locale %q is invalid: %w", item.Locale, err)
 	}
 
 	if profileRuntime == nil {
@@ -315,6 +366,71 @@ func (c *Catalog) Reload(ctx context.Context) error {
 	return nil
 }
 
+func (c *Catalog) Create(
+	ctx context.Context,
+	actor security.Actor,
+	input CreateInput,
+) (*Runtime, error) {
+	if ctx == nil {
+		return nil, errors.New("site create context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := c.access.Check(ctx, actor, createPermission); err != nil {
+		return nil, err
+	}
+	profileRuntime, exists := c.profiles.ProfileRuntime(input.ProfileCode)
+	if !exists {
+		return nil, fmt.Errorf("%w: profile %q is unknown", ErrInvalid, input.ProfileCode)
+	}
+
+	c.mutationMu.Lock()
+	defer c.mutationMu.Unlock()
+	currentSnapshot := c.snapshot.Load()
+	if currentSnapshot == nil {
+		return nil, errors.New("site runtime snapshot is nil")
+	}
+
+	nextRuntime, err := NewRuntime(Site{
+		ID:          1,
+		ProfileCode: input.ProfileCode,
+		Domain:      input.Domain,
+		Locale:      input.Locale,
+		Settings:    cloneSettings(input.Settings),
+		IsPublic:    input.IsPublic,
+	}, profileRuntime)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if _, exists := currentSnapshot.byDomain[nextRuntime.site.Domain]; exists {
+		return nil, ErrConflict
+	}
+	management, ok := c.repository.(ManagementRepository)
+	if !ok {
+		return nil, errors.New("site management repository is unavailable")
+	}
+	candidate := nextRuntime.Site()
+	candidate.ID = 0
+	stored, err := management.Create(
+		ctx,
+		actor.AuditUserID(),
+		candidate,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create site: %w", err)
+	}
+	nextRuntime, err = NewRuntime(stored, profileRuntime)
+	if err != nil {
+		return nil, fmt.Errorf("build created site runtime: %w", err)
+	}
+	nextSnapshot := cloneSnapshot(currentSnapshot, 1)
+	nextSnapshot.byDomain[nextRuntime.site.Domain] = nextRuntime
+	nextSnapshot.byID[nextRuntime.site.ID] = nextRuntime
+	c.snapshot.Store(nextSnapshot)
+	return nextRuntime, nil
+}
+
 func (c *Catalog) Update(
 	ctx context.Context,
 	actor security.Actor,
@@ -330,7 +446,7 @@ func (c *Catalog) Update(
 		return nil, err
 	}
 	if input.ID <= 0 {
-		return nil, errors.New("invalid site id")
+		return nil, fmt.Errorf("%w: invalid site id", ErrInvalid)
 	}
 
 	c.mutationMu.Lock()
@@ -346,19 +462,20 @@ func (c *Catalog) Update(
 		return nil, ErrNotFound
 	}
 
+	profileRuntime, exists := c.profiles.ProfileRuntime(input.ProfileCode)
+	if !exists {
+		return nil, fmt.Errorf("%w: profile %q is unknown", ErrInvalid, input.ProfileCode)
+	}
 	item := current.Site()
+	item.ProfileCode = input.ProfileCode
 	item.Domain = input.Domain
 	item.Locale = strings.TrimSpace(input.Locale)
 	item.Settings = cloneSettings(input.Settings)
 	item.IsPublic = input.IsPublic
 
-	nextRuntime, err := NewRuntime(item, current.Profile())
+	nextRuntime, err := NewRuntime(item, profileRuntime)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"build updated site runtime %d: %w",
-			input.ID,
-			err,
-		)
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if existing, exists := currentSnapshot.byDomain[nextRuntime.site.Domain]; exists && existing.site.ID != input.ID {
 		return nil, ErrConflict
@@ -377,22 +494,7 @@ func (c *Catalog) Update(
 	nextRuntime.site.CreatedBy = cloneUserID(stored.CreatedBy)
 	nextRuntime.site.UpdatedBy = cloneUserID(stored.UpdatedBy)
 
-	nextSnapshot := &runtimeSnapshot{
-		byDomain: make(
-			map[string]*Runtime,
-			len(currentSnapshot.byDomain),
-		),
-		byID: make(
-			map[ID]*Runtime,
-			len(currentSnapshot.byID),
-		),
-	}
-	for domain, runtime := range currentSnapshot.byDomain {
-		nextSnapshot.byDomain[domain] = runtime
-	}
-	for currentID, runtime := range currentSnapshot.byID {
-		nextSnapshot.byID[currentID] = runtime
-	}
+	nextSnapshot := cloneSnapshot(currentSnapshot, 0)
 
 	delete(nextSnapshot.byDomain, current.site.Domain)
 	nextSnapshot.byDomain[nextRuntime.site.Domain] = nextRuntime
@@ -400,6 +502,65 @@ func (c *Catalog) Update(
 	c.snapshot.Store(nextSnapshot)
 
 	return nextRuntime, nil
+}
+
+func (c *Catalog) Delete(
+	ctx context.Context,
+	actor security.Actor,
+	id ID,
+) error {
+	if ctx == nil {
+		return errors.New("site delete context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := c.access.Check(ctx, actor, deletePermission); err != nil {
+		return err
+	}
+	if id <= 0 {
+		return errors.New("invalid site id")
+	}
+	c.mutationMu.Lock()
+	defer c.mutationMu.Unlock()
+	currentSnapshot := c.snapshot.Load()
+	if currentSnapshot == nil {
+		return errors.New("site runtime snapshot is nil")
+	}
+	current, exists := currentSnapshot.byID[id]
+	if !exists {
+		return ErrNotFound
+	}
+	management, ok := c.repository.(ManagementRepository)
+	if !ok {
+		return errors.New("site management repository is unavailable")
+	}
+	if err := management.Delete(ctx, id); err != nil {
+		return fmt.Errorf("delete site: %w", err)
+	}
+	nextSnapshot := cloneSnapshot(currentSnapshot, -1)
+	delete(nextSnapshot.byDomain, current.site.Domain)
+	delete(nextSnapshot.byID, id)
+	c.snapshot.Store(nextSnapshot)
+	return nil
+}
+
+func cloneSnapshot(current *runtimeSnapshot, delta int) *runtimeSnapshot {
+	capacity := len(current.byID) + delta
+	if capacity < 0 {
+		capacity = 0
+	}
+	next := &runtimeSnapshot{
+		byDomain: make(map[string]*Runtime, capacity),
+		byID:     make(map[ID]*Runtime, capacity),
+	}
+	for domain, runtime := range current.byDomain {
+		next.byDomain[domain] = runtime
+	}
+	for id, runtime := range current.byID {
+		next.byID[id] = runtime
+	}
+	return next
 }
 
 func NormalizeDomain(value string) (string, error) {

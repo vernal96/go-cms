@@ -17,6 +17,8 @@ import (
 )
 
 var (
+	errPersistence = errors.New("resource persistence failed")
+
 	readPermission = permission.MustCode(
 		"core",
 		"resource",
@@ -138,7 +140,10 @@ func (s *Service) Create(
 		nil,
 	)
 	if err != nil {
-		return Resource{}, err
+		if errors.Is(err, errPersistence) {
+			return Resource{}, err
+		}
+		return Resource{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 
 	created, err := s.repository.Create(
@@ -765,7 +770,8 @@ func (s *Service) relatedResource(
 		item, err = s.repository.ByID(ctx, *id)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"get resource %s %d: %w",
+				"%w: get resource %s %d: %w",
+				errPersistence,
 				role,
 				*id,
 				err,

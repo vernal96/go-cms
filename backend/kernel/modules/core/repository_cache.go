@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -87,6 +88,56 @@ func (r *cachedSiteRepository) List(
 	return result, nil
 }
 
+func (r *cachedSiteRepository) FindByID(
+	ctx context.Context,
+	id site.ID,
+) (site.Site, error) {
+	management, ok := r.base.(site.ManagementRepository)
+	if !ok {
+		return site.Site{}, errors.New("site management repository is unavailable")
+	}
+	return management.FindByID(ctx, id)
+}
+
+func (r *cachedSiteRepository) FindByDomain(
+	ctx context.Context,
+	domain string,
+) (site.Site, error) {
+	management, ok := r.base.(site.ManagementRepository)
+	if !ok {
+		return site.Site{}, errors.New("site management repository is unavailable")
+	}
+	return management.FindByDomain(ctx, domain)
+}
+
+func (r *cachedSiteRepository) ListPage(
+	ctx context.Context,
+	query site.ListQuery,
+) (site.Page, error) {
+	management, ok := r.base.(site.ManagementRepository)
+	if !ok {
+		return site.Page{}, errors.New("site management repository is unavailable")
+	}
+	return management.ListPage(ctx, query)
+}
+
+func (r *cachedSiteRepository) Create(
+	ctx context.Context,
+	actorID *security.UserID,
+	item site.Site,
+) (site.Site, error) {
+	management, ok := r.base.(site.ManagementRepository)
+	if !ok {
+		return site.Site{}, errors.New("site management repository is unavailable")
+	}
+	result, err := management.Create(ctx, actorID, item)
+	if err != nil {
+		return site.Site{}, err
+	}
+	invalidateTags(ctx, r.store, sitesTag, siteTag(result.ID))
+	return result, nil
+}
+
 func (r *cachedSiteRepository) Update(
 	ctx context.Context,
 	actorID *security.UserID,
@@ -103,6 +154,21 @@ func (r *cachedSiteRepository) Update(
 		siteTag(result.ID),
 	)
 	return result, nil
+}
+
+func (r *cachedSiteRepository) Delete(
+	ctx context.Context,
+	id site.ID,
+) error {
+	management, ok := r.base.(site.ManagementRepository)
+	if !ok {
+		return errors.New("site management repository is unavailable")
+	}
+	if err := management.Delete(ctx, id); err != nil {
+		return err
+	}
+	invalidateTags(ctx, r.store, sitesTag, siteTag(id))
+	return nil
 }
 
 type cachedResourceRepository struct {
@@ -215,6 +281,30 @@ func (r *cachedResourceRepository) ListBySite(
 		[]cache.Tag{siteTag(siteID)},
 	)
 	return result, nil
+}
+
+func (r *cachedResourceRepository) ExistsInSite(
+	ctx context.Context,
+	siteID site.ID,
+	id resource.ID,
+) (bool, error) {
+	management, ok := r.base.(resource.ManagementRepository)
+	if !ok {
+		return false, errors.New("resource management repository is unavailable")
+	}
+	return management.ExistsInSite(ctx, siteID, id)
+}
+
+func (r *cachedResourceRepository) ListChildren(
+	ctx context.Context,
+	siteID site.ID,
+	parentID *resource.ID,
+) ([]resource.Child, error) {
+	management, ok := r.base.(resource.ManagementRepository)
+	if !ok {
+		return nil, errors.New("resource management repository is unavailable")
+	}
+	return management.ListChildren(ctx, siteID, parentID)
 }
 
 func (r *cachedResourceRepository) Update(
@@ -341,4 +431,6 @@ func resourceTags(item resource.Resource) []cache.Tag {
 
 var _ Database = (*cachedDatabase)(nil)
 var _ site.Repository = (*cachedSiteRepository)(nil)
+var _ site.ManagementRepository = (*cachedSiteRepository)(nil)
 var _ resource.Repository = (*cachedResourceRepository)(nil)
+var _ resource.ManagementRepository = (*cachedResourceRepository)(nil)

@@ -7,11 +7,14 @@ import AccessDeniedView from './components/AccessDeniedView.vue'
 import AdminDashboard from './components/AdminDashboard.vue'
 import LoginView from './components/LoginView.vue'
 import { useAdminAuth } from './auth/use-admin-auth'
+import { setAdminUnauthorizedHandler } from './api/admin-api'
 import type { LoginCredentials } from './types/auth'
 
 const {
   status,
   user,
+  accessToken,
+  permissions,
   errorMessage,
   isSubmitting,
   bootstrap,
@@ -25,9 +28,13 @@ function handleSignIn(credentials: LoginCredentials): void {
 }
 
 onMounted(() => {
+  setAdminUnauthorizedHandler(logout)
   void bootstrap()
 })
-onBeforeUnmount(dispose)
+onBeforeUnmount(() => {
+  setAdminUnauthorizedHandler(null)
+  dispose()
+})
 </script>
 
 <template>
@@ -61,8 +68,10 @@ onBeforeUnmount(dispose)
   />
 
   <admin-dashboard
-    v-else-if="status === 'authorized' && user"
+    v-else-if="status === 'authorized' && user && accessToken"
     :display-name="user.display_name"
+    :access-token="accessToken"
+    :permissions="permissions"
     @logout="logout"
   />
 </template>

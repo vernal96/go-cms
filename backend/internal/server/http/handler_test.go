@@ -140,6 +140,38 @@ func (repository) Update(
 	return site.Site{}, nil
 }
 
+func (r repository) FindByID(_ context.Context, id site.ID) (site.Site, error) {
+	items, _ := r.List(context.Background())
+	for _, item := range items {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return site.Site{}, site.ErrNotFound
+}
+
+func (r repository) FindByDomain(_ context.Context, domain string) (site.Site, error) {
+	items, _ := r.List(context.Background())
+	for _, item := range items {
+		if item.Domain == domain {
+			return item, nil
+		}
+	}
+	return site.Site{}, site.ErrNotFound
+}
+
+func (r repository) ListPage(ctx context.Context, _ site.ListQuery) (site.Page, error) {
+	items, err := r.List(ctx)
+	return site.Page{Items: items, Total: len(items)}, err
+}
+
+func (repository) Create(_ context.Context, _ *security.UserID, item site.Site) (site.Site, error) {
+	item.ID = 2
+	return item, nil
+}
+
+func (repository) Delete(context.Context, site.ID) error { return nil }
+
 type database struct {
 	files     corefile.Repository
 	sites     site.Repository
@@ -388,6 +420,23 @@ func (resourceRepository) ListBySite(
 	return nil, nil
 }
 
+func (r resourceRepository) ExistsInSite(
+	_ context.Context,
+	siteID site.ID,
+	id resource.ID,
+) (bool, error) {
+	item, exists := r.byID[id]
+	return exists && item.SiteID == siteID, nil
+}
+
+func (resourceRepository) ListChildren(
+	context.Context,
+	site.ID,
+	*resource.ID,
+) ([]resource.Child, error) {
+	return nil, nil
+}
+
 func (resourceRepository) Update(
 	context.Context,
 	*security.UserID,
@@ -508,8 +557,9 @@ func (fileRepository) DeleteFolder(
 
 func TestHandlerLooksUpCompiledRuntimeByRequestHost(t *testing.T) {
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
-		Logger:   loggerFactory{},
-		EventBus: eventBusFactory{},
+		Logger:           loggerFactory{},
+		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		EventBus:         eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: connectorFactory{},
 			Adapters:  []kernel.ModuleDatabaseFactory{databaseFactory{}},
@@ -584,8 +634,9 @@ func TestHandlerHidesRuntimeWithoutGuestPermissionOrPublicFlag(
 			runtimeApp, err := appkernel.New(
 				context.Background(),
 				appkernel.Definition{
-					Logger:   loggerFactory{},
-					EventBus: eventBusFactory{},
+					Logger:           loggerFactory{},
+					SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+					EventBus:         eventBusFactory{},
 					MainDatabase: appkernel.DatabaseDefinition{
 						Connector: connectorFactory{},
 						Adapters: []kernel.ModuleDatabaseFactory{
@@ -675,8 +726,9 @@ func TestHandlerDeliversPublicAndSignedPrivateLocalFiles(t *testing.T) {
 			runtimeApp, err := appkernel.New(
 				context.Background(),
 				appkernel.Definition{
-					Logger:   loggerFactory{},
-					EventBus: eventBusFactory{},
+					Logger:           loggerFactory{},
+					SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+					EventBus:         eventBusFactory{},
 					MainDatabase: appkernel.DatabaseDefinition{
 						Connector: connectorFactory{},
 						Adapters: []kernel.ModuleDatabaseFactory{
@@ -957,8 +1009,9 @@ func newTransportTestApp(
 	runtimeApp, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
-			Logger:   loggerFactory{},
-			EventBus: eventBusFactory{},
+			Logger:           loggerFactory{},
+			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+			EventBus:         eventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
 				Connector: connectorFactory{},
 				Adapters: []kernel.ModuleDatabaseFactory{
@@ -1366,8 +1419,9 @@ func TestResourceRootTrailingSlashAndQueryPolicy(t *testing.T) {
 
 func TestPlatformRuntimeMethodMismatchKeeps405AndAllow(t *testing.T) {
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
-		Logger:   loggerFactory{},
-		EventBus: eventBusFactory{},
+		Logger:           loggerFactory{},
+		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		EventBus:         eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: connectorFactory{},
 			Adapters:  []kernel.ModuleDatabaseFactory{databaseFactory{}},
@@ -1414,8 +1468,9 @@ func TestPublicAndProtectedModuleRoutesUseJWTActor(t *testing.T) {
 		order:        &order,
 	}
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
-		Logger:   loggerFactory{},
-		EventBus: eventBusFactory{},
+		Logger:           loggerFactory{},
+		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		EventBus:         eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: connectorFactory{},
 			Adapters: []kernel.ModuleDatabaseFactory{databaseFactory{
@@ -1490,8 +1545,9 @@ func TestPublicAndProtectedModuleRoutesUseJWTActor(t *testing.T) {
 
 func TestLoginRouteIsAvailableBeforePrivateSiteResolution(t *testing.T) {
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
-		Logger:   loggerFactory{},
-		EventBus: eventBusFactory{},
+		Logger:           loggerFactory{},
+		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		EventBus:         eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: connectorFactory{},
 			Adapters: []kernel.ModuleDatabaseFactory{databaseFactory{
@@ -1559,8 +1615,9 @@ func TestPlatformMiddlewareCannotBypassJWTAuthentication(
 	t *testing.T,
 ) {
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
-		Logger:   loggerFactory{},
-		EventBus: eventBusFactory{},
+		Logger:           loggerFactory{},
+		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		EventBus:         eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: connectorFactory{},
 			Adapters: []kernel.ModuleDatabaseFactory{databaseFactory{
@@ -1645,8 +1702,9 @@ func TestJWTAuthenticationActorPrecedesPrivateSiteResolution(
 			runtimeApp, err := appkernel.New(
 				context.Background(),
 				appkernel.Definition{
-					Logger:   loggerFactory{},
-					EventBus: eventBusFactory{},
+					Logger:           loggerFactory{},
+					SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+					EventBus:         eventBusFactory{},
 					MainDatabase: appkernel.DatabaseDefinition{
 						Connector: connectorFactory{},
 						Adapters: []kernel.ModuleDatabaseFactory{
@@ -1738,8 +1796,9 @@ func TestStandardLinkResourceHandlersRedirect(t *testing.T) {
 		},
 	}
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
-		Logger:   loggerFactory{},
-		EventBus: eventBusFactory{},
+		Logger:           loggerFactory{},
+		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		EventBus:         eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: connectorFactory{},
 			Adapters: []kernel.ModuleDatabaseFactory{
@@ -1795,8 +1854,9 @@ func TestHTTPAccessLogsSafeStructuredMetadataAndLevels(t *testing.T) {
 	runtimeApp, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
-			Logger:   loggerFactory{writer: &logs},
-			EventBus: eventBusFactory{},
+			Logger:           loggerFactory{writer: &logs},
+			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+			EventBus:         eventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
 				Connector: connectorFactory{},
 				Adapters: []kernel.ModuleDatabaseFactory{

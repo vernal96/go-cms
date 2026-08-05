@@ -29,6 +29,7 @@ const adminSession: AdminSessionResponse = {
     email: 'admin@example.test',
     display_name: 'Администратор',
   },
+  permissions: ['admin.panel.read'],
 }
 
 function dependencies(

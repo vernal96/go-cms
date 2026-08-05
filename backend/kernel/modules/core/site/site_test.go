@@ -107,6 +107,48 @@ func (r *memoryRepository) Update(
 	return Site{}, ErrNotFound
 }
 
+func (r *memoryRepository) FindByID(_ context.Context, id ID) (Site, error) {
+	for _, item := range r.items {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return Site{}, ErrNotFound
+}
+
+func (r *memoryRepository) FindByDomain(_ context.Context, domain string) (Site, error) {
+	for _, item := range r.items {
+		if item.Domain == domain {
+			return item, nil
+		}
+	}
+	return Site{}, ErrNotFound
+}
+
+func (r *memoryRepository) ListPage(_ context.Context, query ListQuery) (Page, error) {
+	return Page{Items: append([]Site(nil), r.items...), Total: len(r.items)}, nil
+}
+
+func (r *memoryRepository) Create(_ context.Context, actorID *security.UserID, item Site) (Site, error) {
+	item.ID = ID(len(r.items) + 1)
+	item.CreatedAt = time.Now().UTC()
+	item.UpdatedAt = item.CreatedAt
+	item.CreatedBy = cloneUserID(actorID)
+	item.UpdatedBy = cloneUserID(actorID)
+	r.items = append(r.items, item)
+	return item, nil
+}
+
+func (r *memoryRepository) Delete(_ context.Context, id ID) error {
+	for index, item := range r.items {
+		if item.ID == id {
+			r.items = append(r.items[:index], r.items[index+1:]...)
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
 func newCatalogForTest(
 	t *testing.T,
 	item Site,
@@ -202,11 +244,12 @@ func TestUpdateAtomicallyReplacesDomainSnapshotAndAudit(t *testing.T) {
 		context.Background(),
 		security.User(42),
 		UpdateInput{
-			ID:       1,
-			Domain:   "NEW.EXAMPLE.COM.",
-			Locale:   "ru-RU",
-			Settings: map[string]any{},
-			IsPublic: true,
+			ID:          1,
+			ProfileCode: "test",
+			Domain:      "NEW.EXAMPLE.COM.",
+			Locale:      "ru-RU",
+			Settings:    map[string]any{},
+			IsPublic:    true,
 		},
 	)
 	if err != nil {
@@ -229,5 +272,35 @@ func TestUpdateAtomicallyReplacesDomainSnapshotAndAudit(t *testing.T) {
 	}
 }
 
+func TestCreateAndDeleteAtomicallyUpdateSnapshot(t *testing.T) {
+	t.Parallel()
+	catalog := newCatalogForTest(t, Site{
+		ID: 1, ProfileCode: "test", Domain: "existing.test", Locale: "en-US",
+	}, testAccess{allow: true})
+	created, err := catalog.Create(context.Background(), security.User(42), CreateInput{
+		ProfileCode: "test",
+		Domain:      "NEW.TEST.",
+		Locale:      "ru-RU",
+		Settings:    map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Site().ID != 2 || created.Site().Domain != "new.test" ||
+		created.Site().CreatedBy == nil || *created.Site().CreatedBy != 42 {
+		t.Fatalf("created site = %#v", created.Site())
+	}
+	if current, exists := catalog.RuntimeByID(2); !exists || current != created {
+		t.Fatalf("created runtime = %#v, %t", current, exists)
+	}
+	if err := catalog.Delete(context.Background(), security.User(42), 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := catalog.RuntimeByID(2); exists {
+		t.Fatal("deleted site remains in snapshot")
+	}
+}
+
 var _ Repository = (*memoryRepository)(nil)
+var _ ManagementRepository = (*memoryRepository)(nil)
 var _ Access = testAccess{}

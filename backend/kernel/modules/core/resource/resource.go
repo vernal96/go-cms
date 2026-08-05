@@ -21,6 +21,7 @@ const ImageMediaUsage media.UsageKind = "resource.image"
 var (
 	ErrNotFound         = errors.New("resource not found")
 	ErrConflict         = errors.New("resource conflict")
+	ErrInvalid          = errors.New("invalid resource")
 	ErrInvalidReference = errors.New("invalid resource reference")
 	ErrInvalidTree      = errors.New("invalid resource tree")
 	ErrReferenced       = errors.New("resource is referenced")
@@ -120,6 +121,17 @@ type Node struct {
 	Children []Node
 }
 
+type Child struct {
+	ID          ID
+	SiteID      site.ID
+	ParentID    *ID
+	Type        resourcetype.Code
+	Template    *template.Code
+	Title       string
+	MenuTitle   string
+	HasChildren bool
+}
+
 type ValidateImageMedia func(context.Context, media.ID) error
 
 type Repository interface {
@@ -140,6 +152,12 @@ type Repository interface {
 		ValidateImageMedia,
 	) (Resource, error)
 	Delete(context.Context, ID) error
+}
+
+type ManagementRepository interface {
+	Repository
+	ExistsInSite(context.Context, site.ID, ID) (bool, error)
+	ListChildren(context.Context, site.ID, *ID) ([]Child, error)
 }
 
 var slugPattern = regexp.MustCompile(

@@ -28,8 +28,9 @@ func (s currentUserService) Current(
 }
 
 type accessAuthorizer struct {
-	err  error
-	code permission.Code
+	err   error
+	code  permission.Code
+	codes []permission.Code
 }
 
 func (a *accessAuthorizer) Check(
@@ -38,6 +39,7 @@ func (a *accessAuthorizer) Check(
 	code permission.Code,
 ) error {
 	a.code = code
+	a.codes = append(a.codes, code)
 	return a.err
 }
 
@@ -118,8 +120,8 @@ func TestAdminSessionRequiresAuthenticationAndPermission(t *testing.T) {
 				)
 			}
 			if test.actor.IsUser() &&
-				authorizer.code != AccessPermission {
-				t.Fatalf("permission = %q", authorizer.code)
+				(len(authorizer.codes) == 0 || authorizer.codes[0] != AccessPermission) {
+				t.Fatalf("permissions = %q", authorizer.codes)
 			}
 			if response.Code == http.StatusUnauthorized &&
 				response.Header().Get("WWW-Authenticate") != "Bearer" {

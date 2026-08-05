@@ -16,6 +16,7 @@ import (
 	appkernel "github.com/vernal96/go-cms/kernel/app"
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/filesystem"
+	"github.com/vernal96/go-cms/kernel/modules/admin"
 	corepostgres "github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres"
 )
 
@@ -65,6 +66,7 @@ func (c Config) Application() appkernel.Definition {
 		Caches: []cache.Factory{
 			corecache.NewFactory(c.CoreCache),
 		},
-		Profiles: []kernel.Profile{dev.Profile},
+		Profiles:         []kernel.Profile{dev.Profile},
+		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 	}
 }

@@ -17,6 +17,12 @@ export class AdminAPIError extends Error {
   }
 }
 
+let unauthorizedHandler: (() => void) | null = null
+
+export function setAdminUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler
+}
+
 export async function login(
   credentials: LoginCredentials,
 ): Promise<LoginResponse> {
@@ -37,6 +43,43 @@ export async function loadAdminSession(
       Authorization: `Bearer ${accessToken}`,
     },
   })
+}
+
+export async function adminRequest<T>(
+  path: string,
+  accessToken: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const headers = new Headers(init.headers)
+  headers.set('Authorization', `Bearer ${accessToken}`)
+  if (init.body !== undefined) {
+    headers.set('Content-Type', 'application/json')
+  }
+  try {
+    return await requestJSON<T>(path, { ...init, headers })
+  } catch (error) {
+    handleAdminError(error)
+    throw error
+  }
+}
+
+export async function adminRequestVoid(
+  path: string,
+  accessToken: string,
+  init: RequestInit,
+): Promise<void> {
+  const headers = new Headers(init.headers)
+  headers.set('Authorization', `Bearer ${accessToken}`)
+  const response = await fetch(path, { ...init, headers })
+  if (!response.ok) {
+    const error = await responseError(response)
+    handleAdminError(error)
+    throw error
+  }
+}
+
+function handleAdminError(error: unknown): void {
+  if (error instanceof AdminAPIError && error.status === 401) unauthorizedHandler?.()
 }
 
 async function requestJSON<T>(

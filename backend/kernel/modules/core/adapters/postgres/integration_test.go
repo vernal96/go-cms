@@ -553,6 +553,41 @@ SELECT
 		t.Fatalf("seeded domains = %#v", found)
 	}
 
+	siteManagement, ok := database.Sites().(site.ManagementRepository)
+	if !ok {
+		t.Fatal("site management repository is unavailable")
+	}
+	page, err := siteManagement.ListPage(ctx, site.ListQuery{
+		Search:  "LOCAL",
+		Page:    1,
+		PerPage: 10,
+		Scope:   site.Scope{SiteIDs: []site.ID{siteIDs["localhost"]}},
+	})
+	if err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].Domain != "localhost" {
+		t.Fatalf("site page = %#v, %v", page, err)
+	}
+	createdSite, err := siteManagement.Create(ctx, nil, site.Site{
+		ProfileCode: "dev",
+		Domain:      "admin-management.test",
+		Locale:      "ru-RU",
+		Settings:    map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("create managed site: %v", err)
+	}
+	createdSite.Domain = "renamed-management.test"
+	createdSite.IsPublic = true
+	createdSite, err = siteManagement.Update(ctx, nil, createdSite)
+	if err != nil || createdSite.Domain != "renamed-management.test" || !createdSite.IsPublic {
+		t.Fatalf("updated managed site = %#v, %v", createdSite, err)
+	}
+	if foundSite, err := siteManagement.FindByDomain(ctx, createdSite.Domain); err != nil || foundSite.ID != createdSite.ID {
+		t.Fatalf("find managed site = %#v, %v", foundSite, err)
+	}
+	if err := siteManagement.Delete(ctx, createdSite.ID); err != nil {
+		t.Fatalf("delete managed site: %v", err)
+	}
+
 	if _, err := connector.Pool().Exec(ctx, `
 UPDATE core.sites
 SET updated_at = '2000-01-01T00:00:00Z'
@@ -564,10 +599,11 @@ WHERE id = $1;
 		ctx,
 		nil,
 		site.Site{
-			ID:       siteIDs["localhost"],
-			Domain:   "localhost",
-			Locale:   "ru-RU",
-			IsPublic: true,
+			ID:          siteIDs["localhost"],
+			ProfileCode: "dev",
+			Domain:      "localhost",
+			Locale:      "ru-RU",
+			IsPublic:    true,
 			Settings: map[string]any{
 				"count": int64(3),
 				"flag":  false,
@@ -764,7 +800,23 @@ WHERE id = $1;
 	if !listedRootFound {
 		t.Fatal("root resource missing from list")
 	}
-
+	resourceManagement, ok := resourceRepository.(resource.ManagementRepository)
+	if !ok {
+		t.Fatal("resource management repository is unavailable")
+	}
+	roots, err := resourceManagement.ListChildren(ctx, root.SiteID, nil)
+	if err != nil {
+		t.Fatalf("list root resources: %v", err)
+	}
+	rootFound := false
+	for _, current := range roots {
+		if current.ID == root.ID {
+			rootFound = true
+		}
+	}
+	if !rootFound {
+		t.Fatal("root missing from lazy resource list")
+	}
 	widgetChildPath := "/widget-child"
 	widgetChild, err := resourceRepository.Create(
 		ctx,
@@ -780,6 +832,7 @@ WHERE id = $1;
 			IsSearchable: true,
 			InMenu:       true,
 			InSitemap:    true,
+			Settings:     map[string]any{},
 			Widgets: []resource.WidgetBinding{{
 				Code:     "content_summary",
 				Position: 0,
@@ -790,6 +843,38 @@ WHERE id = $1;
 	)
 	if err != nil {
 		t.Fatalf("create widget child: %v", err)
+	}
+	children, err := resourceManagement.ListChildren(ctx, root.SiteID, &root.ID)
+	if err != nil || len(children) == 0 {
+		t.Fatalf("lazy resource children = %#v, %v", children, err)
+	}
+	if exists, err := resourceManagement.ExistsInSite(ctx, root.SiteID, root.ID); err != nil || !exists {
+		t.Fatalf("resource site membership = %v, %v", exists, err)
+	}
+	wrongSiteID := root.SiteID + 1000
+	if _, err := resourceManagement.ListChildren(ctx, wrongSiteID, &root.ID); !errors.Is(err, resource.ErrNotFound) {
+		t.Fatalf("wrong-site lazy parent error = %v", err)
+	}
+	childFound := false
+	for _, child := range children {
+		if child.ID == widgetChild.ID {
+			childFound = true
+		}
+		if child.ParentID == nil || *child.ParentID != root.ID || child.SiteID != root.SiteID {
+			t.Fatalf("lazy resource child = %#v", child)
+		}
+	}
+	if !childFound {
+		t.Fatal("created child missing from lazy resource list")
+	}
+	roots, err = resourceManagement.ListChildren(ctx, root.SiteID, nil)
+	if err != nil {
+		t.Fatalf("reload root resources: %v", err)
+	}
+	for _, current := range roots {
+		if current.ID == root.ID && !current.HasChildren {
+			t.Fatal("root has_children was not calculated with EXISTS")
+		}
 	}
 	if err := resourceRepository.Delete(ctx, widgetChild.ID); err != nil {
 		t.Fatalf("delete widget child: %v", err)

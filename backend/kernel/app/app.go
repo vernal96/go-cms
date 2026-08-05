@@ -60,6 +60,7 @@ type Definition struct {
 	Filesystems         []filesystem.Factory
 	Caches              []cache.Factory
 	Profiles            []kernel.Profile
+	SiteAccessPolicy    admin.SiteAccessPolicy
 }
 
 type bindingRuntime struct {
@@ -93,6 +94,7 @@ type App struct {
 	groups          coregroup.Service
 	authorization   coreaccess.Service
 	permissions     *permission.Catalog
+	adminManagement *admin.Management
 
 	bootOnce sync.Once
 	bootErr  error
@@ -482,6 +484,28 @@ func (a *App) boot(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	siteManagementRepository, ok := runtimeCoreDatabase.Sites().(site.ManagementRepository)
+	if !ok {
+		return errors.New("site management repository is unavailable")
+	}
+	resourceManagementRepository, ok := runtimeCoreDatabase.Resources().(resource.ManagementRepository)
+	if !ok {
+		return errors.New("resource management repository is unavailable")
+	}
+
+	adminManagement, err := admin.NewManagement(admin.ManagementDependencies{
+		Profiles:           a.definition.Profiles,
+		ProfileSource:      profileResolver(profileRuntimes),
+		SiteRepository:     siteManagementRepository,
+		Sites:              catalog,
+		Resources:          resourceService,
+		ResourceRepository: resourceManagementRepository,
+		Authorizer:         accessService,
+		SiteAccessPolicy:   a.definition.SiteAccessPolicy,
+	})
+	if err != nil {
+		return err
+	}
 
 	a.profileRuntimes = profileRuntimes
 	a.sites = catalog
@@ -491,6 +515,7 @@ func (a *App) boot(ctx context.Context) error {
 	a.users = userService
 	a.groups = groupService
 	a.authorization = accessService
+	a.adminManagement = adminManagement
 	a.booted.Store(true)
 	return nil
 }
@@ -536,6 +561,19 @@ func (a *App) ProfileRuntime(
 
 	runtime, exists := a.profileRuntimes[code]
 	return runtime, exists
+}
+
+func (a *App) AdminManagement() (*admin.Management, error) {
+	if a == nil {
+		return nil, errors.New("app is nil")
+	}
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+	if !a.booted.Load() || a.adminManagement == nil {
+		return nil, ErrNotBooted
+	}
+	return a.adminManagement, nil
 }
 
 func (a *App) RuntimeByDomain(
@@ -2061,6 +2099,9 @@ func validateDefinition(definition Definition) error {
 	}
 	if definition.EventBus == nil {
 		return errors.New("event bus factory is nil")
+	}
+	if definition.SiteAccessPolicy == nil {
+		return errors.New("site access policy is nil")
 	}
 
 	filesystemCodes := make(

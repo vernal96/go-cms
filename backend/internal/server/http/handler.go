@@ -140,11 +140,11 @@ func NewHandler(
 		return nil, err
 	}
 	root.Method(http.MethodPost, "/api/auth/login", login)
-	adminSession, err := newAdminSessionHandler(application)
+	adminHandler, err := newAdminHandler(application)
 	if err != nil {
 		return nil, err
 	}
-	root.Method(http.MethodGet, "/api/admin/session", adminSession)
+	root.Mount("/api/admin", adminHandler)
 
 	platform := chi.NewRouter()
 	platform.HandleFunc("/files/*", handler.serveFile)
@@ -157,9 +157,13 @@ func NewHandler(
 	return handler, nil
 }
 
-func newAdminSessionHandler(
+func newAdminHandler(
 	application *app.App,
 ) (http.Handler, error) {
+	management, err := application.AdminManagement()
+	if err != nil {
+		return nil, err
+	}
 	for _, profile := range application.Definition().Profiles {
 		runtime, exists := application.ProfileRuntime(profile.Code)
 		if !exists {
@@ -175,7 +179,7 @@ func newAdminSessionHandler(
 		if !valid {
 			return nil, errors.New("admin module runtime has invalid type")
 		}
-		return adminRuntime.SessionHandler()
+		return adminRuntime.AdminHandler(management)
 	}
 	return nil, errors.New("admin profile is unavailable")
 }

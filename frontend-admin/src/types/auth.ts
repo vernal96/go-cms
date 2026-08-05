@@ -23,6 +23,7 @@ export interface AdminUser {
 
 export interface AdminSessionResponse {
   user: AdminUser
+  permissions: string[]
 }
 
 export interface APIErrorEnvelope {

@@ -412,6 +412,45 @@ func (r *fakeSiteRepository) Update(
 	return site.Site{}, site.ErrNotFound
 }
 
+func (r *fakeSiteRepository) FindByID(_ context.Context, id site.ID) (site.Site, error) {
+	for _, item := range r.sites {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return site.Site{}, site.ErrNotFound
+}
+
+func (r *fakeSiteRepository) FindByDomain(_ context.Context, domain string) (site.Site, error) {
+	for _, item := range r.sites {
+		if item.Domain == domain {
+			return item, nil
+		}
+	}
+	return site.Site{}, site.ErrNotFound
+}
+
+func (r *fakeSiteRepository) ListPage(_ context.Context, query site.ListQuery) (site.Page, error) {
+	items := append([]site.Site(nil), r.sites...)
+	return site.Page{Items: items, Total: len(items)}, nil
+}
+
+func (r *fakeSiteRepository) Create(_ context.Context, _ *security.UserID, item site.Site) (site.Site, error) {
+	item.ID = site.ID(len(r.sites) + 1)
+	r.sites = append(r.sites, item)
+	return item, nil
+}
+
+func (r *fakeSiteRepository) Delete(_ context.Context, id site.ID) error {
+	for index, item := range r.sites {
+		if item.ID == id {
+			r.sites = append(r.sites[:index], r.sites[index+1:]...)
+			return nil
+		}
+	}
+	return site.ErrNotFound
+}
+
 func (r *fakeSiteRepository) set(items []site.Site, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -537,6 +576,22 @@ func (fakeResourceRepository) ListBySite(
 	context.Context,
 	site.ID,
 ) ([]resource.Resource, error) {
+	return nil, nil
+}
+
+func (fakeResourceRepository) ExistsInSite(
+	context.Context,
+	site.ID,
+	resource.ID,
+) (bool, error) {
+	return false, nil
+}
+
+func (fakeResourceRepository) ListChildren(
+	context.Context,
+	site.ID,
+	*resource.ID,
+) ([]resource.Child, error) {
 	return nil, nil
 }
 
@@ -724,6 +779,52 @@ func (r *appResourceRepository) ListBySite(
 	return result, nil
 }
 
+func (r *appResourceRepository) ExistsInSite(
+	_ context.Context,
+	siteID site.ID,
+	id resource.ID,
+) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, exists := r.items[id]
+	return exists && item.SiteID == siteID, nil
+}
+
+func (r *appResourceRepository) ListChildren(
+	ctx context.Context,
+	siteID site.ID,
+	parentID *resource.ID,
+) ([]resource.Child, error) {
+	items, err := r.ListBySite(ctx, siteID)
+	if err != nil {
+		return nil, err
+	}
+	if parentID != nil {
+		exists := false
+		for _, item := range items {
+			if item.ID == *parentID {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			return nil, resource.ErrNotFound
+		}
+	}
+	result := make([]resource.Child, 0)
+	for _, item := range items {
+		if (item.ParentID == nil) != (parentID == nil) ||
+			(item.ParentID != nil && *item.ParentID != *parentID) {
+			continue
+		}
+		result = append(result, resource.Child{
+			ID: item.ID, SiteID: item.SiteID, ParentID: item.ParentID,
+			Type: item.Type, Template: item.Template, Title: item.Title, MenuTitle: item.MenuTitle,
+		})
+	}
+	return result, nil
+}
+
 func (r *appResourceRepository) Update(
 	_ context.Context,
 	_ *security.UserID,
@@ -897,8 +998,9 @@ func TestAppRequiresHealthyLoggerBeforeInfrastructure(t *testing.T) {
 	_, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
-			Logger:   fakeLoggerFactory{connector: loggerConnector},
-			EventBus: fakeEventBusFactory{},
+			Logger:           fakeLoggerFactory{connector: loggerConnector},
+			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+			EventBus:         fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
 				Connector: &fakeConnectorFactory{
 					connector: databaseConnector,
@@ -948,7 +1050,8 @@ func TestAppRequiresHealthyEventBusBeforeOtherInfrastructure(t *testing.T) {
 	_, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
-			Logger: fakeLoggerFactory{},
+			Logger:           fakeLoggerFactory{},
+			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus: fakeEventBusFactory{
 				connector: eventBusConnector,
 			},
@@ -976,7 +1079,8 @@ func TestAppRequiresHealthyEventBusBeforeOtherInfrastructure(t *testing.T) {
 	_, err = appkernel.New(
 		context.Background(),
 		appkernel.Definition{
-			Logger: fakeLoggerFactory{},
+			Logger:           fakeLoggerFactory{},
+			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus: fakeEventBusFactory{
 				connector: &fakeEventBusConnector{
 					onClose: func() {
@@ -1027,6 +1131,7 @@ func TestAppOpensLoggerThenEventBusAndClosesLoggerLast(t *testing.T) {
 				connector: loggerConnector,
 				onOpen:    record("logger.open"),
 			},
+			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus: fakeEventBusFactory{
 				connector: eventBusConnector,
 				onOpen:    record("eventbus.open"),
@@ -1088,7 +1193,8 @@ func TestAppCloseStopsActiveEventBusConsumerBeforeDatabase(t *testing.T) {
 	application, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
-			Logger: fakeLoggerFactory{},
+			Logger:           fakeLoggerFactory{},
+			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus: fakeEventBusFactory{
 				connector: eventBusConnector,
 			},
@@ -1171,6 +1277,7 @@ func TestAppCloseJoinsEventBusDatabaseAndLoggerErrors(t *testing.T) {
 					closeErr: loggerCloseErr,
 				},
 			},
+			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus: fakeEventBusFactory{
 				connector: &fakeEventBusConnector{
 					closeErr: eventBusCloseErr,
@@ -1224,8 +1331,9 @@ func TestAppLogsBootAndCloseFailures(t *testing.T) {
 	application, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
-			Logger:   fakeLoggerFactory{connector: loggerConnector},
-			EventBus: fakeEventBusFactory{},
+			Logger:           fakeLoggerFactory{connector: loggerConnector},
+			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+			EventBus:         fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
 				Connector: &fakeConnectorFactory{
 					connector: databaseConnector,
@@ -1301,8 +1409,9 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	module := &featureModule{builds: &moduleBuilds, selected: &selected}
 
 	application, err := appkernel.New(ctx, appkernel.Definition{
-		Logger:   fakeLoggerFactory{},
-		EventBus: fakeEventBusFactory{},
+		Logger:           fakeLoggerFactory{},
+		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		EventBus:         fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: &fakeConnectorFactory{connector: mainConnector},
 			Adapters: []kernel.ModuleDatabaseFactory{
@@ -1510,11 +1619,12 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 		ctx,
 		security.System(),
 		site.UpdateInput{
-			ID:       1,
-			Domain:   first.Site().Domain,
-			Locale:   first.Site().Locale,
-			Settings: map[string]any{"unknown": "value"},
-			IsPublic: first.Site().IsPublic,
+			ID:          1,
+			ProfileCode: "dev",
+			Domain:      first.Site().Domain,
+			Locale:      first.Site().Locale,
+			Settings:    map[string]any{"unknown": "value"},
+			IsPublic:    first.Site().IsPublic,
 		},
 	)
 	var validationErrors field.ValidationErrors
@@ -1537,11 +1647,12 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 		ctx,
 		security.System(),
 		site.UpdateInput{
-			ID:       1,
-			Domain:   "renamed.example.com",
-			Locale:   first.Site().Locale,
-			Settings: map[string]any{"theme": "dark"},
-			IsPublic: true,
+			ID:          1,
+			ProfileCode: "dev",
+			Domain:      "renamed.example.com",
+			Locale:      first.Site().Locale,
+			Settings:    map[string]any{"theme": "dark"},
+			IsPublic:    true,
 		},
 	)
 	if err != nil {
@@ -1576,11 +1687,12 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 		ctx,
 		security.System(),
 		site.UpdateInput{
-			ID:       1,
-			Domain:   updated.Site().Domain,
-			Locale:   updated.Site().Locale,
-			Settings: map[string]any{"theme": "broken"},
-			IsPublic: updated.Site().IsPublic,
+			ID:          1,
+			ProfileCode: "dev",
+			Domain:      updated.Site().Domain,
+			Locale:      updated.Site().Locale,
+			Settings:    map[string]any{"theme": "broken"},
+			IsPublic:    updated.Site().IsPublic,
 		},
 	)
 	if err == nil || !strings.Contains(err.Error(), "update unavailable") {
@@ -1719,8 +1831,9 @@ func TestAppResourceFacades(t *testing.T) {
 	templateCode := template.Code("article")
 
 	application, err := appkernel.New(ctx, appkernel.Definition{
-		Logger:   fakeLoggerFactory{},
-		EventBus: fakeEventBusFactory{},
+		Logger:           fakeLoggerFactory{},
+		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		EventBus:         fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: &fakeConnectorFactory{connector: connector},
 			Adapters: []kernel.ModuleDatabaseFactory{
@@ -1850,8 +1963,9 @@ func TestAppBootRequiresCoreAndAdminModules(t *testing.T) {
 			application, err := appkernel.New(
 				context.Background(),
 				appkernel.Definition{
-					Logger:   fakeLoggerFactory{},
-					EventBus: fakeEventBusFactory{},
+					Logger:           fakeLoggerFactory{},
+					SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+					EventBus:         fakeEventBusFactory{},
 					MainDatabase: appkernel.DatabaseDefinition{
 						Connector: &fakeConnectorFactory{
 							connector: newFakeConnector("main"),
@@ -1913,8 +2027,9 @@ func TestAppMediaFacades(t *testing.T) {
 	}
 
 	application, err := appkernel.New(ctx, appkernel.Definition{
-		Logger:   fakeLoggerFactory{},
-		EventBus: fakeEventBusFactory{},
+		Logger:           fakeLoggerFactory{},
+		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		EventBus:         fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: &fakeConnectorFactory{connector: connector},
 			Adapters: []kernel.ModuleDatabaseFactory{
@@ -2018,8 +2133,9 @@ func TestNewClosesPreviouslyOpenedConnectorOnFactoryError(t *testing.T) {
 	brokenConnector := newFakeConnector("broken")
 
 	_, err := appkernel.New(context.Background(), appkernel.Definition{
-		Logger:   fakeLoggerFactory{},
-		EventBus: fakeEventBusFactory{},
+		Logger:           fakeLoggerFactory{},
+		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		EventBus:         fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: &fakeConnectorFactory{connector: mainConnector},
 			Adapters: []kernel.ModuleDatabaseFactory{
@@ -2060,8 +2176,9 @@ func TestAppNewRequiresCachePingAndClosesFailedStore(t *testing.T) {
 	_, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
-			Logger:   fakeLoggerFactory{},
-			EventBus: fakeEventBusFactory{},
+			Logger:           fakeLoggerFactory{},
+			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+			EventBus:         fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
 				Connector: &fakeConnectorFactory{
 					connector: newFakeConnector("main"),
@@ -2099,8 +2216,9 @@ func TestAppBootRejectsDifferentCoreRepositoryCachesAcrossProfiles(
 	application, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
-			Logger:   fakeLoggerFactory{},
-			EventBus: fakeEventBusFactory{},
+			Logger:           fakeLoggerFactory{},
+			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+			EventBus:         fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
 				Connector: &fakeConnectorFactory{
 					connector: newFakeConnector("main"),
@@ -2206,8 +2324,9 @@ func TestAppCollectsSeedSourcesAcrossConnectionsAndClonesTags(t *testing.T) {
 	application, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
-			Logger:   fakeLoggerFactory{},
-			EventBus: fakeEventBusFactory{},
+			Logger:           fakeLoggerFactory{},
+			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+			EventBus:         fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
 				Connector: &fakeConnectorFactory{connector: mainConnector},
 				Adapters: []kernel.ModuleDatabaseFactory{
@@ -2292,8 +2411,9 @@ func TestAppRejectsSeedHistoryCollision(t *testing.T) {
 	_, err := appkernel.New(
 		context.Background(),
 		appkernel.Definition{
-			Logger:   fakeLoggerFactory{},
-			EventBus: fakeEventBusFactory{},
+			Logger:           fakeLoggerFactory{},
+			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+			EventBus:         fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
 				Connector: &fakeConnectorFactory{connector: connector},
 				Adapters: []kernel.ModuleDatabaseFactory{
@@ -2324,8 +2444,9 @@ func TestBootFailureIsRememberedAndNotRetried(t *testing.T) {
 	repository := &fakeSiteRepository{err: errors.New("list failed")}
 
 	application, err := appkernel.New(context.Background(), appkernel.Definition{
-		Logger:   fakeLoggerFactory{},
-		EventBus: fakeEventBusFactory{},
+		Logger:           fakeLoggerFactory{},
+		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		EventBus:         fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: &fakeConnectorFactory{connector: connector},
 			Adapters: []kernel.ModuleDatabaseFactory{

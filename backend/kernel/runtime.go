@@ -27,6 +27,7 @@ type ProfileCode string
 
 type Profile struct {
 	Code      ProfileCode
+	Name      string
 	Modules   []ProfileModule
 	Params    []field.Definition
 	Templates []template.Definition

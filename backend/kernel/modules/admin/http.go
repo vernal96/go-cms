@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
@@ -18,7 +20,8 @@ const (
 )
 
 type sessionResponse struct {
-	User sessionUser `json:"user"`
+	User        sessionUser       `json:"user"`
+	Permissions []permission.Code `json:"permissions"`
 }
 
 type sessionUser struct {
@@ -71,6 +74,19 @@ func (r *Runtime) SessionHandler() (http.Handler, error) {
 	return httptransport.RequireAuthenticated(
 		r.requireAccess(http.HandlerFunc(r.serveSession)),
 	), nil
+}
+
+func (r *Runtime) AdminHandler(management *Management) (http.Handler, error) {
+	if err := r.validateHTTP(); err != nil {
+		return nil, err
+	}
+	if management == nil {
+		return nil, errors.New("admin management is nil")
+	}
+	router := chi.NewRouter()
+	router.Get("/session", r.serveSession)
+	registerManagementRoutes(router, management)
+	return httptransport.RequireAuthenticated(r.requireAccess(router)), nil
 }
 
 func (r *Runtime) validateHTTP() error {
@@ -160,6 +176,28 @@ func (r *Runtime) serveSession(
 		)
 		return
 	}
+	permissions := make([]permission.Code, 0, len(AdminPermissionCodes))
+	for _, code := range AdminPermissionCodes {
+		err := r.authorization.Check(request.Context(), actor, code)
+		if err == nil {
+			permissions = append(permissions, code)
+			continue
+		}
+		if errors.Is(err, security.ErrForbidden) {
+			continue
+		}
+		if errors.Is(err, security.ErrUnauthenticated) {
+			writeUnauthorized(response)
+			return
+		}
+		httptransport.WriteJSONError(
+			response,
+			http.StatusInternalServerError,
+			"internal_error",
+			"permission lookup failed",
+		)
+		return
+	}
 
 	response.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(response).Encode(sessionResponse{
@@ -169,6 +207,7 @@ func (r *Runtime) serveSession(
 			Email:       current.Email,
 			DisplayName: displayName(current),
 		},
+		Permissions: permissions,
 	})
 }
 

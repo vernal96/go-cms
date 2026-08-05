@@ -8,12 +8,21 @@ import (
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	"github.com/vernal96/go-cms/kernel/modules/core/template"
 )
 
 const ProfileCode kernel.ProfileCode = "dev"
 
 var Profile = kernel.Profile{
 	Code: ProfileCode,
+	Name: "Разработка",
+	Templates: []template.Definition{
+		{
+			Code:  "page",
+			Label: "Страница",
+			Icon:  "document",
+		},
+	},
 	Modules: []kernel.ProfileModule{
 		{
 			Module: core.Module{},

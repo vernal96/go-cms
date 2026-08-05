@@ -44,6 +44,8 @@ export function useAdminAuth(
 ) {
   const status = ref<AuthStatus>('checking')
   const user = ref<AdminUser | null>(null)
+  const accessToken = ref<string | null>(null)
+  const permissions = ref<ReadonlySet<string>>(new Set())
   const errorMessage = ref<string | null>(null)
   let expirationTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -53,6 +55,8 @@ export function useAdminAuth(
     clearExpirationTimer()
     status.value = 'checking'
     user.value = null
+    accessToken.value = null
+    permissions.value = new Set()
     errorMessage.value = null
 
     const stored = dependencies.storage.read()
@@ -109,11 +113,15 @@ export function useAdminAuth(
     try {
       const response = await dependencies.loadSession(session.accessToken)
       user.value = response.user
+      accessToken.value = session.accessToken
+      permissions.value = new Set(response.permissions)
       status.value = 'authorized'
       errorMessage.value = null
       scheduleExpiration(session)
     } catch (error) {
       user.value = null
+      accessToken.value = null
+      permissions.value = new Set()
       if (error instanceof AdminAPIError && error.status === 401) {
         endSession('Сессия истекла. Войдите снова.')
         return
@@ -147,6 +155,8 @@ export function useAdminAuth(
     clearExpirationTimer()
     dependencies.storage.clear()
     user.value = null
+    accessToken.value = null
+    permissions.value = new Set()
     status.value = 'anonymous'
     errorMessage.value = message
   }
@@ -162,6 +172,8 @@ export function useAdminAuth(
   return {
     status,
     user,
+    accessToken,
+    permissions,
     errorMessage,
     isSubmitting,
     bootstrap,

@@ -13,6 +13,7 @@ type Code string
 type Definition struct {
 	Code   Code
 	Label  string
+	Icon   string
 	Fields []field.Definition
 }
 
@@ -72,6 +73,14 @@ func Compile(
 				"template %q has invalid label %q",
 				definition.Code,
 				definition.Label,
+			)
+		}
+		definition.Icon = strings.TrimSpace(definition.Icon)
+		if strings.ContainsAny(definition.Icon, " /\\") {
+			return nil, fmt.Errorf(
+				"template %q has invalid icon %q",
+				definition.Code,
+				definition.Icon,
 			)
 		}
 		if _, exists := catalog.runtimes[definition.Code]; exists {
