@@ -30,8 +30,26 @@ describe('ResourceCreateDialog', () => {
     }
     requestMock
       .mockResolvedValueOnce({
-        types: [{ code: 'page', label: 'Страница' }, { code: 'link', label: 'Ссылка' }],
-        templates: [{ code: 'page', label: 'Страница', icon: 'document' }],
+        types: [
+          { code: 'page', label: 'Страница' },
+          { code: 'link', label: 'Ссылка' },
+        ],
+        templates: [
+          {
+            code: 'page',
+            label: 'Страница',
+            icon: 'document',
+            fields: [
+              {
+                key: 'page_title',
+                type: 'string',
+                label: 'Заголовок',
+                required: true,
+                rules: [],
+              },
+            ],
+          },
+        ],
       })
       .mockResolvedValueOnce(created)
     const wrapper = shallowMount(ResourceCreateDialog, {
@@ -44,10 +62,21 @@ describe('ResourceCreateDialog', () => {
       },
     })
 
-    await (wrapper.vm as unknown as { open(parent: ResourceTreeItem | null): Promise<void> }).open(null)
+    await (
+      wrapper.vm as unknown as {
+        open(parent: ResourceTreeItem | null): Promise<void>
+      }
+    ).open(null)
     await flushPromises()
-    const model = wrapper.findComponent({ name: 'ElForm' }).props('model') as Record<string, unknown>
-    Object.assign(model, { title: ' Home ', menu_title: '', slug: '' })
+    const model = wrapper
+      .findComponent({ name: 'ElForm' })
+      .props('model') as Record<string, unknown>
+    Object.assign(model, {
+      title: ' Home ',
+      menu_title: '',
+      slug: '',
+      settings: { page_title: 'Home' },
+    })
 
     const buttons = wrapper.findAllComponents({ name: 'ElButton' })
     buttons[buttons.length - 1]?.vm.$emit('click')
@@ -67,6 +96,7 @@ describe('ResourceCreateDialog', () => {
       title: 'Home',
       menu_title: '',
       slug: '',
+      settings: { page_title: 'Home' },
     })
     expect(wrapper.emitted('created')?.[0]).toEqual([created, null])
   })

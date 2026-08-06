@@ -60,7 +60,7 @@ func TestDevSiteSeedSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 4 {
+	if len(entries) != 6 {
 		t.Fatalf("dev seed files = %#v", entries)
 	}
 }

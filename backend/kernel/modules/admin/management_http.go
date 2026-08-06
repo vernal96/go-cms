@@ -33,6 +33,9 @@ func registerManagementRoutes(router chi.Router, management *Management) {
 	router.Get("/sites/{siteID}/resources", handler.listResourceChildren)
 	router.Post("/sites/{siteID}/resources", handler.createResource)
 	router.Get("/sites/{siteID}/resource-metadata", handler.resourceMetadata)
+	router.Get("/sites/{siteID}/resource-options", handler.resourceOptions)
+	router.Get("/sites/{siteID}/resources/{resourceID}", handler.getResource)
+	router.Patch("/sites/{siteID}/resources/{resourceID}", handler.updateResource)
 }
 
 func (h *managementHTTP) listSites(response http.ResponseWriter, request *http.Request) {
@@ -96,6 +99,7 @@ type updateSiteRequest struct {
 	ProfileCode kernel.ProfileCode `json:"profile_code"`
 	Domain      string             `json:"domain"`
 	Locale      string             `json:"locale"`
+	Settings    map[string]any     `json:"settings"`
 	IsPublic    *bool              `json:"is_public"`
 }
 
@@ -112,10 +116,15 @@ func (h *managementHTTP) updateSite(response http.ResponseWriter, request *http.
 		writeValidation(response, "is_public is required")
 		return
 	}
+	if payload.Settings == nil {
+		writeValidation(response, "settings is required")
+		return
+	}
 	result, err := h.management.UpdateSite(request.Context(), actor(request), id, SiteUpdateInput{
 		ProfileCode: payload.ProfileCode,
 		Domain:      payload.Domain,
 		Locale:      payload.Locale,
+		Settings:    payload.Settings,
 		IsPublic:    *payload.IsPublic,
 	})
 	writeResult(response, http.StatusOK, result, err)
@@ -174,6 +183,7 @@ type createResourceRequest struct {
 	MenuTitle   string            `json:"menu_title"`
 	Slug        string            `json:"slug"`
 	ExternalURL *string           `json:"external_url"`
+	Settings    map[string]any    `json:"settings"`
 }
 
 func (h *managementHTTP) createResource(response http.ResponseWriter, request *http.Request) {
@@ -185,6 +195,10 @@ func (h *managementHTTP) createResource(response http.ResponseWriter, request *h
 	if !decodeBody(response, request, &payload) {
 		return
 	}
+	if payload.Settings == nil {
+		writeValidation(response, "settings is required")
+		return
+	}
 	result, err := h.management.CreateResource(request.Context(), actor(request), id, ResourceCreateInput{
 		ParentID:    payload.ParentID,
 		Type:        payload.Type,
@@ -193,8 +207,89 @@ func (h *managementHTTP) createResource(response http.ResponseWriter, request *h
 		MenuTitle:   payload.MenuTitle,
 		Slug:        payload.Slug,
 		ExternalURL: payload.ExternalURL,
+		Settings:    payload.Settings,
 	})
 	writeResult(response, http.StatusCreated, result, err)
+}
+
+func (h *managementHTTP) resourceOptions(response http.ResponseWriter, request *http.Request) {
+	siteID, ok := siteID(response, request)
+	if !ok {
+		return
+	}
+	result, err := h.management.ResourceOptions(request.Context(), actor(request), siteID)
+	writeResult(response, http.StatusOK, result, err)
+}
+
+func (h *managementHTTP) getResource(response http.ResponseWriter, request *http.Request) {
+	siteID, ok := siteID(response, request)
+	if !ok {
+		return
+	}
+	resourceID, ok := resourceID(response, request)
+	if !ok {
+		return
+	}
+	result, err := h.management.Resource(request.Context(), actor(request), siteID, resourceID)
+	writeResult(response, http.StatusOK, result, err)
+}
+
+type updateResourceRequest struct {
+	ParentID     *resource.ID      `json:"parent_id"`
+	Type         resourcetype.Code `json:"type"`
+	Template     *template.Code    `json:"template_code"`
+	Title        string            `json:"title"`
+	MenuTitle    string            `json:"menu_title"`
+	Slug         string            `json:"slug"`
+	Content      string            `json:"content"`
+	ExternalURL  *string           `json:"external_url"`
+	IsPublic     *bool             `json:"is_public"`
+	IsSearchable *bool             `json:"is_searchable"`
+	InMenu       *bool             `json:"in_menu"`
+	InSitemap    *bool             `json:"in_sitemap"`
+	Sort         *int              `json:"sort"`
+	Settings     map[string]any    `json:"settings"`
+}
+
+func (h *managementHTTP) updateResource(response http.ResponseWriter, request *http.Request) {
+	siteID, ok := siteID(response, request)
+	if !ok {
+		return
+	}
+	resourceID, ok := resourceID(response, request)
+	if !ok {
+		return
+	}
+	var payload updateResourceRequest
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	if payload.IsPublic == nil || payload.IsSearchable == nil ||
+		payload.InMenu == nil || payload.InSitemap == nil || payload.Sort == nil ||
+		payload.Settings == nil {
+		writeValidation(response, "resource flags, sort and settings are required")
+		return
+	}
+	result, err := h.management.UpdateResource(
+		request.Context(), actor(request), siteID, resourceID,
+		ResourceUpdateInput{
+			ParentID:     payload.ParentID,
+			Type:         payload.Type,
+			Template:     payload.Template,
+			Title:        payload.Title,
+			MenuTitle:    payload.MenuTitle,
+			Slug:         payload.Slug,
+			Content:      payload.Content,
+			ExternalURL:  payload.ExternalURL,
+			IsPublic:     *payload.IsPublic,
+			IsSearchable: *payload.IsSearchable,
+			InMenu:       *payload.InMenu,
+			InSitemap:    *payload.InSitemap,
+			Sort:         *payload.Sort,
+			Settings:     payload.Settings,
+		},
+	)
+	writeResult(response, http.StatusOK, result, err)
 }
 
 func actor(request *http.Request) security.Actor {
@@ -209,6 +304,15 @@ func siteID(response http.ResponseWriter, request *http.Request) (site.ID, bool)
 		return 0, false
 	}
 	return site.ID(parsed), true
+}
+
+func resourceID(response http.ResponseWriter, request *http.Request) (resource.ID, bool) {
+	parsed, err := strconv.ParseInt(chi.URLParam(request, "resourceID"), 10, 64)
+	if err != nil || parsed <= 0 {
+		writeBadRequest(response, "resource_id is invalid")
+		return 0, false
+	}
+	return resource.ID(parsed), true
 }
 
 func parsePagination(response http.ResponseWriter, request *http.Request) (int, int, bool) {
@@ -267,6 +371,11 @@ func writeManagementError(response http.ResponseWriter, err error) {
 	case errors.Is(err, site.ErrConflict), errors.Is(err, resource.ErrConflict):
 		httptransport.WriteJSONError(response, http.StatusConflict, "conflict", "object conflicts with existing data")
 	case errors.Is(err, ErrValidation):
+		var validation ValidationError
+		if errors.As(err, &validation) && len(validation.Fields) > 0 {
+			writeFieldValidation(response, validation)
+			return
+		}
 		writeValidation(response, err.Error())
 	default:
 		httptransport.WriteJSONError(response, http.StatusInternalServerError, "internal_error", "operation failed")
@@ -279,4 +388,30 @@ func writeBadRequest(response http.ResponseWriter, message string) {
 
 func writeValidation(response http.ResponseWriter, message string) {
 	httptransport.WriteJSONError(response, http.StatusUnprocessableEntity, "validation_failed", message)
+}
+
+func writeFieldValidation(response http.ResponseWriter, validation ValidationError) {
+	response.Header().Set("Content-Type", "application/json; charset=utf-8")
+	response.WriteHeader(http.StatusUnprocessableEntity)
+	_ = json.NewEncoder(response).Encode(struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Details struct {
+				Fields []FieldValidationError `json:"fields"`
+			} `json:"details"`
+		} `json:"error"`
+	}{Error: struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		Details struct {
+			Fields []FieldValidationError `json:"fields"`
+		} `json:"details"`
+	}{
+		Code:    "validation_failed",
+		Message: validation.Message,
+		Details: struct {
+			Fields []FieldValidationError `json:"fields"`
+		}{Fields: validation.Fields},
+	}})
 }

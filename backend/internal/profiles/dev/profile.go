@@ -4,25 +4,20 @@ import (
 	"time"
 
 	"github.com/vernal96/go-cms/internal/connectors/corecache"
+	devtemplates "github.com/vernal96/go-cms/internal/profiles/dev/templates"
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
-	"github.com/vernal96/go-cms/kernel/modules/core/template"
 )
 
 const ProfileCode kernel.ProfileCode = "dev"
 
 var Profile = kernel.Profile{
-	Code: ProfileCode,
-	Name: "Разработка",
-	Templates: []template.Definition{
-		{
-			Code:  "page",
-			Label: "Страница",
-			Icon:  "document",
-		},
-	},
+	Code:      ProfileCode,
+	Name:      "Разработка",
+	Params:    Params(),
+	Templates: devtemplates.All(),
 	Modules: []kernel.ProfileModule{
 		{
 			Module: core.Module{},

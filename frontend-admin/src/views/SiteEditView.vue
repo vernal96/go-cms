@@ -8,7 +8,10 @@ import SiteForm from '../components/SiteForm.vue'
 import { useSelectedSite } from '../composables/use-selected-site'
 import type { SiteDetailsResponse, SiteFormPayload } from '../types/admin'
 
-const props = defineProps<{ accessToken: string; permissions: ReadonlySet<string> }>()
+const props = defineProps<{
+  accessToken: string
+  permissions: ReadonlySet<string>
+}>()
 const emit = defineEmits<{ unauthorized: [] }>()
 const route = useRoute()
 const router = useRouter()
@@ -16,6 +19,7 @@ const selected = useSelectedSite()
 const loading = ref(true)
 const submitting = ref(false)
 const error = ref<string | null>(null)
+const fieldErrors = ref<AdminAPIError['fieldErrors']>([])
 const initial = ref<SiteFormPayload | null>(null)
 
 async function load(): Promise<void> {
@@ -31,6 +35,7 @@ async function load(): Promise<void> {
       profile_code: response.site.profile_code,
       locale: response.site.locale,
       is_public: response.site.is_public,
+      settings: response.site.settings,
     }
   } catch (caught) {
     handleError(caught)
@@ -42,6 +47,7 @@ async function load(): Promise<void> {
 async function submit(payload: SiteFormPayload): Promise<void> {
   submitting.value = true
   error.value = null
+  fieldErrors.value = []
   try {
     const response = await adminRequest<SiteDetailsResponse>(
       `/api/admin/sites/${route.params.siteId}`,
@@ -49,7 +55,10 @@ async function submit(payload: SiteFormPayload): Promise<void> {
       { method: 'PATCH', body: JSON.stringify(payload) },
     )
     if (selected.selectedSite.value?.id === response.site.id) {
-      selected.setSelected({ id: response.site.id, domain: response.site.domain })
+      selected.setSelected({
+        id: response.site.id,
+        domain: response.site.domain,
+      })
     }
     selected.refreshSelector()
     initial.value = payload
@@ -62,17 +71,30 @@ async function submit(payload: SiteFormPayload): Promise<void> {
 }
 
 function handleError(caught: unknown): void {
-  if (caught instanceof AdminAPIError && caught.status === 401) emit('unauthorized')
-  else error.value = caught instanceof Error ? caught.message : 'Не удалось загрузить сайт.'
+  if (caught instanceof AdminAPIError && caught.status === 401)
+    emit('unauthorized')
+  else {
+    if (caught instanceof AdminAPIError) fieldErrors.value = caught.fieldErrors
+    error.value =
+      caught instanceof Error ? caught.message : 'Не удалось загрузить сайт.'
+  }
 }
 
 onMounted(() => void load())
-watch(() => route.params.siteId, () => void load())
+watch(
+  () => route.params.siteId,
+  () => void load(),
+)
 </script>
 
 <template>
   <section class="workspace-page narrow-page">
-    <header class="page-header"><div><h1>Настройки сайта</h1><p>Settings сохраняются без изменений</p></div></header>
+    <header class="page-header">
+      <div>
+        <h1>Настройки сайта</h1>
+        <p>Параметры профиля загружаются с backend</p>
+      </div>
+    </header>
     <el-skeleton v-if="loading" animated :rows="5" />
     <site-form
       v-else-if="initial"
@@ -81,6 +103,7 @@ watch(() => route.params.siteId, () => void load())
       editing
       :submitting="submitting"
       :error="error"
+      :field-errors="fieldErrors"
       @submit="submit"
       @cancel="router.push('/admin/sites')"
       @unauthorized="emit('unauthorized')"

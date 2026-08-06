@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
@@ -167,9 +168,9 @@ type SiteDetails struct {
 }
 
 type SiteProfile struct {
-	Code      kernel.ProfileCode `json:"code"`
-	Name      string             `json:"name"`
-	Creatable bool               `json:"creatable"`
+	Code   kernel.ProfileCode `json:"code"`
+	Name   string             `json:"name"`
+	Fields []FieldDefinition  `json:"fields"`
 }
 
 type SiteProfiles struct {
@@ -188,6 +189,7 @@ type SiteUpdateInput struct {
 	ProfileCode kernel.ProfileCode
 	Domain      string
 	Locale      string
+	Settings    map[string]any
 	IsPublic    bool
 }
 
@@ -304,8 +306,7 @@ func (m *Management) UpdateSite(
 	if err := m.requireSite(ctx, actor, id, SiteUpdatePermission); err != nil {
 		return SiteDetails{}, err
 	}
-	current, exists := m.sites.RuntimeByID(id)
-	if !exists {
+	if _, exists := m.sites.RuntimeByID(id); !exists {
 		return SiteDetails{}, site.ErrNotFound
 	}
 	runtime, err := m.sites.Update(ctx, actor, site.UpdateInput{
@@ -313,7 +314,7 @@ func (m *Management) UpdateSite(
 		ProfileCode: input.ProfileCode,
 		Domain:      input.Domain,
 		Locale:      input.Locale,
-		Settings:    current.Site().Settings,
+		Settings:    input.Settings,
 		IsPublic:    input.IsPublic,
 	})
 	if err != nil {
@@ -350,11 +351,14 @@ func (m *Management) Profiles(
 		if !exists {
 			continue
 		}
-		_, err := runtime.ParamSchema().Validate(map[string]any{})
+		fields, err := fieldDefinitions(runtime.ParamSchema().Definitions())
+		if err != nil {
+			return SiteProfiles{}, err
+		}
 		items = append(items, SiteProfile{
-			Code:      profile.Code,
-			Name:      profile.Name,
-			Creatable: err == nil,
+			Code:   profile.Code,
+			Name:   profile.Name,
+			Fields: fields,
 		})
 	}
 	return SiteProfiles{Items: items}, nil
@@ -409,9 +413,10 @@ func (m *Management) ResourceChildren(
 }
 
 type ResourceTemplate struct {
-	Code  template.Code `json:"code"`
-	Label string        `json:"label"`
-	Icon  string        `json:"icon"`
+	Code   template.Code     `json:"code"`
+	Label  string            `json:"label"`
+	Icon   string            `json:"icon"`
+	Fields []FieldDefinition `json:"fields"`
 }
 
 type ResourceType struct {
@@ -429,7 +434,7 @@ func (m *Management) ResourceMetadata(
 	actor security.Actor,
 	siteID site.ID,
 ) (ResourceMetadata, error) {
-	if err := m.requireSite(ctx, actor, siteID, ResourceCreatePermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission); err != nil {
 		return ResourceMetadata{}, err
 	}
 	runtime, exists := m.sites.RuntimeByID(siteID)
@@ -439,10 +444,15 @@ func (m *Management) ResourceMetadata(
 	definitions := runtime.Profile().Templates()
 	templates := make([]ResourceTemplate, len(definitions))
 	for index, definition := range definitions {
+		fields, err := fieldDefinitions(definition.Fields)
+		if err != nil {
+			return ResourceMetadata{}, err
+		}
 		templates[index] = ResourceTemplate{
-			Code:  definition.Code,
-			Label: definition.Label,
-			Icon:  iconOrDefault(definition.Icon),
+			Code:   definition.Code,
+			Label:  definition.Label,
+			Icon:   iconOrDefault(definition.Icon),
+			Fields: fields,
 		}
 	}
 	types := []ResourceType{{Code: resourcetype.Link, Label: "Ссылка"}}
@@ -460,6 +470,7 @@ type ResourceCreateInput struct {
 	MenuTitle   string
 	Slug        string
 	ExternalURL *string
+	Settings    map[string]any
 }
 
 func (m *Management) CreateResource(
@@ -496,7 +507,7 @@ func (m *Management) CreateResource(
 		MenuTitle:   input.MenuTitle,
 		Slug:        input.Slug,
 		ExternalURL: input.ExternalURL,
-		Settings:    map[string]any{},
+		Settings:    input.Settings,
 	})
 	if err != nil {
 		if errors.Is(err, resource.ErrNotFound) {
@@ -513,6 +524,166 @@ func (m *Management) CreateResource(
 		Title:     created.Title,
 		MenuTitle: created.MenuTitle,
 	}, true), nil
+}
+
+type ResourceDTO struct {
+	ID           resource.ID       `json:"id"`
+	SiteID       site.ID           `json:"site_id"`
+	ParentID     *resource.ID      `json:"parent_id"`
+	Type         resourcetype.Code `json:"type"`
+	TemplateCode *template.Code    `json:"template_code"`
+	Title        string            `json:"title"`
+	MenuTitle    string            `json:"menu_title"`
+	Slug         string            `json:"slug"`
+	Path         *string           `json:"path"`
+	Content      string            `json:"content"`
+	ExternalURL  *string           `json:"external_url"`
+	IsPublic     bool              `json:"is_public"`
+	IsSearchable bool              `json:"is_searchable"`
+	InMenu       bool              `json:"in_menu"`
+	InSitemap    bool              `json:"in_sitemap"`
+	Sort         int               `json:"sort"`
+	Settings     map[string]any    `json:"settings"`
+}
+
+type ResourceDetails struct {
+	Resource    ResourceDTO `json:"resource"`
+	Permissions struct {
+		Update bool `json:"update"`
+	} `json:"permissions"`
+}
+
+type ResourceUpdateInput struct {
+	ParentID     *resource.ID
+	Type         resourcetype.Code
+	Template     *template.Code
+	Title        string
+	MenuTitle    string
+	Slug         string
+	Content      string
+	ExternalURL  *string
+	IsPublic     bool
+	IsSearchable bool
+	InMenu       bool
+	InSitemap    bool
+	Sort         int
+	Settings     map[string]any
+}
+
+func (m *Management) Resource(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+	resourceID resource.ID,
+) (ResourceDetails, error) {
+	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission); err != nil {
+		return ResourceDetails{}, err
+	}
+	item, err := m.resources.Get(ctx, actor, resourceID)
+	if err != nil {
+		return ResourceDetails{}, err
+	}
+	if item.SiteID != siteID {
+		return ResourceDetails{}, resource.ErrNotFound
+	}
+	canUpdate, err := m.allowed(ctx, actor, ResourceUpdatePermission)
+	if err != nil {
+		return ResourceDetails{}, err
+	}
+	result := ResourceDetails{Resource: resourceDTO(item)}
+	result.Permissions.Update = canUpdate
+	return result, nil
+}
+
+func (m *Management) UpdateResource(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+	resourceID resource.ID,
+	input ResourceUpdateInput,
+) (ResourceDetails, error) {
+	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission); err != nil {
+		return ResourceDetails{}, err
+	}
+	current, err := m.resources.Get(ctx, actor, resourceID)
+	if err != nil {
+		return ResourceDetails{}, err
+	}
+	if current.SiteID != siteID {
+		return ResourceDetails{}, resource.ErrNotFound
+	}
+	if current.Type != resourcetype.Page && current.Type != resourcetype.Link {
+		return ResourceDetails{}, fmt.Errorf("%w: unsupported current resource type", ErrValidation)
+	}
+	if input.Type != resourcetype.Page && input.Type != resourcetype.Link {
+		return ResourceDetails{}, fmt.Errorf("%w: unsupported resource type", ErrValidation)
+	}
+
+	var contentType *string
+	if input.Type == resourcetype.Page {
+		contentType = current.ContentType
+		if contentType == nil {
+			value := "html"
+			contentType = &value
+		}
+	}
+	updated, err := m.resources.Update(ctx, actor, resource.UpdateInput{
+		ID:               resourceID,
+		ParentID:         input.ParentID,
+		Type:             input.Type,
+		Template:         input.Template,
+		ContentType:      contentType,
+		Title:            input.Title,
+		MenuTitle:        input.MenuTitle,
+		Slug:             input.Slug,
+		Content:          input.Content,
+		ImageMediaID:     current.ImageMediaID,
+		TargetResourceID: nil,
+		ExternalURL:      input.ExternalURL,
+		IsPublic:         input.IsPublic,
+		IsSearchable:     input.IsSearchable,
+		InMenu:           input.InMenu,
+		InSitemap:        input.InSitemap,
+		Sort:             input.Sort,
+		PublishedAt:      current.PublishedAt,
+		UnpublishedAt:    current.UnpublishedAt,
+		Settings:         input.Settings,
+		Widgets:          widgetInputs(current.Widgets),
+	})
+	if err != nil {
+		return ResourceDetails{}, validationError(err)
+	}
+	result := ResourceDetails{Resource: resourceDTO(updated)}
+	result.Permissions.Update = true
+	return result, nil
+}
+
+type ResourceOption struct {
+	ID           resource.ID  `json:"id"`
+	ParentID     *resource.ID `json:"parent_id"`
+	DisplayTitle string       `json:"display_title"`
+	Path         *string      `json:"path"`
+}
+
+type ResourceOptions struct {
+	Items []ResourceOption `json:"items"`
+}
+
+func (m *Management) ResourceOptions(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+) (ResourceOptions, error) {
+	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission); err != nil {
+		return ResourceOptions{}, err
+	}
+	tree, err := m.resources.Tree(ctx, actor, siteID)
+	if err != nil {
+		return ResourceOptions{}, err
+	}
+	items := make([]ResourceOption, 0)
+	appendResourceOptions(&items, tree)
+	return ResourceOptions{Items: items}, nil
 }
 
 func (m *Management) requireSite(
@@ -615,6 +786,61 @@ func treeItem(runtime *site.Runtime, item resource.Child, canCreate bool) Resour
 	}
 }
 
+func resourceDTO(item resource.Resource) ResourceDTO {
+	settings := make(map[string]any, len(item.Settings))
+	for key, value := range item.Settings {
+		settings[key] = value
+	}
+	return ResourceDTO{
+		ID:           item.ID,
+		SiteID:       item.SiteID,
+		ParentID:     item.ParentID,
+		Type:         item.Type,
+		TemplateCode: item.Template,
+		Title:        item.Title,
+		MenuTitle:    item.MenuTitle,
+		Slug:         item.Slug,
+		Path:         item.Path,
+		Content:      item.Content,
+		ExternalURL:  item.ExternalURL,
+		IsPublic:     item.IsPublic,
+		IsSearchable: item.IsSearchable,
+		InMenu:       item.InMenu,
+		InSitemap:    item.InSitemap,
+		Sort:         item.Sort,
+		Settings:     settings,
+	}
+}
+
+func widgetInputs(source []resource.WidgetBinding) []resource.WidgetInput {
+	result := make([]resource.WidgetInput, len(source))
+	for index, binding := range source {
+		params := make(map[string]any, len(binding.Params))
+		for key, value := range binding.Params {
+			params[key] = value
+		}
+		result[index] = resource.WidgetInput{Code: binding.Code, Params: params}
+	}
+	return result
+}
+
+func appendResourceOptions(target *[]ResourceOption, nodes []resource.Node) {
+	for _, node := range nodes {
+		item := node.Resource
+		displayTitle := strings.TrimSpace(item.MenuTitle)
+		if displayTitle == "" {
+			displayTitle = item.Title
+		}
+		*target = append(*target, ResourceOption{
+			ID:           item.ID,
+			ParentID:     item.ParentID,
+			DisplayTitle: displayTitle,
+			Path:         item.Path,
+		})
+		appendResourceOptions(target, node.Children)
+	}
+}
+
 func iconOrDefault(icon string) string {
 	icon = strings.TrimSpace(icon)
 	switch icon {
@@ -629,6 +855,19 @@ func validationError(err error) error {
 	if errors.Is(err, site.ErrConflict) || errors.Is(err, site.ErrNotFound) ||
 		errors.Is(err, resource.ErrConflict) || errors.Is(err, resource.ErrNotFound) {
 		return err
+	}
+	var fieldErrors field.ValidationErrors
+	if errors.As(err, &fieldErrors) {
+		fields := make([]FieldValidationError, len(fieldErrors))
+		for index, item := range fieldErrors {
+			fields[index] = FieldValidationError{
+				Key: item.Key, Rule: item.Rule, Param: item.Param,
+			}
+		}
+		return ValidationError{
+			Message: "request data is invalid",
+			Fields:  fields,
+		}
 	}
 	if errors.Is(err, site.ErrInvalid) || errors.Is(err, resource.ErrInvalid) ||
 		errors.Is(err, resource.ErrInvalidReference) || errors.Is(err, resource.ErrInvalidTree) {

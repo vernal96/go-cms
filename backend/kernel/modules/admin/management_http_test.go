@@ -70,3 +70,30 @@ func TestManagementHTTPListSiteOptionsAndErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestManagementHTTPWritesStructuredFieldErrors(t *testing.T) {
+	t.Parallel()
+	response := httptest.NewRecorder()
+	writeManagementError(response, ValidationError{
+		Message: "request data is invalid",
+		Fields:  []FieldValidationError{{Key: "page_title", Rule: "required", Param: ""}},
+	})
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d", response.Code)
+	}
+	var envelope struct {
+		Error struct {
+			Code    string `json:"code"`
+			Details struct {
+				Fields []FieldValidationError `json:"fields"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error.Code != "validation_failed" || len(envelope.Error.Details.Fields) != 1 ||
+		envelope.Error.Details.Fields[0].Key != "page_title" {
+		t.Fatalf("error = %#v", envelope)
+	}
+}

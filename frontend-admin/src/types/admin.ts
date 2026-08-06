@@ -44,7 +44,39 @@ export interface SiteDetailsResponse {
 export interface SiteProfile {
   code: string
   name: string
-  creatable: boolean
+  fields: FieldDefinition[]
+}
+
+export type FieldType =
+  | 'string'
+  | 'int'
+  | 'float'
+  | 'checkbox'
+  | 'radio'
+  | 'select'
+  | 'textarea'
+  | 'email'
+  | 'phone'
+
+export interface FieldChoice {
+  value: string
+  label: string
+}
+
+export interface FieldOptions {
+  step?: number
+  choices?: FieldChoice[]
+  multiple?: boolean
+  pattern?: string
+}
+
+export interface FieldDefinition {
+  key: string
+  type: FieldType | string
+  label: string
+  required: boolean
+  rules: string[]
+  options?: FieldOptions
 }
 
 export interface SiteProfilesResponse {
@@ -56,6 +88,7 @@ export interface SiteFormPayload {
   domain: string
   locale: string
   is_public: boolean
+  settings: Record<string, unknown>
 }
 
 export interface ResourceTreeItem {
@@ -77,7 +110,12 @@ export interface ResourceChildrenResponse {
 
 export interface ResourceMetadata {
   types: Array<{ code: 'page' | 'link'; label: string }>
-  templates: Array<{ code: string; label: string; icon: string }>
+  templates: Array<{
+    code: string
+    label: string
+    icon: string
+    fields: FieldDefinition[]
+  }>
 }
 
 export interface ResourceCreatePayload {
@@ -88,6 +126,60 @@ export interface ResourceCreatePayload {
   menu_title: string
   slug: string
   external_url?: string
+  settings: Record<string, unknown>
+}
+
+export interface Resource {
+  id: number
+  site_id: number
+  parent_id: number | null
+  type: 'page' | 'link'
+  template_code: string | null
+  title: string
+  menu_title: string
+  slug: string
+  path: string | null
+  content: string
+  external_url: string | null
+  is_public: boolean
+  is_searchable: boolean
+  in_menu: boolean
+  in_sitemap: boolean
+  sort: number
+  settings: Record<string, unknown>
+}
+
+export interface ResourceDetailsResponse {
+  resource: Resource
+  permissions: { update: boolean }
+}
+
+export interface ResourceOption {
+  id: number
+  parent_id: number | null
+  display_title: string
+  path: string | null
+}
+
+export interface ResourceOptionsResponse {
+  items: ResourceOption[]
+}
+
+export interface ResourceUpdatePayload {
+  parent_id: number | null
+  type: 'page' | 'link'
+  template_code: string | null
+  title: string
+  menu_title: string
+  slug: string
+  content: string
+  external_url: string | null
+  is_public: boolean
+  is_searchable: boolean
+  in_menu: boolean
+  in_sitemap: boolean
+  sort: number
+  settings: Record<string, unknown>
 }
 
 export interface AdminTableColumn {

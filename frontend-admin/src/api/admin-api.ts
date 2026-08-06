@@ -3,23 +3,33 @@ import type {
   APIErrorEnvelope,
   LoginCredentials,
   LoginResponse,
+  FieldValidationError,
 } from '../types/auth'
 
 export class AdminAPIError extends Error {
   readonly status: number
   readonly code: string
+  readonly fieldErrors: FieldValidationError[]
 
-  constructor(status: number, code: string, message: string) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    fieldErrors: FieldValidationError[] = [],
+  ) {
     super(message)
     this.name = 'AdminAPIError'
     this.status = status
     this.code = code
+    this.fieldErrors = fieldErrors
   }
 }
 
 let unauthorizedHandler: (() => void) | null = null
 
-export function setAdminUnauthorizedHandler(handler: (() => void) | null): void {
+export function setAdminUnauthorizedHandler(
+  handler: (() => void) | null,
+): void {
   unauthorizedHandler = handler
 }
 
@@ -79,7 +89,8 @@ export async function adminRequestVoid(
 }
 
 function handleAdminError(error: unknown): void {
-  if (error instanceof AdminAPIError && error.status === 401) unauthorizedHandler?.()
+  if (error instanceof AdminAPIError && error.status === 401)
+    unauthorizedHandler?.()
 }
 
 async function requestJSON<T>(
@@ -105,6 +116,7 @@ async function requestJSON<T>(
 async function responseError(response: Response): Promise<AdminAPIError> {
   let code = 'request_failed'
   let message = `Запрос завершился с кодом ${response.status}`
+  let fieldErrors: FieldValidationError[] = []
 
   try {
     const payload = (await response.json()) as Partial<APIErrorEnvelope>
@@ -115,10 +127,18 @@ async function responseError(response: Response): Promise<AdminAPIError> {
     ) {
       code = payload.error.code
       message = payload.error.message
+      if (Array.isArray(payload.error.details?.fields)) {
+        fieldErrors = payload.error.details.fields.filter(
+          (item): item is FieldValidationError =>
+            typeof item?.key === 'string' &&
+            typeof item?.rule === 'string' &&
+            typeof item?.param === 'string',
+        )
+      }
     }
   } catch {
     // The status still carries the server-side authorization decision.
   }
 
-  return new AdminAPIError(response.status, code, message)
+  return new AdminAPIError(response.status, code, message, fieldErrors)
 }

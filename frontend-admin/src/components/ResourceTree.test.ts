@@ -9,6 +9,7 @@ import { useSelectedSite } from '../composables/use-selected-site'
 import ResourceTree from './ResourceTree.vue'
 
 vi.mock('../api/admin-api', () => ({ adminRequest: vi.fn() }))
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 
 const requestMock = vi.mocked(adminRequest)
 
@@ -21,17 +22,19 @@ describe('ResourceTree', () => {
 
   it('loads only one level and exposes an inline retry row for a failed child request', async () => {
     requestMock.mockResolvedValueOnce({
-      items: [{
-        id: 3,
-        parent_id: null,
-        template_code: 'page',
-        icon: 'document',
-        title: 'Home',
-        menu_title: '',
-        display_title: 'Home',
-        has_children: false,
-        can_create_child: true,
-      }],
+      items: [
+        {
+          id: 3,
+          parent_id: null,
+          template_code: 'page',
+          icon: 'document',
+          title: 'Home',
+          menu_title: '',
+          display_title: 'Home',
+          has_children: false,
+          can_create_child: true,
+        },
+      ],
       permissions: { create_root: true },
     })
     const wrapper = shallowMount(ResourceTree, {
@@ -62,7 +65,11 @@ describe('ResourceTree', () => {
       'token',
     )
     expect(childResolve).toHaveBeenCalledWith([
-      expect.objectContaining({ loadError: true, retryParentId: 3, isLeaf: true }),
+      expect.objectContaining({
+        loadError: true,
+        retryParentId: 3,
+        isLeaf: true,
+      }),
     ])
   })
 
@@ -77,8 +84,12 @@ describe('ResourceTree', () => {
     await nextTick()
     await flushPromises()
 
-    expect(wrapper.findComponent({ name: 'ElTree' }).vm.$.vnode.key).not.toBe(initialKey)
-    expect(wrapper.findComponent({ name: 'ElTree' }).vm.$.vnode.key).toContain('8-')
+    expect(wrapper.findComponent({ name: 'ElTree' }).vm.$.vnode.key).not.toBe(
+      initialKey,
+    )
+    expect(wrapper.findComponent({ name: 'ElTree' }).vm.$.vnode.key).toContain(
+      '8-',
+    )
 
     await wrapper.setProps({ canCreate: true })
     expect(wrapper.findComponent({ name: 'ElButton' }).exists()).toBe(true)

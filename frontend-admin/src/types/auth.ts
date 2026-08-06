@@ -30,7 +30,16 @@ export interface APIErrorEnvelope {
   error: {
     code: string
     message: string
+    details?: {
+      fields?: FieldValidationError[]
+    }
   }
+}
+
+export interface FieldValidationError {
+  key: string
+  rule: string
+  param: string
 }
 
 export type AuthStatus =

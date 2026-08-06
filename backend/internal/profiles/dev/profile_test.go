@@ -6,6 +6,7 @@ import (
 	"github.com/vernal96/go-cms/internal/profiles/dev"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 )
 
 func TestProfileContainsRequiredModulesInOrder(t *testing.T) {
@@ -23,5 +24,29 @@ func TestProfileContainsRequiredModulesInOrder(t *testing.T) {
 			"second profile module = %q",
 			dev.Profile.Modules[1].Module.Code(),
 		)
+	}
+}
+
+func TestProfileExposesDynamicParamsAndTemplateFields(t *testing.T) {
+	if len(dev.Profile.Params) != 10 {
+		t.Fatalf("profile params = %d", len(dev.Profile.Params))
+	}
+	wantTypes := map[field.TypeCode]bool{
+		field.TypeString: false, field.TypeInteger: false, field.TypeFloat: false,
+		field.TypeCheckbox: false, field.TypeRadio: false, field.TypeSelect: false,
+		field.TypeTextarea: false, field.TypeEmail: false, field.TypePhone: false,
+	}
+	for _, definition := range dev.Profile.Params {
+		wantTypes[definition.Type] = true
+	}
+	for code, found := range wantTypes {
+		if !found {
+			t.Fatalf("field type %q is missing", code)
+		}
+	}
+	if len(dev.Profile.Templates) != 2 ||
+		dev.Profile.Templates[0].Code != "page" || len(dev.Profile.Templates[0].Fields) != 4 ||
+		dev.Profile.Templates[1].Code != "landing" || len(dev.Profile.Templates[1].Fields) != 5 {
+		t.Fatalf("templates = %#v", dev.Profile.Templates)
 	}
 }

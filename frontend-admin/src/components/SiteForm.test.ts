@@ -15,21 +15,29 @@ describe('SiteForm', () => {
     requestMock.mockReset()
     requestMock.mockResolvedValue({
       items: [
-        { code: 'required', name: 'Required settings', creatable: false },
-        { code: 'dev', name: 'Development', creatable: true },
+        {
+          code: 'dev',
+          name: 'Development',
+          fields: [
+            {
+              key: 'title',
+              type: 'string',
+              label: 'Title',
+              required: true,
+              rules: ['min=2'],
+            },
+          ],
+        },
       ],
     })
   })
 
-  it('disables non-creatable profiles and submits only the shared site fields', async () => {
+  it('initializes and submits settings from profile metadata', async () => {
     const wrapper = shallowMount(SiteForm, {
       props: { accessToken: 'token' },
       global: { renderStubDefaultSlot: true },
     })
     await flushPromises()
-
-    const options = wrapper.findAllComponents({ name: 'ElOption' })
-    expect(options.map((option) => option.props('disabled'))).toEqual([true, false])
 
     const formComponent = wrapper.findComponent({ name: 'ElForm' })
     const model = formComponent.props('model') as Record<string, unknown>
@@ -38,6 +46,7 @@ describe('SiteForm', () => {
       profile_code: 'dev',
       locale: ' ru-RU ',
       is_public: true,
+      settings: { title: 'Demo' },
     })
     formComponent.vm.$emit('submit', new Event('submit'))
     await flushPromises()
@@ -47,7 +56,7 @@ describe('SiteForm', () => {
       profile_code: 'dev',
       locale: 'ru-RU',
       is_public: true,
+      settings: { title: 'Demo' },
     })
-    expect(model).not.toHaveProperty('settings')
   })
 })
