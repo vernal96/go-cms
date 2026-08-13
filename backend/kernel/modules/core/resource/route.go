@@ -171,7 +171,7 @@ func (r *RouteResolver) resolveStored(
 	options ResolveRouteOptions,
 ) (Resource, error) {
 	siteItem := siteRuntime.Site()
-	if item.ID <= 0 || item.SiteID != siteItem.ID || item.Path == nil {
+	if item.ID <= 0 || item.SiteID != siteItem.ID || item.Path == nil || item.DeletedAt != nil {
 		return Resource{}, ErrNotFound
 	}
 	if _, err := NormalizeLookupPath(*item.Path); err != nil {

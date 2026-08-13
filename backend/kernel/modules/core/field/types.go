@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/vernal96/go-cms/kernel/filesystem"
 )
 
 func StandardTypes() []Type {
@@ -22,7 +24,103 @@ func StandardTypes() []Type {
 		stringType{code: TypeTextarea},
 		stringType{code: TypeEmail, rules: []string{"email"}},
 		phoneType{},
+		fileType{},
 	}
+}
+
+type fileType struct{}
+
+func (fileType) Code() TypeCode { return TypeFile }
+
+func (fileType) Compile(options any) (ValueType, error) {
+	config, err := FileOptionsValue(options)
+	if err != nil {
+		return nil, err
+	}
+	seenStorages := make(map[string]struct{}, len(config.Storages))
+	for _, storage := range config.Storages {
+		value := strings.TrimSpace(string(storage))
+		if value == "" || value != string(storage) {
+			return nil, errors.New("file storage is invalid")
+		}
+		if _, exists := seenStorages[value]; exists {
+			return nil, errors.New("file storage is duplicated")
+		}
+		seenStorages[value] = struct{}{}
+	}
+	seenMIME := make(map[string]struct{}, len(config.MIMETypes))
+	for _, mimeType := range config.MIMETypes {
+		if !validMIMEPattern(mimeType) {
+			return nil, fmt.Errorf("file MIME pattern %q is invalid", mimeType)
+		}
+		if _, exists := seenMIME[mimeType]; exists {
+			return nil, errors.New("file MIME pattern is duplicated")
+		}
+		seenMIME[mimeType] = struct{}{}
+	}
+	return fileValue{}, nil
+}
+
+type fileValue struct{}
+
+func (fileValue) Normalize(value any) (any, error) {
+	result, ok := normalizeInteger(value)
+	if !ok || result <= 0 {
+		return nil, fmt.Errorf("expected positive file id, got %T", value)
+	}
+	return result, nil
+}
+
+func (fileValue) Empty(any) bool     { return false }
+func (fileValue) Validate(any) error { return nil }
+func (fileValue) Rules() []string    { return nil }
+func (fileValue) Example() any       { return int64(1) }
+
+func FileOptionsValue(value any) (FileOptions, error) {
+	switch options := value.(type) {
+	case nil:
+		return FileOptions{}, nil
+	case FileOptions:
+		return options, nil
+	case *FileOptions:
+		if options != nil {
+			return *options, nil
+		}
+	}
+	return FileOptions{}, fmt.Errorf("got %T", value)
+}
+
+func FileMatches(options FileOptions, storage filesystem.Code, mimeType string) bool {
+	if len(options.Storages) > 0 {
+		matched := false
+		for _, allowed := range options.Storages {
+			if allowed == storage {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	if len(options.MIMETypes) > 0 {
+		for _, allowed := range options.MIMETypes {
+			if allowed == mimeType || (strings.HasSuffix(allowed, "/*") && strings.HasPrefix(mimeType, strings.TrimSuffix(allowed, "*"))) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
+
+func validMIMEPattern(value string) bool {
+	value = strings.TrimSpace(value)
+	parts := strings.Split(value, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return false
+	}
+	return parts[0] != "*" && !strings.ContainsAny(value, " \t\r\n") && (parts[1] == "*" || !strings.Contains(parts[1], "*"))
 }
 
 type stringType struct {

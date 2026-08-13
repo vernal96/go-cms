@@ -22,6 +22,14 @@ var (
 	ErrStorageNotFound  = errors.New("file storage not found")
 	ErrStorageMismatch  = errors.New("file storage mismatch")
 	ErrUnauthorized     = errors.New("file delivery is unauthorized")
+	ErrInUse            = errors.New("file is in use")
+)
+
+type ItemKind string
+
+const (
+	ItemFile   ItemKind = "file"
+	ItemFolder ItemKind = "folder"
 )
 
 type Folder struct {
@@ -73,6 +81,45 @@ type MoveFileInput struct {
 type MoveFolderInput struct {
 	ID       FolderID
 	ParentID *FolderID
+}
+
+type RenameFileInput struct {
+	ID   ID
+	Name string
+}
+
+type RenameFolderInput struct {
+	ID   FolderID
+	Name string
+}
+
+type ItemReference struct {
+	Kind ItemKind
+	ID   int64
+}
+
+type MoveItemsInput struct {
+	Storage  filesystem.Code
+	FolderID *FolderID
+	Items    []ItemReference
+}
+
+type DeleteItemsInput struct {
+	Items []ItemReference
+}
+
+type FolderEntry struct {
+	Folder    Folder
+	ItemCount int
+}
+
+type BrowserListing struct {
+	Storage     filesystem.Code
+	Visibility  filesystem.Visibility
+	Folder      *Folder
+	Breadcrumbs []Folder
+	Folders     []FolderEntry
+	Files       []File
 }
 
 type Listing struct {
@@ -130,6 +177,36 @@ type Repository interface {
 	DeleteFolder(context.Context, FolderID, DeletePhysical) error
 }
 
+type ManagementRepository interface {
+	Repository
+	CreateAvailableFolder(context.Context, Folder) (Folder, error)
+	CreateAvailableFile(context.Context, File) (File, error)
+	FolderAncestors(context.Context, FolderID) ([]Folder, error)
+	ListFolderEntries(
+		context.Context,
+		filesystem.Code,
+		*FolderID,
+	) ([]FolderEntry, error)
+	RenameFile(
+		context.Context,
+		*security.UserID,
+		ID,
+		string,
+	) (File, error)
+	RenameFolder(
+		context.Context,
+		*security.UserID,
+		FolderID,
+		string,
+	) (Folder, error)
+	MoveItems(
+		context.Context,
+		*security.UserID,
+		MoveItemsInput,
+	) ([]Folder, []File, error)
+	DeleteItems(context.Context, []ItemReference, DeletePhysical) error
+}
+
 type Service interface {
 	CreateFolder(
 		context.Context,
@@ -174,6 +251,47 @@ type Service interface {
 		ID,
 		time.Time,
 	) (string, error)
+}
+
+type ManagementService interface {
+	Service
+	Disks(context.Context, security.Actor) ([]filesystem.DiskInfo, error)
+	Browse(
+		context.Context,
+		security.Actor,
+		filesystem.Code,
+		*FolderID,
+	) (BrowserListing, error)
+	CreateAvailableFolder(
+		context.Context,
+		security.Actor,
+		CreateFolderInput,
+	) (Folder, error)
+	UploadAvailable(
+		context.Context,
+		security.Actor,
+		UploadInput,
+	) (File, error)
+	RenameFile(
+		context.Context,
+		security.Actor,
+		RenameFileInput,
+	) (File, error)
+	RenameFolder(
+		context.Context,
+		security.Actor,
+		RenameFolderInput,
+	) (Folder, error)
+	MoveItems(
+		context.Context,
+		security.Actor,
+		MoveItemsInput,
+	) ([]Folder, []File, error)
+	DeleteItems(
+		context.Context,
+		security.Actor,
+		DeleteItemsInput,
+	) error
 }
 
 func CloneFolder(item Folder) Folder {

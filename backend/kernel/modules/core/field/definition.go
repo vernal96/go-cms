@@ -3,6 +3,8 @@ package field
 import (
 	"fmt"
 	"reflect"
+
+	"github.com/vernal96/go-cms/kernel/filesystem"
 )
 
 type TypeCode string
@@ -17,6 +19,7 @@ const (
 	TypeTextarea TypeCode = "textarea"
 	TypeEmail    TypeCode = "email"
 	TypePhone    TypeCode = "phone"
+	TypeFile     TypeCode = "file"
 )
 
 type Definition struct {
@@ -52,6 +55,11 @@ type SelectOptions struct {
 
 type PhoneOptions struct {
 	Pattern string
+}
+
+type FileOptions struct {
+	Storages  []filesystem.Code
+	MIMETypes []string
 }
 
 type Type interface {
@@ -204,6 +212,20 @@ func cloneOptions(options any) any {
 			return (*PhoneOptions)(nil)
 		}
 		result := *typed
+		return &result
+
+	case FileOptions:
+		typed.Storages = append([]filesystem.Code(nil), typed.Storages...)
+		typed.MIMETypes = append([]string(nil), typed.MIMETypes...)
+		return typed
+
+	case *FileOptions:
+		if typed == nil {
+			return (*FileOptions)(nil)
+		}
+		result := *typed
+		result.Storages = append([]filesystem.Code(nil), typed.Storages...)
+		result.MIMETypes = append([]string(nil), typed.MIMETypes...)
 		return &result
 
 	default:

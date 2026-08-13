@@ -114,7 +114,8 @@ async function save(): Promise<void> {
   }
 }
 
-function entityLabel(row: { key: string; module: string; entity: string }): string {
+function entityLabel(value: unknown): string {
+	const row = value as { key: string; module: string; entity: string }
   const labels: Record<string, string> = {
     'admin.panel': 'Административная панель',
     'core.site': 'Сайты',

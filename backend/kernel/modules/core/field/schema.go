@@ -144,6 +144,38 @@ func (s *Schema) Definitions() []Definition {
 	return CloneDefinitions(s.definitions)
 }
 
+type FileReference struct {
+	Key     string
+	ID      int64
+	Options FileOptions
+}
+
+func (s *Schema) FileReferences(values map[string]any) ([]FileReference, error) {
+	if s == nil {
+		return nil, errors.New("field schema is nil")
+	}
+	result := make([]FileReference, 0)
+	for _, definition := range s.definitions {
+		if definition.Type != TypeFile {
+			continue
+		}
+		value, exists := values[definition.Key]
+		if !exists || inputEmpty(value) {
+			continue
+		}
+		id, ok := normalizeInteger(value)
+		if !ok || id <= 0 {
+			return nil, fmt.Errorf("file field %q has invalid value", definition.Key)
+		}
+		options, err := FileOptionsValue(definition.Options)
+		if err != nil {
+			return nil, fmt.Errorf("file field %q options: %w", definition.Key, err)
+		}
+		result = append(result, FileReference{Key: definition.Key, ID: id, Options: options})
+	}
+	return result, nil
+}
+
 func (s *Schema) Validate(
 	values map[string]any,
 ) (map[string]any, error) {

@@ -1274,9 +1274,10 @@ func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Resource) != 6 ||
+	if len(payload.Resource) != 8 ||
 		payload.Resource["id"] != float64(7) ||
 		payload.Resource["title"] != "Page" ||
+		payload.Resource["annotation"] != "" ||
 		payload.Resource["content"] != "Content" {
 		t.Fatalf("resource payload = %#v", payload.Resource)
 	}

@@ -57,6 +57,7 @@ export type FieldType =
   | 'textarea'
   | 'email'
   | 'phone'
+  | 'file'
 
 export interface FieldChoice {
   value: string
@@ -68,6 +69,66 @@ export interface FieldOptions {
   choices?: FieldChoice[]
   multiple?: boolean
   pattern?: string
+  storages?: string[]
+  mime_types?: string[]
+}
+
+export type FilesystemItemKind = 'file' | 'folder'
+
+export interface FilesystemDisk {
+  code: string
+  visibility: 'public' | 'private'
+}
+
+export interface FilesystemItem {
+  kind: FilesystemItemKind
+  id: number
+  parent_id: number | null
+  storage: string
+  name: string
+  mime_type?: string
+  size?: number
+  item_count?: number
+  created_at: string
+  updated_at: string
+}
+
+export interface FilesystemDisksResponse {
+  items: FilesystemDisk[]
+  permissions: PermissionSet
+}
+
+export interface FilesystemListingResponse {
+  disk: FilesystemDisk
+  folder: FilesystemItem | null
+  breadcrumbs: Array<{ id: number; name: string }>
+  items: FilesystemItem[]
+  permissions: PermissionSet
+}
+
+export interface ProfileAvatar {
+  file_id: number
+  name: string
+  mime_type: string
+  size: number
+  updated_at: string
+}
+
+export interface ProfileUser {
+  id: number
+  login: string
+  email: string
+  name: string
+  last_name: string | null
+  middle_name: string | null
+  phone: string | null
+  color_scheme: import('./auth').ColorScheme
+  accent_color: import('./auth').AccentColor
+  avatar: ProfileAvatar | null
+}
+
+export interface ProfileResponse {
+  user: ProfileUser
 }
 
 export interface FieldDefinition {
@@ -126,6 +187,9 @@ export interface ResourceTreeItem {
   title: string
   menu_title: string
   display_title: string
+  sort: number
+  deleted: boolean
+  deleted_at: string | null
   has_children: boolean
   can_create_child: boolean
 }
@@ -166,6 +230,8 @@ export interface Resource {
   menu_title: string
   slug: string
   path: string | null
+  annotation: string
+  content_type: string | null
   content: string
   external_url: string | null
   is_public: boolean
@@ -173,12 +239,16 @@ export interface Resource {
   in_menu: boolean
   in_sitemap: boolean
   sort: number
+  published_at: string | null
+  unpublished_at: string | null
+  deleted: boolean
+  deleted_at: string | null
   settings: Record<string, unknown>
 }
 
 export interface ResourceDetailsResponse {
   resource: Resource
-  permissions: { update: boolean }
+  permissions: { update: boolean; delete: boolean; restore: boolean }
 }
 
 export interface ResourceOption {
@@ -199,6 +269,8 @@ export interface ResourceUpdatePayload {
   title: string
   menu_title: string
   slug: string
+  annotation: string
+  content_type: 'html' | null
   content: string
   external_url: string | null
   is_public: boolean
@@ -206,6 +278,8 @@ export interface ResourceUpdatePayload {
   in_menu: boolean
   in_sitemap: boolean
   sort: number
+  published_at: string | null
+  unpublished_at: string | null
   settings: Record<string, unknown>
 }
 

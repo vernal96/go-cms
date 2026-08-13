@@ -83,13 +83,15 @@ INSERT INTO core.users
     middle_name,
     phone,
     avatar_media_id,
+    color_scheme,
+    accent_color,
     created_by,
     updated_by
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
 RETURNING
     id, login, email, password_hash, name,
-    last_name, middle_name, phone, avatar_media_id,
+    last_name, middle_name, phone, avatar_media_id, color_scheme, accent_color,
     last_login_at, created_at, updated_at, blocked_at,
     created_by, updated_by, blocked_by;
 `,
@@ -101,6 +103,8 @@ RETURNING
 		record.MiddleName,
 		record.Phone,
 		record.AvatarMediaID,
+		record.ColorScheme,
+		record.AccentColor,
 		actorID,
 	))
 	if err != nil {
@@ -190,7 +194,7 @@ func (r *Repository) ByID(
 	record, err := scanRecord(r.connector.Pool().QueryRow(ctx, `
 SELECT
     id, login, email, password_hash, name,
-    last_name, middle_name, phone, avatar_media_id,
+    last_name, middle_name, phone, avatar_media_id, color_scheme, accent_color,
     last_login_at, created_at, updated_at, blocked_at,
     created_by, updated_by, blocked_by
 FROM core.users
@@ -209,7 +213,7 @@ func (r *Repository) ByIdentifier(
 	record, err := scanRecord(r.connector.Pool().QueryRow(ctx, `
 SELECT
     id, login, email, password_hash, name,
-    last_name, middle_name, phone, avatar_media_id,
+    last_name, middle_name, phone, avatar_media_id, color_scheme, accent_color,
     last_login_at, created_at, updated_at, blocked_at,
     created_by, updated_by, blocked_by
 FROM core.users
@@ -228,7 +232,7 @@ func (r *Repository) List(
 	rows, err := r.connector.Pool().Query(ctx, `
 SELECT
     id, login, email, password_hash, name,
-    last_name, middle_name, phone, avatar_media_id,
+    last_name, middle_name, phone, avatar_media_id, color_scheme, accent_color,
     last_login_at, created_at, updated_at, blocked_at,
     created_by, updated_by, blocked_by
 FROM core.users
@@ -272,7 +276,7 @@ SELECT count(*) FROM core.users WHERE `+predicate+`;
 	rows, err := r.connector.Pool().Query(ctx, `
 SELECT
     id, login, email, password_hash, name,
-    last_name, middle_name, phone, avatar_media_id,
+    last_name, middle_name, phone, avatar_media_id, color_scheme, accent_color,
     last_login_at, created_at, updated_at, blocked_at,
     created_by, updated_by, blocked_by
 FROM core.users
@@ -332,7 +336,7 @@ func (r *Repository) Update(
 	locked, err := scanRecord(transaction.QueryRow(ctx, `
 SELECT
     id, login, email, password_hash, name,
-    last_name, middle_name, phone, avatar_media_id,
+    last_name, middle_name, phone, avatar_media_id, color_scheme, accent_color,
     last_login_at, created_at, updated_at, blocked_at,
     created_by, updated_by, blocked_by
 FROM core.users
@@ -389,12 +393,14 @@ SET
     middle_name = $6,
     phone = $7,
     avatar_media_id = $8,
+    color_scheme = $9,
+    accent_color = $10,
     updated_at = now(),
-    updated_by = $9
+    updated_by = $11
 WHERE id = $1
 RETURNING
     id, login, email, password_hash, name,
-    last_name, middle_name, phone, avatar_media_id,
+    last_name, middle_name, phone, avatar_media_id, color_scheme, accent_color,
     last_login_at, created_at, updated_at, blocked_at,
     created_by, updated_by, blocked_by;
 `,
@@ -406,6 +412,8 @@ RETURNING
 		next.MiddleName,
 		next.Phone,
 		next.AvatarMediaID,
+		next.ColorScheme,
+		next.AccentColor,
 		actorID,
 	))
 	if err != nil {
@@ -445,7 +453,7 @@ SET
 WHERE id = $1
 RETURNING
     id, login, email, password_hash, name,
-    last_name, middle_name, phone, avatar_media_id,
+    last_name, middle_name, phone, avatar_media_id, color_scheme, accent_color,
     last_login_at, created_at, updated_at, blocked_at,
     created_by, updated_by, blocked_by;
 `, id, passwordHash, actorID))
@@ -471,7 +479,7 @@ WHERE id = $1
   AND blocked_at IS NULL
 RETURNING
     id, login, email, password_hash, name,
-    last_name, middle_name, phone, avatar_media_id,
+    last_name, middle_name, phone, avatar_media_id, color_scheme, accent_color,
     last_login_at, created_at, updated_at, blocked_at,
     created_by, updated_by, blocked_by;
 `, id, passwordHash))
@@ -505,7 +513,7 @@ func (r *Repository) Block(
 	current, err := scanRecord(transaction.QueryRow(ctx, `
 SELECT
     id, login, email, password_hash, name,
-    last_name, middle_name, phone, avatar_media_id,
+    last_name, middle_name, phone, avatar_media_id, color_scheme, accent_color,
     last_login_at, created_at, updated_at, blocked_at,
     created_by, updated_by, blocked_by
 FROM core.users
@@ -559,7 +567,7 @@ SET
 WHERE id = $1
 RETURNING
     id, login, email, password_hash, name,
-    last_name, middle_name, phone, avatar_media_id,
+    last_name, middle_name, phone, avatar_media_id, color_scheme, accent_color,
     last_login_at, created_at, updated_at, blocked_at,
     created_by, updated_by, blocked_by;
 `, id, actorID))
@@ -590,7 +598,7 @@ SET
 WHERE id = $1
 RETURNING
     id, login, email, password_hash, name,
-    last_name, middle_name, phone, avatar_media_id,
+    last_name, middle_name, phone, avatar_media_id, color_scheme, accent_color,
     last_login_at, created_at, updated_at, blocked_at,
     created_by, updated_by, blocked_by;
 `, id, actorID))
@@ -664,6 +672,8 @@ func scanRecord(scanner rowScanner) (user.Record, error) {
 		&record.MiddleName,
 		&record.Phone,
 		&record.AvatarMediaID,
+		&record.ColorScheme,
+		&record.AccentColor,
 		&record.LastLoginAt,
 		&record.CreatedAt,
 		&record.UpdatedAt,

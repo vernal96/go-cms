@@ -10,6 +10,8 @@ describe('admin router', () => {
     expect(routes.find((route) => route.path === '/')?.redirect).toBe('/admin/dashboard')
     expect(routes.find((route) => route.path === '/admin')?.redirect).toBe('/admin/dashboard')
     expect(routes.find((route) => route.path === '/admin/dashboard')?.components?.default).toBeTruthy()
+    expect(routes.find((route) => route.path === '/admin/files')?.components?.default).toBeTruthy()
+    expect(routes.find((route) => route.path === '/admin/profile')?.components?.default).toBeTruthy()
     expect(routes.find((route) => route.path === '/:pathMatch(.*)*')?.redirect).toBe('/admin/dashboard')
   })
 })

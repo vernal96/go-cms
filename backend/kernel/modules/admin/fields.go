@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 
+	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 )
 
@@ -14,10 +15,12 @@ type FieldChoice struct {
 }
 
 type FieldOptions struct {
-	Step     *float64      `json:"step,omitempty"`
-	Choices  []FieldChoice `json:"choices,omitempty"`
-	Multiple *bool         `json:"multiple,omitempty"`
-	Pattern  *string       `json:"pattern,omitempty"`
+	Step      *float64          `json:"step,omitempty"`
+	Choices   []FieldChoice     `json:"choices,omitempty"`
+	Multiple  *bool             `json:"multiple,omitempty"`
+	Pattern   *string           `json:"pattern,omitempty"`
+	Storages  []filesystem.Code `json:"storages,omitempty"`
+	MIMETypes []string          `json:"mime_types,omitempty"`
 }
 
 type FieldDefinition struct {
@@ -128,6 +131,16 @@ func fieldDefinition(definition field.Definition) (FieldDefinition, error) {
 			pattern = e164Pattern
 		}
 		result.Options = &FieldOptions{Pattern: &pattern}
+
+	case field.TypeFile:
+		options, err := field.FileOptionsValue(definition.Options)
+		if err != nil {
+			return FieldDefinition{}, fieldOptionsError(definition, err)
+		}
+		result.Options = &FieldOptions{
+			Storages:  append([]filesystem.Code(nil), options.Storages...),
+			MIMETypes: append([]string(nil), options.MIMETypes...),
+		}
 
 	default:
 		return FieldDefinition{}, fmt.Errorf(

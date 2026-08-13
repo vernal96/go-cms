@@ -377,6 +377,47 @@ func (r *cachedResourceRepository) Delete(
 	return nil
 }
 
+func (r *cachedResourceRepository) SoftDelete(
+	ctx context.Context,
+	actorID *security.UserID,
+	id resource.ID,
+) error {
+	current, err := r.base.ByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	lifecycle, ok := r.base.(resource.LifecycleRepository)
+	if !ok {
+		return errors.New("resource lifecycle repository is unavailable")
+	}
+	if err := lifecycle.SoftDelete(ctx, actorID, id); err != nil {
+		return err
+	}
+	invalidateTags(ctx, r.store, siteTag(current.SiteID), resourceTag(id))
+	return nil
+}
+
+func (r *cachedResourceRepository) Restore(
+	ctx context.Context,
+	actorID *security.UserID,
+	id resource.ID,
+	withDescendants bool,
+) error {
+	current, err := r.base.ByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	lifecycle, ok := r.base.(resource.LifecycleRepository)
+	if !ok {
+		return errors.New("resource lifecycle repository is unavailable")
+	}
+	if err := lifecycle.Restore(ctx, actorID, id, withDescendants); err != nil {
+		return err
+	}
+	invalidateTags(ctx, r.store, siteTag(current.SiteID), resourceTag(id))
+	return nil
+}
+
 func cacheRead[T any](
 	ctx context.Context,
 	store cache.Store,

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
@@ -38,6 +39,7 @@ type Resource struct {
 	MenuTitle        string
 	Slug             string
 	Path             *string
+	Annotation       string
 	Content          string
 	ImageMediaID     *media.ID
 	TargetResourceID *ID
@@ -55,6 +57,9 @@ type Resource struct {
 	UpdatedAt        time.Time
 	CreatedBy        *security.UserID
 	UpdatedBy        *security.UserID
+	DeletedAt        *time.Time
+	DeletedBy        *security.UserID
+	FileReferences   map[string]file.ID
 }
 
 type CreateInput struct {
@@ -66,6 +71,7 @@ type CreateInput struct {
 	Title            string
 	MenuTitle        string
 	Slug             string
+	Annotation       string
 	Content          string
 	ImageMediaID     *media.ID
 	TargetResourceID *ID
@@ -90,6 +96,7 @@ type UpdateInput struct {
 	Title            string
 	MenuTitle        string
 	Slug             string
+	Annotation       string
 	Content          string
 	ImageMediaID     *media.ID
 	TargetResourceID *ID
@@ -129,6 +136,8 @@ type Child struct {
 	Template    *template.Code
 	Title       string
 	MenuTitle   string
+	Sort        int
+	DeletedAt   *time.Time
 	HasChildren bool
 }
 
@@ -152,6 +161,12 @@ type Repository interface {
 		ValidateImageMedia,
 	) (Resource, error)
 	Delete(context.Context, ID) error
+}
+
+type LifecycleRepository interface {
+	Repository
+	SoftDelete(context.Context, *security.UserID, ID) error
+	Restore(context.Context, *security.UserID, ID, bool) error
 }
 
 type ManagementRepository interface {
@@ -192,7 +207,21 @@ func Clone(item Resource) Resource {
 	item.Widgets = cloneWidgetBindings(item.Widgets)
 	item.CreatedBy = cloneUserID(item.CreatedBy)
 	item.UpdatedBy = cloneUserID(item.UpdatedBy)
+	item.DeletedAt = cloneTime(item.DeletedAt)
+	item.DeletedBy = cloneUserID(item.DeletedBy)
+	item.FileReferences = cloneFileReferences(item.FileReferences)
 	return item
+}
+
+func cloneFileReferences(source map[string]file.ID) map[string]file.ID {
+	if source == nil {
+		return nil
+	}
+	result := make(map[string]file.ID, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 func cloneWidgetBindings(source []WidgetBinding) []WidgetBinding {

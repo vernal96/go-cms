@@ -61,6 +61,10 @@ type Definition struct {
 	Caches              []cache.Factory
 	Profiles            []kernel.Profile
 	SiteAccessPolicy    admin.SiteAccessPolicy
+	MaxUploadSize       int64
+	UploadTimeout       time.Duration
+	AvatarStorage       filesystem.Code
+	AvatarMaxSize       int64
 }
 
 type bindingRuntime struct {
@@ -466,6 +470,7 @@ func (a *App) boot(ctx context.Context) error {
 		runtimeCoreDatabase.Sites(),
 		profileResolver(profileRuntimes),
 		accessService,
+		fileService,
 	)
 	if err != nil {
 		return err
@@ -480,6 +485,7 @@ func (a *App) boot(ctx context.Context) error {
 		catalog,
 		mediaService,
 		accessService,
+		fileService,
 	)
 	if err != nil {
 		return err
@@ -515,6 +521,12 @@ func (a *App) boot(ctx context.Context) error {
 		Groups:             groupService,
 		GroupRepository:    groupManagementRepository,
 		Access:             accessService,
+		Files:              fileService,
+		Media:              mediaService,
+		MaxUploadSize:      a.definition.MaxUploadSize,
+		UploadTimeout:      a.definition.UploadTimeout,
+		AvatarStorage:      a.definition.AvatarStorage,
+		AvatarMaxSize:      a.definition.AvatarMaxSize,
 	})
 	if err != nil {
 		return err
@@ -2116,6 +2128,15 @@ func validateDefinition(definition Definition) error {
 	if definition.SiteAccessPolicy == nil {
 		return errors.New("site access policy is nil")
 	}
+	if definition.MaxUploadSize < 0 {
+		return errors.New("maximum upload size is invalid")
+	}
+	if definition.UploadTimeout < 0 {
+		return errors.New("upload timeout is invalid")
+	}
+	if definition.AvatarMaxSize < 0 {
+		return errors.New("avatar maximum size is invalid")
+	}
 
 	filesystemCodes := make(
 		map[filesystem.Code]struct{},
@@ -2142,6 +2163,11 @@ func validateDefinition(definition Definition) error {
 			)
 		}
 		filesystemCodes[code] = struct{}{}
+	}
+	if definition.AvatarStorage != "" {
+		if _, exists := filesystemCodes[definition.AvatarStorage]; !exists {
+			return fmt.Errorf("avatar filesystem disk %q is unavailable", definition.AvatarStorage)
+		}
 	}
 
 	cacheCodes := make(

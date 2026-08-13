@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
@@ -25,10 +26,14 @@ type sessionResponse struct {
 }
 
 type sessionUser struct {
-	ID          user.ID `json:"id"`
-	Login       string  `json:"login"`
-	Email       string  `json:"email"`
-	DisplayName string  `json:"display_name"`
+	ID              user.ID          `json:"id"`
+	Login           string           `json:"login"`
+	Email           string           `json:"email"`
+	DisplayName     string           `json:"display_name"`
+	ColorScheme     user.ColorScheme `json:"color_scheme"`
+	AccentColor     user.AccentColor `json:"accent_color"`
+	HasAvatar       bool             `json:"has_avatar"`
+	AvatarUpdatedAt *time.Time       `json:"avatar_updated_at"`
 }
 
 func (r *Runtime) HTTP() httptransport.Builder {
@@ -200,12 +205,21 @@ func (r *Runtime) serveSession(
 	}
 
 	response.Header().Set("Content-Type", "application/json; charset=utf-8")
+	var avatarUpdatedAt *time.Time
+	if current.AvatarMediaID != nil {
+		value := current.UpdatedAt
+		avatarUpdatedAt = &value
+	}
 	_ = json.NewEncoder(response).Encode(sessionResponse{
 		User: sessionUser{
-			ID:          current.ID,
-			Login:       current.Login,
-			Email:       current.Email,
-			DisplayName: displayName(current),
+			ID:              current.ID,
+			Login:           current.Login,
+			Email:           current.Email,
+			DisplayName:     displayName(current),
+			ColorScheme:     current.ColorScheme,
+			AccentColor:     current.AccentColor,
+			HasAvatar:       current.AvatarMediaID != nil,
+			AvatarUpdatedAt: avatarUpdatedAt,
 		},
 		Permissions: permissions,
 	})

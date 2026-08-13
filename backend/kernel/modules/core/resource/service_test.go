@@ -395,6 +395,71 @@ func (r *memoryRepository) Delete(
 	return nil
 }
 
+func (r *memoryRepository) SoftDelete(
+	_ context.Context,
+	actorID *security.UserID,
+	id ID,
+) error {
+	if r.deleteError != nil {
+		return r.deleteError
+	}
+	if _, exists := r.items[id]; !exists {
+		return ErrNotFound
+	}
+	now := time.Now().UTC()
+	deleted := map[ID]bool{id: true}
+	for changed := true; changed; {
+		changed = false
+		for candidateID, item := range r.items {
+			if item.ParentID != nil && deleted[*item.ParentID] && !deleted[candidateID] {
+				deleted[candidateID] = true
+				changed = true
+			}
+		}
+	}
+	for deletedID := range deleted {
+		item := r.items[deletedID]
+		item.DeletedAt = &now
+		item.DeletedBy = cloneUserID(actorID)
+		r.items[deletedID] = item
+	}
+	return nil
+}
+
+func (r *memoryRepository) Restore(
+	_ context.Context,
+	_ *security.UserID,
+	id ID,
+	withDescendants bool,
+) error {
+	item, exists := r.items[id]
+	if !exists {
+		return ErrNotFound
+	}
+	if item.ParentID != nil && r.items[*item.ParentID].DeletedAt != nil {
+		return ErrInvalidTree
+	}
+	restored := map[ID]bool{id: true}
+	if withDescendants {
+		for changed := true; changed; {
+			changed = false
+			for candidateID, candidate := range r.items {
+				if candidate.ParentID != nil && restored[*candidate.ParentID] && !restored[candidateID] {
+					restored[candidateID] = true
+					changed = true
+				}
+			}
+		}
+	}
+	for restoredID := range restored {
+		candidate := r.items[restoredID]
+		candidate.DeletedAt = nil
+		candidate.DeletedBy = nil
+		r.items[restoredID] = candidate
+	}
+	return nil
+}
+
 func sameTestMediaID(left, right *media.ID) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
@@ -935,7 +1000,7 @@ func TestServiceUpdateMovesSubtreeAndBuildsSortedTree(t *testing.T) {
 		ParentID:     &second.ID,
 		Type:         resourcetype.Page,
 		Template:     &templateCode,
-		ContentType:  testStringPointer("xml"),
+		ContentType:  testStringPointer("html"),
 		Title:        "Moved child",
 		Slug:         "renamed",
 		IsPublic:     true,
@@ -1149,20 +1214,20 @@ func TestServiceDeleteCascadeAndReferenceProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := service.Delete(context.Background(), security.System(), root.ID); !errors.Is(
+	if err := service.DeletePermanent(context.Background(), security.System(), root.ID); !errors.Is(
 		err,
 		ErrReferenced,
 	) {
 		t.Fatalf("referenced delete error = %v", err)
 	}
-	if err := service.Delete(
+	if err := service.DeletePermanent(
 		context.Background(),
 		security.System(),
 		externalLink.ID,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Delete(context.Background(), security.System(), root.ID); err != nil {
+	if err := service.DeletePermanent(context.Background(), security.System(), root.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.Get(
@@ -1171,6 +1236,53 @@ func TestServiceDeleteCascadeAndReferenceProtection(t *testing.T) {
 		child.ID,
 	); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted child error = %v", err)
+	}
+}
+
+func TestServiceSoftDeleteAndRestoreSubtree(t *testing.T) {
+	service, repository, _ := newTestService(t)
+	templateCode := template.Code("empty")
+	root, err := service.Create(context.Background(), security.System(), CreateInput{
+		SiteID: 1, Template: &templateCode, Title: "Root", Slug: "root",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := service.Create(context.Background(), security.System(), CreateInput{
+		SiteID: 1, ParentID: &root.ID, Template: &templateCode, Title: "Child", Slug: "child",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grandchild, err := service.Create(context.Background(), security.System(), CreateInput{
+		SiteID: 1, ParentID: &child.ID, Template: &templateCode, Title: "Grandchild", Slug: "grandchild",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := service.Delete(context.Background(), security.System(), root.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []ID{root.ID, child.ID, grandchild.ID} {
+		if repository.items[id].DeletedAt == nil {
+			t.Fatalf("resource %d was not soft-deleted", id)
+		}
+	}
+	if err := service.Restore(context.Background(), security.System(), child.ID, false); !errors.Is(err, ErrInvalidTree) {
+		t.Fatalf("restore under deleted parent error = %v", err)
+	}
+	if err := service.Restore(context.Background(), security.System(), root.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if repository.items[root.ID].DeletedAt != nil || repository.items[child.ID].DeletedAt == nil {
+		t.Fatalf("single restore state = %#v", repository.items)
+	}
+	if err := service.Restore(context.Background(), security.System(), child.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if repository.items[child.ID].DeletedAt != nil || repository.items[grandchild.ID].DeletedAt != nil {
+		t.Fatalf("recursive restore state = %#v", repository.items)
 	}
 }
 
@@ -1389,7 +1501,7 @@ func TestServiceDeletingResourceTreeDeletesItsMedia(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := service.Delete(context.Background(), security.System(), root.ID); err != nil {
+	if err := service.DeletePermanent(context.Background(), security.System(), root.ID); err != nil {
 		t.Fatal(err)
 	}
 	if len(repository.items) != 0 {

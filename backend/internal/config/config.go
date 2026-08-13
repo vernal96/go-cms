@@ -31,8 +31,12 @@ type Config struct {
 }
 
 type FilesConfig struct {
-	Public  corefiles.Config `envconfig:"PUBLIC"`
-	Private corefiles.Config `envconfig:"PRIVATE"`
+	Public        corefiles.Config `envconfig:"PUBLIC"`
+	Private       corefiles.Config `envconfig:"PRIVATE"`
+	MaxUploadSize int64            `envconfig:"MAX_UPLOAD_SIZE" default:"104857600"`
+	UploadTimeout time.Duration    `envconfig:"UPLOAD_TIMEOUT" default:"10m"`
+	AvatarStorage filesystem.Code  `envconfig:"AVATAR_STORAGE" default:"private"`
+	AvatarMaxSize int64            `envconfig:"AVATAR_MAX_SIZE" default:"5242880"`
 }
 
 type ServerConfig struct {
@@ -68,5 +72,9 @@ func (c Config) Application() appkernel.Definition {
 		},
 		Profiles:         []kernel.Profile{dev.Profile},
 		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		MaxUploadSize:    c.Files.MaxUploadSize,
+		UploadTimeout:    c.Files.UploadTimeout,
+		AvatarStorage:    c.Files.AvatarStorage,
+		AvatarMaxSize:    c.Files.AvatarMaxSize,
 	}
 }

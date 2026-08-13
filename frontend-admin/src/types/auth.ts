@@ -19,7 +19,14 @@ export interface AdminUser {
   login: string
   email: string
   display_name: string
+  color_scheme: ColorScheme
+  accent_color: AccentColor
+  has_avatar: boolean
+  avatar_updated_at: string | null
 }
+
+export type ColorScheme = 'light' | 'dark' | 'system'
+export type AccentColor = 'blue' | 'violet' | 'indigo' | 'emerald' | 'amber' | 'rose'
 
 export interface AdminSessionResponse {
   user: AdminUser

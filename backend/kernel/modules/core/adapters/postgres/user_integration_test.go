@@ -109,9 +109,11 @@ WHERE code IN ('console-group-one', 'console-group-two');
 		nil,
 		user.Record{
 			User: user.User{
-				Login: "console-atomic-user",
-				Email: "console-atomic-user@example.test",
-				Name:  "Console Atomic User",
+				Login:       "console-atomic-user",
+				Email:       "console-atomic-user@example.test",
+				Name:        "Console Atomic User",
+				ColorScheme: user.ColorSchemeSystem,
+				AccentColor: user.AccentColorBlue,
 			},
 			PasswordHash: "integration-password-hash",
 		},
@@ -142,9 +144,11 @@ WHERE user_id = $1;
 		nil,
 		user.Record{
 			User: user.User{
-				Login: "console-atomic-user",
-				Email: "other-console-user@example.test",
-				Name:  "Duplicate Login",
+				Login:       "console-atomic-user",
+				Email:       "other-console-user@example.test",
+				Name:        "Duplicate Login",
+				ColorScheme: user.ColorSchemeSystem,
+				AccentColor: user.AccentColorBlue,
 			},
 			PasswordHash: "integration-password-hash",
 		},
@@ -159,9 +163,11 @@ WHERE user_id = $1;
 		nil,
 		user.Record{
 			User: user.User{
-				Login: "other-console-user",
-				Email: "console-atomic-user@example.test",
-				Name:  "Duplicate Email",
+				Login:       "other-console-user",
+				Email:       "console-atomic-user@example.test",
+				Name:        "Duplicate Email",
+				ColorScheme: user.ColorSchemeSystem,
+				AccentColor: user.AccentColorBlue,
 			},
 			PasswordHash: "integration-password-hash",
 		},
@@ -177,9 +183,11 @@ WHERE user_id = $1;
 		nil,
 		user.Record{
 			User: user.User{
-				Login: "console-rollback-user",
-				Email: "console-rollback-user@example.test",
-				Name:  "Console Rollback User",
+				Login:       "console-rollback-user",
+				Email:       "console-rollback-user@example.test",
+				Name:        "Console Rollback User",
+				ColorScheme: user.ColorSchemeSystem,
+				AccentColor: user.AccentColorBlue,
 			},
 			PasswordHash: "integration-password-hash",
 		},

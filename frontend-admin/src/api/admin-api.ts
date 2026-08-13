@@ -88,6 +88,35 @@ export async function adminRequestVoid(
   }
 }
 
+export async function adminUpload<T>(
+	path: string,
+	accessToken: string,
+	body: FormData,
+): Promise<T> {
+	const headers = new Headers({ Authorization: `Bearer ${accessToken}` })
+	try {
+		return await requestJSON<T>(path, { method: 'POST', headers, body })
+	} catch (error) {
+		handleAdminError(error)
+		throw error
+	}
+}
+
+export async function adminBlob(
+	path: string,
+	accessToken: string,
+): Promise<Blob> {
+	const response = await fetch(path, {
+		headers: { Authorization: `Bearer ${accessToken}` },
+	})
+	if (!response.ok) {
+		const error = await responseError(response)
+		handleAdminError(error)
+		throw error
+	}
+	return response.blob()
+}
+
 function handleAdminError(error: unknown): void {
   if (error instanceof AdminAPIError && error.status === 401)
     unauthorizedHandler?.()

@@ -358,6 +358,92 @@ func TestCurrentReturnsOnlyAnActiveAuthenticatedUser(t *testing.T) {
 	}
 }
 
+func TestCurrentUserCanUpdateProfilePreferencesAndPassword(t *testing.T) {
+	t.Parallel()
+
+	service, repository, _ := newService(t)
+	avatar := media.ID(1)
+	repository.records[1] = Record{
+		User: User{
+			ID: 1, Login: "profile", Email: "profile@example.test",
+			Name: "Before", AvatarMediaID: &avatar,
+			ColorScheme: ColorSchemeSystem,
+		},
+		PasswordHash: "hash:current-password",
+	}
+	phone := " +7 900 "
+
+	updated, err := service.UpdateCurrent(
+		context.Background(),
+		security.User(1),
+		UpdateCurrentInput{Name: " After ", Phone: &phone},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Login != "profile" || updated.Email != "profile@example.test" ||
+		updated.Name != "After" || updated.Phone == nil || *updated.Phone != "+7 900" ||
+		updated.AvatarMediaID == nil || *updated.AvatarMediaID != avatar {
+		t.Fatalf("updated profile = %#v", updated)
+	}
+
+	updated, err = service.Update(
+		context.Background(),
+		security.System(),
+		UpdateInput{
+			ID: updated.ID, Login: updated.Login, Email: updated.Email,
+			Name: "Admin edit", Phone: updated.Phone,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.AvatarMediaID == nil || *updated.AvatarMediaID != avatar {
+		t.Fatalf("admin profile edit cleared avatar: %#v", updated)
+	}
+
+	updated, err = service.UpdateCurrentPreferences(
+		context.Background(), security.User(1), Preferences{
+			ColorScheme: ColorSchemeDark,
+			AccentColor: AccentColorViolet,
+		},
+	)
+	if err != nil || updated.ColorScheme != ColorSchemeDark ||
+		updated.AccentColor != AccentColorViolet {
+		t.Fatalf("updated preferences = %#v, %v", updated, err)
+	}
+	if _, err := service.UpdateCurrentPreferences(
+		context.Background(), security.User(1), Preferences{
+			ColorScheme: ColorScheme("sepia"),
+			AccentColor: AccentColorViolet,
+		},
+	); err == nil {
+		t.Fatal("invalid color scheme was accepted")
+	}
+	if _, err := service.UpdateCurrentPreferences(
+		context.Background(), security.User(1), Preferences{
+			ColorScheme: ColorSchemeDark,
+			AccentColor: AccentColor("turquoise"),
+		},
+	); err == nil {
+		t.Fatal("invalid accent color was accepted")
+	}
+
+	if _, err := service.ChangeCurrentPassword(
+		context.Background(), security.User(1), "wrong-password", "new-valid-password",
+	); !errors.Is(err, ErrInvalidCurrentPassword) {
+		t.Fatalf("wrong current password error = %v", err)
+	}
+	if _, err := service.ChangeCurrentPassword(
+		context.Background(), security.User(1), "current-password", "new-valid-password",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if repository.records[1].PasswordHash != "hash:new-valid-password" {
+		t.Fatalf("password hash = %q", repository.records[1].PasswordHash)
+	}
+}
+
 func TestCreateNormalizesIdentityAndReservesBlockedValues(
 	t *testing.T,
 ) {
@@ -382,6 +468,8 @@ func TestCreateNormalizesIdentityAndReservesBlockedValues(
 	if created.Login != "admin.user" ||
 		created.Email != "admin@example.test" ||
 		created.Name != "Administrator" ||
+		created.ColorScheme != ColorSchemeSystem ||
+		created.AccentColor != AccentColorBlue ||
 		created.CreatedBy == nil ||
 		*created.CreatedBy != 99 {
 		t.Fatalf("created user = %#v", created)

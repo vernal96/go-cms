@@ -148,12 +148,14 @@ type pageResourceResponse struct {
 }
 
 type pageResourcePayload struct {
-	ID       resource.ID       `json:"id"`
-	Type     resourcetype.Code `json:"type"`
-	Template *template.Code    `json:"template"`
-	Title    string            `json:"title"`
-	Path     *string           `json:"path"`
-	Content  string            `json:"content"`
+	ID          resource.ID       `json:"id"`
+	Type        resourcetype.Code `json:"type"`
+	Template    *template.Code    `json:"template"`
+	Title       string            `json:"title"`
+	Path        *string           `json:"path"`
+	Annotation  string            `json:"annotation"`
+	ContentType *string           `json:"content_type"`
+	Content     string            `json:"content"`
 }
 
 type pageWidgetResponse struct {
@@ -189,12 +191,14 @@ func (h pageResourceHandler) ServeHTTP(
 
 	result := pageResourceResponse{
 		Resource: pageResourcePayload{
-			ID:       item.ID,
-			Type:     item.Type,
-			Template: item.Template,
-			Title:    item.Title,
-			Path:     item.Path,
-			Content:  item.Content,
+			ID:          item.ID,
+			Type:        item.Type,
+			Template:    item.Template,
+			Title:       item.Title,
+			Path:        item.Path,
+			Annotation:  item.Annotation,
+			ContentType: item.ContentType,
+			Content:     item.Content,
 		},
 		Widgets: make([]pageWidgetResponse, 0, len(item.Widgets)),
 	}

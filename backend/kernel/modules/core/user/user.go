@@ -13,17 +13,37 @@ import (
 
 type ID = security.UserID
 
+type ColorScheme string
+
+const (
+	ColorSchemeLight  ColorScheme = "light"
+	ColorSchemeDark   ColorScheme = "dark"
+	ColorSchemeSystem ColorScheme = "system"
+)
+
+type AccentColor string
+
+const (
+	AccentColorBlue    AccentColor = "blue"
+	AccentColorViolet  AccentColor = "violet"
+	AccentColorIndigo  AccentColor = "indigo"
+	AccentColorEmerald AccentColor = "emerald"
+	AccentColorAmber   AccentColor = "amber"
+	AccentColorRose    AccentColor = "rose"
+)
+
 const AvatarMediaUsage media.UsageKind = "user.avatar"
 
 var (
-	ErrNotFound           = errors.New("user not found")
-	ErrConflict           = errors.New("user conflict")
-	ErrLoginExists        = &identityConflictError{field: "login"}
-	ErrEmailExists        = &identityConflictError{field: "email"}
-	ErrInvalidReference   = errors.New("invalid user reference")
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrSelfBlock          = errors.New("cannot block current user")
-	ErrLastAdministrator  = errors.New("cannot block last active administrator")
+	ErrNotFound               = errors.New("user not found")
+	ErrConflict               = errors.New("user conflict")
+	ErrLoginExists            = &identityConflictError{field: "login"}
+	ErrEmailExists            = &identityConflictError{field: "email"}
+	ErrInvalidReference       = errors.New("invalid user reference")
+	ErrInvalidCredentials     = errors.New("invalid credentials")
+	ErrInvalidCurrentPassword = errors.New("invalid current password")
+	ErrSelfBlock              = errors.New("cannot block current user")
+	ErrLastAdministrator      = errors.New("cannot block last active administrator")
 )
 
 type identityConflictError struct {
@@ -47,6 +67,8 @@ type User struct {
 	MiddleName    *string
 	Phone         *string
 	AvatarMediaID *media.ID
+	ColorScheme   ColorScheme
+	AccentColor   AccentColor
 	LastLoginAt   *time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
@@ -81,7 +103,20 @@ type UpdateInput struct {
 	LastName      *string
 	MiddleName    *string
 	Phone         *string
+	UpdateAvatar  bool
 	AvatarMediaID *media.ID
+}
+
+type UpdateCurrentInput struct {
+	Name       string
+	LastName   *string
+	MiddleName *string
+	Phone      *string
+}
+
+type Preferences struct {
+	ColorScheme ColorScheme
+	AccentColor AccentColor
 }
 
 type AuthenticateInput struct {
@@ -183,12 +218,16 @@ type Service interface {
 		security.Actor,
 		UpdateInput,
 	) (User, error)
+	UpdateCurrent(context.Context, security.Actor, UpdateCurrentInput) (User, error)
+	UpdateCurrentPreferences(context.Context, security.Actor, Preferences) (User, error)
+	UpdateCurrentAvatar(context.Context, security.Actor, *media.ID) (User, error)
 	ChangePassword(
 		context.Context,
 		security.Actor,
 		ID,
 		string,
 	) (User, error)
+	ChangeCurrentPassword(context.Context, security.Actor, string, string) (User, error)
 	Block(context.Context, security.Actor, ID) (User, error)
 	Unblock(context.Context, security.Actor, ID) (User, error)
 	Authenticate(context.Context, AuthenticateInput) (User, error)

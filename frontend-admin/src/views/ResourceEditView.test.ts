@@ -33,6 +33,8 @@ describe('ResourceEditView schema transitions', () => {
           menu_title: '',
           slug: '',
           path: '/',
+          annotation: '',
+          content_type: 'html',
           content: '',
           external_url: null,
           is_public: true,
@@ -40,9 +42,13 @@ describe('ResourceEditView schema transitions', () => {
           in_menu: true,
           in_sitemap: true,
           sort: 0,
+          published_at: null,
+          unpublished_at: null,
+          deleted: false,
+          deleted_at: null,
           settings: { page_title: 'Old title' },
         },
-        permissions: { update: true },
+        permissions: { update: true, delete: true, restore: true },
       })
       .mockResolvedValueOnce({
         types: [
@@ -100,7 +106,7 @@ describe('ResourceEditView schema transitions', () => {
 
     const selects = wrapper.findAllComponents({ name: 'ElSelect' })
     expect(selects).toHaveLength(3)
-    selects[2]?.vm.$emit('change', 'landing')
+    selects[0]?.vm.$emit('change', 'landing')
     await flushPromises()
 
     const model = wrapper
@@ -109,7 +115,7 @@ describe('ResourceEditView schema transitions', () => {
     expect(model.template_code).toBe('landing')
     expect(model.settings).toEqual({ hero_title: '', columns: null })
 
-    selects[1]?.vm.$emit('change', 'link')
+    selects[2]?.vm.$emit('change', 'link')
     await flushPromises()
     expect(model.type).toBe('link')
     expect(model.template_code).toBe('')

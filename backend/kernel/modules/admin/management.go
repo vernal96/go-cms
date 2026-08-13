@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/group"
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
@@ -50,6 +54,10 @@ var AdminPermissionCodes = []permission.Code{
 	GroupCreatePermission,
 	GroupUpdatePermission,
 	GroupDeletePermission,
+	FileReadPermission,
+	FileCreatePermission,
+	FileUpdatePermission,
+	FileDeletePermission,
 }
 
 type SiteAccessScope struct {
@@ -97,6 +105,12 @@ type Management struct {
 	groups        group.Service
 	groupRepo     group.ManagementRepository
 	access        access.Service
+	files         file.ManagementService
+	media         media.Service
+	maxUploadSize int64
+	uploadTimeout time.Duration
+	avatarStorage filesystem.Code
+	avatarMaxSize int64
 }
 
 type ManagementDependencies struct {
@@ -113,6 +127,12 @@ type ManagementDependencies struct {
 	Groups             group.Service
 	GroupRepository    group.ManagementRepository
 	Access             access.Service
+	Files              file.ManagementService
+	Media              media.Service
+	MaxUploadSize      int64
+	UploadTimeout      time.Duration
+	AvatarStorage      filesystem.Code
+	AvatarMaxSize      int64
 }
 
 func NewManagement(dependencies ManagementDependencies) (*Management, error) {
@@ -140,6 +160,24 @@ func NewManagement(dependencies ManagementDependencies) (*Management, error) {
 	if dependencies.Access == nil {
 		return nil, errors.New("admin access service is nil")
 	}
+	if dependencies.Files == nil {
+		return nil, errors.New("admin file service is nil")
+	}
+	if dependencies.Media == nil {
+		return nil, errors.New("admin media service is nil")
+	}
+	if dependencies.MaxUploadSize <= 0 {
+		dependencies.MaxUploadSize = 100 << 20
+	}
+	if dependencies.UploadTimeout <= 0 {
+		dependencies.UploadTimeout = 10 * time.Minute
+	}
+	if dependencies.AvatarStorage == "" {
+		dependencies.AvatarStorage = "private"
+	}
+	if dependencies.AvatarMaxSize <= 0 {
+		dependencies.AvatarMaxSize = 5 << 20
+	}
 	profiles := make([]kernel.Profile, len(dependencies.Profiles))
 	copy(profiles, dependencies.Profiles)
 	return &Management{
@@ -156,6 +194,12 @@ func NewManagement(dependencies ManagementDependencies) (*Management, error) {
 		groups:        dependencies.Groups,
 		groupRepo:     dependencies.GroupRepository,
 		access:        dependencies.Access,
+		files:         dependencies.Files,
+		media:         dependencies.Media,
+		maxUploadSize: dependencies.MaxUploadSize,
+		uploadTimeout: dependencies.UploadTimeout,
+		avatarStorage: dependencies.AvatarStorage,
+		avatarMaxSize: dependencies.AvatarMaxSize,
 	}, nil
 }
 
@@ -407,6 +451,9 @@ type ResourceTreeItem struct {
 	Title          string         `json:"title"`
 	MenuTitle      string         `json:"menu_title"`
 	DisplayTitle   string         `json:"display_title"`
+	Sort           int            `json:"sort"`
+	Deleted        bool           `json:"deleted"`
+	DeletedAt      *time.Time     `json:"deleted_at"`
 	HasChildren    bool           `json:"has_children"`
 	CanCreateChild bool           `json:"can_create_child"`
 }
@@ -558,51 +605,65 @@ func (m *Management) CreateResource(
 		Template:  created.Template,
 		Title:     created.Title,
 		MenuTitle: created.MenuTitle,
+		Sort:      created.Sort,
+		DeletedAt: created.DeletedAt,
 	}, true), nil
 }
 
 type ResourceDTO struct {
-	ID           resource.ID       `json:"id"`
-	SiteID       site.ID           `json:"site_id"`
-	ParentID     *resource.ID      `json:"parent_id"`
-	Type         resourcetype.Code `json:"type"`
-	TemplateCode *template.Code    `json:"template_code"`
-	Title        string            `json:"title"`
-	MenuTitle    string            `json:"menu_title"`
-	Slug         string            `json:"slug"`
-	Path         *string           `json:"path"`
-	Content      string            `json:"content"`
-	ExternalURL  *string           `json:"external_url"`
-	IsPublic     bool              `json:"is_public"`
-	IsSearchable bool              `json:"is_searchable"`
-	InMenu       bool              `json:"in_menu"`
-	InSitemap    bool              `json:"in_sitemap"`
-	Sort         int               `json:"sort"`
-	Settings     map[string]any    `json:"settings"`
+	ID            resource.ID       `json:"id"`
+	SiteID        site.ID           `json:"site_id"`
+	ParentID      *resource.ID      `json:"parent_id"`
+	Type          resourcetype.Code `json:"type"`
+	TemplateCode  *template.Code    `json:"template_code"`
+	Title         string            `json:"title"`
+	MenuTitle     string            `json:"menu_title"`
+	Slug          string            `json:"slug"`
+	Path          *string           `json:"path"`
+	Annotation    string            `json:"annotation"`
+	ContentType   *string           `json:"content_type"`
+	Content       string            `json:"content"`
+	ExternalURL   *string           `json:"external_url"`
+	IsPublic      bool              `json:"is_public"`
+	IsSearchable  bool              `json:"is_searchable"`
+	InMenu        bool              `json:"in_menu"`
+	InSitemap     bool              `json:"in_sitemap"`
+	Sort          int               `json:"sort"`
+	PublishedAt   *time.Time        `json:"published_at"`
+	UnpublishedAt *time.Time        `json:"unpublished_at"`
+	Deleted       bool              `json:"deleted"`
+	DeletedAt     *time.Time        `json:"deleted_at"`
+	Settings      map[string]any    `json:"settings"`
 }
 
 type ResourceDetails struct {
 	Resource    ResourceDTO `json:"resource"`
 	Permissions struct {
-		Update bool `json:"update"`
+		Update  bool `json:"update"`
+		Delete  bool `json:"delete"`
+		Restore bool `json:"restore"`
 	} `json:"permissions"`
 }
 
 type ResourceUpdateInput struct {
-	ParentID     *resource.ID
-	Type         resourcetype.Code
-	Template     *template.Code
-	Title        string
-	MenuTitle    string
-	Slug         string
-	Content      string
-	ExternalURL  *string
-	IsPublic     bool
-	IsSearchable bool
-	InMenu       bool
-	InSitemap    bool
-	Sort         int
-	Settings     map[string]any
+	ParentID      *resource.ID
+	Type          resourcetype.Code
+	Template      *template.Code
+	Title         string
+	MenuTitle     string
+	Slug          string
+	Annotation    string
+	ContentType   *string
+	Content       string
+	ExternalURL   *string
+	IsPublic      bool
+	IsSearchable  bool
+	InMenu        bool
+	InSitemap     bool
+	Sort          int
+	PublishedAt   *time.Time
+	UnpublishedAt *time.Time
+	Settings      map[string]any
 }
 
 func (m *Management) Resource(
@@ -627,6 +688,19 @@ func (m *Management) Resource(
 	}
 	result := ResourceDetails{Resource: resourceDTO(item)}
 	result.Permissions.Update = canUpdate
+	canDelete, err := m.allowed(ctx, actor, ResourceDeletePermission)
+	if err != nil {
+		return ResourceDetails{}, err
+	}
+	result.Permissions.Delete = canDelete
+	result.Permissions.Restore = canDelete
+	if item.ParentID != nil {
+		parent, parentErr := m.resources.Get(ctx, actor, *item.ParentID)
+		if parentErr != nil {
+			return ResourceDetails{}, parentErr
+		}
+		result.Permissions.Restore = canDelete && parent.DeletedAt == nil
+	}
 	return result, nil
 }
 
@@ -656,11 +730,8 @@ func (m *Management) UpdateResource(
 
 	var contentType *string
 	if input.Type == resourcetype.Page {
-		contentType = current.ContentType
-		if contentType == nil {
-			value := "html"
-			contentType = &value
-		}
+		value := "html"
+		contentType = &value
 	}
 	updated, err := m.resources.Update(ctx, actor, resource.UpdateInput{
 		ID:               resourceID,
@@ -671,6 +742,7 @@ func (m *Management) UpdateResource(
 		Title:            input.Title,
 		MenuTitle:        input.MenuTitle,
 		Slug:             input.Slug,
+		Annotation:       input.Annotation,
 		Content:          input.Content,
 		ImageMediaID:     current.ImageMediaID,
 		TargetResourceID: nil,
@@ -680,8 +752,8 @@ func (m *Management) UpdateResource(
 		InMenu:           input.InMenu,
 		InSitemap:        input.InSitemap,
 		Sort:             input.Sort,
-		PublishedAt:      current.PublishedAt,
-		UnpublishedAt:    current.UnpublishedAt,
+		PublishedAt:      input.PublishedAt,
+		UnpublishedAt:    input.UnpublishedAt,
 		Settings:         input.Settings,
 		Widgets:          widgetInputs(current.Widgets),
 	})
@@ -690,7 +762,90 @@ func (m *Management) UpdateResource(
 	}
 	result := ResourceDetails{Resource: resourceDTO(updated)}
 	result.Permissions.Update = true
+	canDelete, permissionErr := m.allowed(ctx, actor, ResourceDeletePermission)
+	if permissionErr != nil {
+		return ResourceDetails{}, permissionErr
+	}
+	result.Permissions.Delete = canDelete
+	result.Permissions.Restore = canDelete
 	return result, nil
+}
+
+func (m *Management) MoveResource(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+	resourceID resource.ID,
+	parentID *resource.ID,
+	position int,
+) (ResourceDTO, error) {
+	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission); err != nil {
+		return ResourceDTO{}, err
+	}
+	current, err := m.resources.Get(ctx, actor, resourceID)
+	if err != nil {
+		return ResourceDTO{}, err
+	}
+	if current.SiteID != siteID {
+		return ResourceDTO{}, resource.ErrNotFound
+	}
+	if parentID != nil {
+		parent, parentErr := m.resources.Get(ctx, actor, *parentID)
+		if parentErr != nil {
+			return ResourceDTO{}, parentErr
+		}
+		if parent.SiteID != siteID {
+			return ResourceDTO{}, resource.ErrInvalidTree
+		}
+	}
+	updated, err := m.resources.Move(ctx, actor, resourceID, parentID, position)
+	if err != nil {
+		return ResourceDTO{}, err
+	}
+	return resourceDTO(updated), nil
+}
+
+func (m *Management) DeleteResource(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+	resourceID resource.ID,
+	permanent bool,
+) error {
+	if err := m.requireSite(ctx, actor, siteID, ResourceDeletePermission); err != nil {
+		return err
+	}
+	current, err := m.resources.Get(ctx, actor, resourceID)
+	if err != nil {
+		return err
+	}
+	if current.SiteID != siteID {
+		return resource.ErrNotFound
+	}
+	if permanent {
+		return m.resources.DeletePermanent(ctx, actor, resourceID)
+	}
+	return m.resources.Delete(ctx, actor, resourceID)
+}
+
+func (m *Management) RestoreResource(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+	resourceID resource.ID,
+	withDescendants bool,
+) error {
+	if err := m.requireSite(ctx, actor, siteID, ResourceDeletePermission); err != nil {
+		return err
+	}
+	current, err := m.resources.Get(ctx, actor, resourceID)
+	if err != nil {
+		return err
+	}
+	if current.SiteID != siteID {
+		return resource.ErrNotFound
+	}
+	return m.resources.Restore(ctx, actor, resourceID, withDescendants)
 }
 
 type ResourceOption struct {
@@ -816,8 +971,11 @@ func treeItem(runtime *site.Runtime, item resource.Child, canCreate bool) Resour
 		Title:          item.Title,
 		MenuTitle:      item.MenuTitle,
 		DisplayTitle:   displayTitle,
+		Sort:           item.Sort,
+		Deleted:        item.DeletedAt != nil,
+		DeletedAt:      item.DeletedAt,
 		HasChildren:    item.HasChildren,
-		CanCreateChild: canCreate,
+		CanCreateChild: canCreate && item.DeletedAt == nil,
 	}
 }
 
@@ -827,23 +985,29 @@ func resourceDTO(item resource.Resource) ResourceDTO {
 		settings[key] = value
 	}
 	return ResourceDTO{
-		ID:           item.ID,
-		SiteID:       item.SiteID,
-		ParentID:     item.ParentID,
-		Type:         item.Type,
-		TemplateCode: item.Template,
-		Title:        item.Title,
-		MenuTitle:    item.MenuTitle,
-		Slug:         item.Slug,
-		Path:         item.Path,
-		Content:      item.Content,
-		ExternalURL:  item.ExternalURL,
-		IsPublic:     item.IsPublic,
-		IsSearchable: item.IsSearchable,
-		InMenu:       item.InMenu,
-		InSitemap:    item.InSitemap,
-		Sort:         item.Sort,
-		Settings:     settings,
+		ID:            item.ID,
+		SiteID:        item.SiteID,
+		ParentID:      item.ParentID,
+		Type:          item.Type,
+		TemplateCode:  item.Template,
+		Title:         item.Title,
+		MenuTitle:     item.MenuTitle,
+		Slug:          item.Slug,
+		Path:          item.Path,
+		Annotation:    item.Annotation,
+		ContentType:   item.ContentType,
+		Content:       item.Content,
+		ExternalURL:   item.ExternalURL,
+		IsPublic:      item.IsPublic,
+		IsSearchable:  item.IsSearchable,
+		InMenu:        item.InMenu,
+		InSitemap:     item.InSitemap,
+		Sort:          item.Sort,
+		PublishedAt:   item.PublishedAt,
+		UnpublishedAt: item.UnpublishedAt,
+		Deleted:       item.DeletedAt != nil,
+		DeletedAt:     item.DeletedAt,
+		Settings:      settings,
 	}
 }
 
@@ -862,6 +1026,9 @@ func widgetInputs(source []resource.WidgetBinding) []resource.WidgetInput {
 func appendResourceOptions(target *[]ResourceOption, nodes []resource.Node) {
 	for _, node := range nodes {
 		item := node.Resource
+		if item.DeletedAt != nil {
+			continue
+		}
 		displayTitle := strings.TrimSpace(item.MenuTitle)
 		if displayTitle == "" {
 			displayTitle = item.Title
@@ -887,6 +1054,9 @@ func iconOrDefault(icon string) string {
 }
 
 func validationError(err error) error {
+	if errors.Is(err, security.ErrUnauthenticated) || errors.Is(err, security.ErrForbidden) {
+		return err
+	}
 	if errors.Is(err, site.ErrConflict) || errors.Is(err, site.ErrNotFound) ||
 		errors.Is(err, resource.ErrConflict) || errors.Is(err, resource.ErrNotFound) {
 		return err
@@ -905,7 +1075,7 @@ func validationError(err error) error {
 		}
 	}
 	if errors.Is(err, site.ErrInvalid) || errors.Is(err, resource.ErrInvalid) ||
-		errors.Is(err, resource.ErrInvalidReference) || errors.Is(err, resource.ErrInvalidTree) {
+		errors.Is(err, resource.ErrInvalidReference) {
 		return fmt.Errorf("%w: request data is invalid", ErrValidation)
 	}
 	return err

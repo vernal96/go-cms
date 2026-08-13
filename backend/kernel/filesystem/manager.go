@@ -114,6 +114,20 @@ func (m *Manager) Disk(code Code) (Disk, bool) {
 	return disk, exists
 }
 
+func (m *Manager) Disks() []DiskInfo {
+	if m == nil {
+		return nil
+	}
+	result := make([]DiskInfo, 0, len(m.order))
+	for _, disk := range m.order {
+		result = append(result, DiskInfo{
+			Code:       disk.Code(),
+			Visibility: disk.Visibility(),
+		})
+	}
+	return result
+}
+
 func (m *Manager) Close() error {
 	if m == nil {
 		return nil

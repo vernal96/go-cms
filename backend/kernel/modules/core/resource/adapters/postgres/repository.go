@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres/medialock"
+	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
@@ -70,6 +72,16 @@ func (r *Repository) Create(
 			resultErr = errors.Join(resultErr, rollbackErr)
 		}
 	}()
+	if _, err := transaction.Exec(ctx, `LOCK TABLE core.resources IN SHARE ROW EXCLUSIVE MODE;`); err != nil {
+		return resource.Resource{}, fmt.Errorf("lock resources for create: %w", err)
+	}
+	if err := transaction.QueryRow(ctx, `
+SELECT COALESCE(max(sort) + 1, 0)
+FROM core.resources
+WHERE site_id = $1
+  AND parent_id IS NOT DISTINCT FROM $2::bigint;`, item.SiteID, item.ParentID).Scan(&item.Sort); err != nil {
+		return resource.Resource{}, fmt.Errorf("resolve resource create position: %w", err)
+	}
 
 	if item.ImageMediaID != nil {
 		if validate == nil {
@@ -115,9 +127,10 @@ INSERT INTO core.resources
     content_type,
     title,
     menu_title,
-    slug,
-    path,
-    content,
+	    slug,
+	    path,
+	    annotation,
+	    content,
     image_media_id,
     target_resource_id,
     external_url,
@@ -134,17 +147,17 @@ INSERT INTO core.resources
 )
 VALUES
 (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-    $11, $12, $13, $14, $15, $16, $17, $18, $19,
-    $20, $21::jsonb, $22, $22
+	    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+	    $11, $12, $13, $14, $15, $16, $17, $18, $19,
+	    $20, $21, $22::jsonb, $23, $23
 )
 RETURNING
     id, site_id, parent_id, type, template, content_type,
-    title, menu_title, slug, path, content, image_media_id,
+	    title, menu_title, slug, path, annotation, content, image_media_id,
     target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
     sort, published_at, unpublished_at, settings, created_at,
-    updated_at, created_by, updated_by;
+	    updated_at, created_by, updated_by, deleted_at, deleted_by;
 `,
 		item.SiteID,
 		item.ParentID,
@@ -155,6 +168,7 @@ RETURNING
 		item.MenuTitle,
 		item.Slug,
 		item.Path,
+		item.Annotation,
 		item.Content,
 		item.ImageMediaID,
 		item.TargetResourceID,
@@ -181,6 +195,10 @@ RETURNING
 		return resource.Resource{}, err
 	}
 	result.Widgets = resource.Clone(item).Widgets
+	if err := replaceFileReferences(ctx, transaction, result.ID, item.FileReferences); err != nil {
+		return resource.Resource{}, err
+	}
+	result.FileReferences = cloneFileReferences(item.FileReferences)
 
 	if err := transaction.Commit(ctx); err != nil {
 		return resource.Resource{}, translateError(err)
@@ -201,11 +219,11 @@ func (r *Repository) ByID(
 	result, err := scanResource(r.connector.Pool().QueryRow(ctx, `
 SELECT
     id, site_id, parent_id, type, template, content_type,
-    title, menu_title, slug, path, content, image_media_id,
+	    title, menu_title, slug, path, annotation, content, image_media_id,
     target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
     sort, published_at, unpublished_at, settings, created_at,
-    updated_at, created_by, updated_by
+	    updated_at, created_by, updated_by, deleted_at, deleted_by
 FROM core.resources
 WHERE id = $1;
 `, id))
@@ -245,11 +263,11 @@ func (r *Repository) ByPath(
 	result, err := scanResource(r.connector.Pool().QueryRow(ctx, `
 SELECT
     id, site_id, parent_id, type, template, content_type,
-    title, menu_title, slug, path, content, image_media_id,
+	    title, menu_title, slug, path, annotation, content, image_media_id,
     target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
     sort, published_at, unpublished_at, settings, created_at,
-    updated_at, created_by, updated_by
+	    updated_at, created_by, updated_by, deleted_at, deleted_by
 FROM core.resources
 WHERE site_id = $1
   AND path = $2;
@@ -287,11 +305,11 @@ func (r *Repository) ListBySite(
 	rows, err := r.connector.Pool().Query(ctx, `
 SELECT
     id, site_id, parent_id, type, template, content_type,
-    title, menu_title, slug, path, content, image_media_id,
+	    title, menu_title, slug, path, annotation, content, image_media_id,
     target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
     sort, published_at, unpublished_at, settings, created_at,
-    updated_at, created_by, updated_by
+	    updated_at, created_by, updated_by, deleted_at, deleted_by
 FROM core.resources
 WHERE site_id = $1
 ORDER BY parent_id NULLS FIRST, sort, id;
@@ -350,6 +368,7 @@ SELECT
     current.template,
     current.title,
     current.menu_title,
+	current.deleted_at,
     EXISTS (
         SELECT 1
         FROM core.resources child
@@ -370,6 +389,8 @@ SELECT
     children.template,
     children.title,
     children.menu_title,
+	children.deleted_at,
+	children.sort,
     children.has_children
 FROM (SELECT true) marker
 LEFT JOIN children ON true
@@ -390,6 +411,8 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 			rawTemplate    *string
 			rawTitle       *string
 			rawMenuTitle   *string
+			rawDeletedAt   *time.Time
+			rawSort        *int
 			rawHasChildren *bool
 		)
 		if err := rows.Scan(
@@ -401,6 +424,8 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 			&rawTemplate,
 			&rawTitle,
 			&rawMenuTitle,
+			&rawDeletedAt,
+			&rawSort,
 			&rawHasChildren,
 		); err != nil {
 			return nil, fmt.Errorf("scan resource child: %w", err)
@@ -417,6 +442,8 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 			Type:        resourcetype.Code(*rawType),
 			Title:       *rawTitle,
 			MenuTitle:   *rawMenuTitle,
+			Sort:        *rawSort,
+			DeletedAt:   rawDeletedAt,
 			HasChildren: *rawHasChildren,
 		}
 		if rawParent != nil {
@@ -455,7 +482,8 @@ func (r *Repository) Statistics(
 	if err := r.connector.Pool().QueryRow(ctx, `
 SELECT count(*)
 FROM core.resources
-WHERE $1 OR site_id = ANY($2::bigint[]);`, query.Scope.All, allowed).Scan(&result.Total); err != nil {
+WHERE deleted_at IS NULL
+  AND ($1 OR site_id = ANY($2::bigint[]));`, query.Scope.All, allowed).Scan(&result.Total); err != nil {
 		return resource.Statistics{}, fmt.Errorf("count core resource statistics: %w", err)
 	}
 	if len(breakdown) == 0 {
@@ -466,6 +494,7 @@ WHERE $1 OR site_id = ANY($2::bigint[]);`, query.Scope.All, allowed).Scan(&resul
 SELECT site_id, count(*)
 FROM core.resources
 WHERE site_id = ANY($1::bigint[])
+  AND deleted_at IS NULL
   AND ($2 OR site_id = ANY($3::bigint[]))
 GROUP BY site_id;`, breakdown, query.Scope.All, allowed)
 	if err != nil {
@@ -542,6 +571,9 @@ func (r *Repository) Update(
 	if current.ID != item.ID {
 		return resource.Resource{}, resource.ErrInvalidReference
 	}
+	if _, err := transaction.Exec(ctx, `LOCK TABLE core.resources IN SHARE ROW EXCLUSIVE MODE;`); err != nil {
+		return resource.Resource{}, fmt.Errorf("lock resources for update: %w", err)
+	}
 
 	mediaIDs := make([]media.ID, 0, 2)
 	if current.ImageMediaID != nil {
@@ -557,15 +589,21 @@ func (r *Repository) Update(
 	var (
 		currentSiteID       site.ID
 		currentImageMediaID *int64
+		currentParentID     *int64
+		currentSort         int
+		currentDeletedAt    *time.Time
 	)
 	if err := transaction.QueryRow(ctx, `
-SELECT site_id, image_media_id
+SELECT site_id, image_media_id, parent_id, sort, deleted_at
 FROM core.resources
 WHERE id = $1
 FOR UPDATE;
 `, item.ID).Scan(
 		&currentSiteID,
 		&currentImageMediaID,
+		&currentParentID,
+		&currentSort,
+		&currentDeletedAt,
 	); errors.Is(err, pgx.ErrNoRows) {
 		return resource.Resource{}, resource.ErrNotFound
 	} else if err != nil {
@@ -580,6 +618,10 @@ FOR UPDATE;
 	}
 	if !equalMediaID(current.ImageMediaID, currentImageMediaID) {
 		return resource.Resource{}, resource.ErrConflict
+	}
+	lockedParentID := resourceIDFromInt64(currentParentID)
+	if currentDeletedAt != nil && (!sameResourceID(lockedParentID, item.ParentID) || currentSort != item.Sort) {
+		return resource.Resource{}, resource.ErrInvalidTree
 	}
 
 	if item.ImageMediaID != nil {
@@ -613,6 +655,9 @@ FOR UPDATE;
 		}
 		if parentItem.SiteID != item.SiteID {
 			return resource.Resource{}, resource.ErrInvalidReference
+		}
+		if parentItem.DeletedAt != nil && currentDeletedAt == nil {
+			return resource.Resource{}, resource.ErrInvalidTree
 		}
 		parent = &parentItem
 
@@ -654,6 +699,12 @@ SELECT EXISTS
 			return resource.Resource{}, err
 		}
 	}
+	item.Sort, err = reorderSiblings(
+		ctx, transaction, item.SiteID, item.ID, lockedParentID, item.ParentID, item.Sort,
+	)
+	if err != nil {
+		return resource.Resource{}, err
+	}
 
 	rawSettings, err := json.Marshal(item.Settings)
 	if err != nil {
@@ -672,30 +723,31 @@ SET
     content_type = $5,
     title = $6,
     menu_title = $7,
-    slug = $8,
-    path = $9,
-    content = $10,
-    image_media_id = $11,
-    target_resource_id = $12,
-    external_url = $13,
-    is_public = $14,
-    is_searchable = $15,
-    in_menu = $16,
-    in_sitemap = $17,
-    sort = $18,
-    published_at = $19,
-    unpublished_at = $20,
-    settings = $21::jsonb,
-    updated_at = now(),
-    updated_by = $22
+	    slug = $8,
+	    path = $9,
+	    annotation = $10,
+	    content = $11,
+	    image_media_id = $12,
+	    target_resource_id = $13,
+	    external_url = $14,
+	    is_public = $15,
+	    is_searchable = $16,
+	    in_menu = $17,
+	    in_sitemap = $18,
+	    sort = $19,
+	    published_at = $20,
+	    unpublished_at = $21,
+	    settings = $22::jsonb,
+	    updated_at = now(),
+	    updated_by = $23
 WHERE id = $1
 RETURNING
     id, site_id, parent_id, type, template, content_type,
-    title, menu_title, slug, path, content, image_media_id,
+	    title, menu_title, slug, path, annotation, content, image_media_id,
     target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
     sort, published_at, unpublished_at, settings, created_at,
-    updated_at, created_by, updated_by;
+	    updated_at, created_by, updated_by, deleted_at, deleted_by;
 `,
 		item.ID,
 		item.ParentID,
@@ -706,6 +758,7 @@ RETURNING
 		item.MenuTitle,
 		item.Slug,
 		item.Path,
+		item.Annotation,
 		item.Content,
 		item.ImageMediaID,
 		item.TargetResourceID,
@@ -766,6 +819,10 @@ WHERE item.id = tree.id
 		return resource.Resource{}, err
 	}
 	updated.Widgets = resource.Clone(item).Widgets
+	if err := replaceFileReferences(ctx, transaction, updated.ID, item.FileReferences); err != nil {
+		return resource.Resource{}, err
+	}
+	updated.FileReferences = cloneFileReferences(item.FileReferences)
 
 	if !sameMediaID(current.ImageMediaID, item.ImageMediaID) &&
 		current.ImageMediaID != nil {
@@ -781,6 +838,110 @@ WHERE id = $1;
 		return resource.Resource{}, translateError(err)
 	}
 	return updated, nil
+}
+
+func (r *Repository) SoftDelete(
+	ctx context.Context,
+	actorID *security.UserID,
+	id resource.ID,
+) (resultErr error) {
+	if ctx == nil {
+		return errors.New("soft delete resource context is nil")
+	}
+	tx, err := r.connector.Pool().Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin resource soft delete: %w", err)
+	}
+	defer func() {
+		if resultErr != nil {
+			_ = tx.Rollback(context.Background())
+		}
+	}()
+	if _, err := tx.Exec(ctx, `LOCK TABLE core.resources IN SHARE ROW EXCLUSIVE MODE;`); err != nil {
+		return fmt.Errorf("lock resources for soft delete: %w", err)
+	}
+	command, err := tx.Exec(ctx, `
+WITH RECURSIVE tree AS (
+    SELECT id FROM core.resources WHERE id = $1
+    UNION ALL
+    SELECT child.id
+    FROM core.resources child
+    JOIN tree parent ON child.parent_id = parent.id
+)
+UPDATE core.resources item
+SET deleted_at = now(), deleted_by = $2, updated_at = now(), updated_by = $2
+WHERE item.id IN (SELECT id FROM tree);`, id, actorID)
+	if err != nil {
+		return translateError(err)
+	}
+	if command.RowsAffected() == 0 {
+		return resource.ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return translateError(err)
+	}
+	return nil
+}
+
+func (r *Repository) Restore(
+	ctx context.Context,
+	actorID *security.UserID,
+	id resource.ID,
+	withDescendants bool,
+) (resultErr error) {
+	if ctx == nil {
+		return errors.New("restore resource context is nil")
+	}
+	tx, err := r.connector.Pool().Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin resource restore: %w", err)
+	}
+	defer func() {
+		if resultErr != nil {
+			_ = tx.Rollback(context.Background())
+		}
+	}()
+	if _, err := tx.Exec(ctx, `LOCK TABLE core.resources IN SHARE ROW EXCLUSIVE MODE;`); err != nil {
+		return fmt.Errorf("lock resources for restore: %w", err)
+	}
+	var parentDeleted bool
+	if err := tx.QueryRow(ctx, `
+SELECT COALESCE(parent.deleted_at IS NOT NULL, false)
+FROM core.resources item
+LEFT JOIN core.resources parent ON parent.id = item.parent_id
+WHERE item.id = $1;`, id).Scan(&parentDeleted); errors.Is(err, pgx.ErrNoRows) {
+		return resource.ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("check resource restore parent: %w", err)
+	}
+	if parentDeleted {
+		return resource.ErrInvalidTree
+	}
+	if withDescendants {
+		if _, err := tx.Exec(ctx, `
+WITH RECURSIVE tree AS (
+    SELECT id FROM core.resources WHERE id = $1
+    UNION ALL
+    SELECT child.id FROM core.resources child
+    JOIN tree parent ON child.parent_id = parent.id
+)
+UPDATE core.resources item
+SET deleted_at = NULL, deleted_by = NULL, updated_at = now(), updated_by = $2
+WHERE item.id IN (SELECT id FROM tree);`, id, actorID); err != nil {
+			return translateError(err)
+		}
+	} else if command, err := tx.Exec(ctx, `
+UPDATE core.resources
+SET deleted_at = NULL, deleted_by = NULL, updated_at = now(), updated_by = $2
+WHERE id = $1;`, id, actorID); err != nil {
+		return translateError(err)
+	} else if command.RowsAffected() == 0 {
+		return resource.ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return translateError(err)
+	}
+	return nil
 }
 
 func (r *Repository) Delete(
@@ -805,6 +966,18 @@ func (r *Repository) Delete(
 		}
 		_ = transaction.Rollback(context.Background())
 	}()
+	if _, err := transaction.Exec(ctx, `LOCK TABLE core.resources IN SHARE ROW EXCLUSIVE MODE;`); err != nil {
+		return fmt.Errorf("lock resources for permanent delete: %w", err)
+	}
+	var deletedSiteID site.ID
+	var deletedParentID *int64
+	if err := transaction.QueryRow(ctx, `SELECT site_id, parent_id FROM core.resources WHERE id = $1;`, id).Scan(
+		&deletedSiteID, &deletedParentID,
+	); errors.Is(err, pgx.ErrNoRows) {
+		return resource.ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("read resource delete position: %w", err)
+	}
 
 	observedMediaIDs, exists, err := treeMediaIDs(
 		ctx,
@@ -841,6 +1014,19 @@ func (r *Repository) Delete(
 	if !mediaIDsContained(actualMediaIDs, observedMediaIDs) {
 		return resource.ErrConflict
 	}
+	if _, err := transaction.Exec(ctx, `
+WITH RECURSIVE tree AS
+(
+    SELECT id FROM core.resources WHERE id = $1
+    UNION ALL
+    SELECT child.id FROM core.resources AS child
+    JOIN tree AS parent ON child.parent_id = parent.id
+)
+DELETE FROM core.file_field_references
+WHERE owner_kind = 'resource' AND owner_id IN (SELECT id FROM tree);
+`, id); err != nil {
+		return translateDeleteError(err)
+	}
 
 	commandTag, err := transaction.Exec(ctx, `
 DELETE FROM core.resources
@@ -851,6 +1037,18 @@ WHERE id = $1;
 	}
 	if commandTag.RowsAffected() == 0 {
 		return resource.ErrNotFound
+	}
+	if _, err := transaction.Exec(ctx, `
+WITH ordered AS (
+    SELECT id, row_number() OVER (ORDER BY sort, id) - 1 AS new_sort
+    FROM core.resources
+    WHERE site_id = $1 AND parent_id IS NOT DISTINCT FROM $2::bigint
+)
+UPDATE core.resources item
+SET sort = ordered.new_sort
+FROM ordered
+WHERE item.id = ordered.id AND item.sort <> ordered.new_sort;`, deletedSiteID, deletedParentID); err != nil {
+		return translateDeleteError(err)
 	}
 
 	for _, mediaID := range actualMediaIDs {
@@ -867,6 +1065,109 @@ WHERE id = $1;
 	}
 	committed = true
 	return nil
+}
+
+func reorderSiblings(
+	ctx context.Context,
+	tx pgx.Tx,
+	siteID site.ID,
+	movingID resource.ID,
+	sourceParentID *resource.ID,
+	targetParentID *resource.ID,
+	position int,
+) (int, error) {
+	if position < 0 {
+		return 0, resource.ErrInvalidTree
+	}
+	target, err := siblingIDs(ctx, tx, siteID, targetParentID, movingID)
+	if err != nil {
+		return 0, err
+	}
+	if position > len(target) {
+		position = len(target)
+	}
+	if sameResourceID(sourceParentID, targetParentID) {
+		ordered := append(target, 0)
+		copy(ordered[position+1:], ordered[position:])
+		ordered[position] = movingID
+		if err := updateSiblingPositions(ctx, tx, ordered, movingID); err != nil {
+			return 0, err
+		}
+		return position, nil
+	}
+	source, err := siblingIDs(ctx, tx, siteID, sourceParentID, movingID)
+	if err != nil {
+		return 0, err
+	}
+	if err := updateSiblingPositions(ctx, tx, source, 0); err != nil {
+		return 0, err
+	}
+	ordered := append(target, 0)
+	copy(ordered[position+1:], ordered[position:])
+	ordered[position] = movingID
+	if err := updateSiblingPositions(ctx, tx, ordered, movingID); err != nil {
+		return 0, err
+	}
+	return position, nil
+}
+
+func siblingIDs(
+	ctx context.Context,
+	tx pgx.Tx,
+	siteID site.ID,
+	parentID *resource.ID,
+	exclude resource.ID,
+) ([]resource.ID, error) {
+	rows, err := tx.Query(ctx, `
+SELECT id
+FROM core.resources
+WHERE site_id = $1
+  AND parent_id IS NOT DISTINCT FROM $2::bigint
+  AND id <> $3
+ORDER BY sort, id;`, siteID, parentID, exclude)
+	if err != nil {
+		return nil, fmt.Errorf("list resource siblings: %w", err)
+	}
+	defer rows.Close()
+	result := make([]resource.ID, 0)
+	for rows.Next() {
+		var id resource.ID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan resource sibling: %w", err)
+		}
+		result = append(result, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate resource siblings: %w", err)
+	}
+	return result, nil
+}
+
+func updateSiblingPositions(ctx context.Context, tx pgx.Tx, ids []resource.ID, skip resource.ID) error {
+	for position, id := range ids {
+		if id == skip {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE core.resources SET sort = $2 WHERE id = $1;`, id, position); err != nil {
+			return fmt.Errorf("update resource sibling position: %w", err)
+		}
+	}
+	return nil
+}
+
+func resourceIDFromInt64(value *int64) *resource.ID {
+	if value == nil {
+		return nil
+	}
+	result := resource.ID(*value)
+	return &result
+}
+
+func sameResourceID(left, right *resource.ID) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 type rowScanner interface {
@@ -1049,6 +1350,7 @@ func scanResource(scanner rowScanner) (resource.Resource, error) {
 		&item.MenuTitle,
 		&item.Slug,
 		&path,
+		&item.Annotation,
 		&item.Content,
 		&imageMediaID,
 		&targetResourceID,
@@ -1065,6 +1367,8 @@ func scanResource(scanner rowScanner) (resource.Resource, error) {
 		&item.UpdatedAt,
 		&item.CreatedBy,
 		&item.UpdatedBy,
+		&item.DeletedAt,
+		&item.DeletedBy,
 	); err != nil {
 		return resource.Resource{}, err
 	}
@@ -1258,11 +1562,11 @@ func lockResource(
 	item, err := scanResource(transaction.QueryRow(ctx, `
 SELECT
     id, site_id, parent_id, type, template, content_type,
-    title, menu_title, slug, path, content, image_media_id,
+	    title, menu_title, slug, path, annotation, content, image_media_id,
     target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
     sort, published_at, unpublished_at, settings, created_at,
-    updated_at, created_by, updated_by
+	    updated_at, created_by, updated_by, deleted_at, deleted_by
 FROM core.resources
 WHERE id = $1
 FOR UPDATE;
@@ -1303,6 +1607,36 @@ func translateDeleteError(err error) error {
 		return fmt.Errorf("%w: %s", resource.ErrReferenced, err)
 	}
 	return translateError(err)
+}
+
+func replaceFileReferences(
+	ctx context.Context,
+	tx pgx.Tx,
+	ownerID resource.ID,
+	references map[string]file.ID,
+) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM core.file_field_references WHERE owner_kind = 'resource' AND owner_id = $1;`, ownerID); err != nil {
+		return fmt.Errorf("delete resource file references: %w", err)
+	}
+	for key, id := range references {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO core.file_field_references (owner_kind, owner_id, field_key, file_id)
+VALUES ('resource', $1, $2, $3);`, ownerID, key, id); err != nil {
+			return fmt.Errorf("insert resource file reference: %w", err)
+		}
+	}
+	return nil
+}
+
+func cloneFileReferences(source map[string]file.ID) map[string]file.ID {
+	if source == nil {
+		return nil
+	}
+	result := make(map[string]file.ID, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 var _ resource.Repository = (*Repository)(nil)

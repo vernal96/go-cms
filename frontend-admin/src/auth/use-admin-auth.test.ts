@@ -28,6 +28,10 @@ const adminSession: AdminSessionResponse = {
     login: 'admin',
     email: 'admin@example.test',
     display_name: 'Администратор',
+    color_scheme: 'system',
+    accent_color: 'blue',
+    has_avatar: false,
+    avatar_updated_at: null,
   },
   permissions: ['admin.panel.read'],
 }

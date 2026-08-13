@@ -33,6 +33,10 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	t.Setenv("FILES_PRIVATE_DRIVER", "s3")
 	t.Setenv("FILES_PRIVATE_S3_REGION", "us-east-1")
 	t.Setenv("FILES_PRIVATE_S3_BUCKET", "cms-private")
+	t.Setenv("FILES_MAX_UPLOAD_SIZE", "209715200")
+	t.Setenv("FILES_UPLOAD_TIMEOUT", "12m")
+	t.Setenv("FILES_AVATAR_STORAGE", "private")
+	t.Setenv("FILES_AVATAR_MAX_SIZE", "4194304")
 	t.Setenv("CORE_CACHE_DRIVER", "redis")
 	t.Setenv("CORE_CACHE_REDIS_ADDRS", "redis-one:6379,redis-two:6379")
 	t.Setenv("CORE_CACHE_REDIS_MASTER_NAME", "cms-primary")
@@ -65,6 +69,10 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		len(config.CoreCache.Redis.Addrs) != 2 ||
 		config.CoreCache.Redis.MasterName != "cms-primary" {
 		t.Fatalf("core cache config = %#v", config.CoreCache)
+	}
+	if config.Files.MaxUploadSize != 209715200 || config.Files.UploadTimeout != 12*time.Minute ||
+		config.Files.AvatarStorage != "private" || config.Files.AvatarMaxSize != 4194304 {
+		t.Fatalf("file upload config = %#v", config.Files)
 	}
 	if config.JWT.SigningKey !=
 		"0123456789abcdef0123456789abcdef" ||

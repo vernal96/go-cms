@@ -620,6 +620,14 @@ func (fakeResourceRepository) Delete(
 	return resource.ErrNotFound
 }
 
+func (fakeResourceRepository) SoftDelete(context.Context, *security.UserID, resource.ID) error {
+	return resource.ErrNotFound
+}
+
+func (fakeResourceRepository) Restore(context.Context, *security.UserID, resource.ID, bool) error {
+	return resource.ErrNotFound
+}
+
 type appResourceRepository struct {
 	mu     sync.Mutex
 	nextID resource.ID
@@ -861,6 +869,42 @@ func (r *appResourceRepository) Delete(
 		return resource.ErrNotFound
 	}
 	delete(r.items, id)
+	return nil
+}
+
+func (r *appResourceRepository) SoftDelete(
+	_ context.Context,
+	actorID *security.UserID,
+	id resource.ID,
+) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, exists := r.items[id]
+	if !exists {
+		return resource.ErrNotFound
+	}
+	now := time.Now().UTC()
+	item.DeletedAt = &now
+	item.DeletedBy = actorID
+	r.items[id] = item
+	return nil
+}
+
+func (r *appResourceRepository) Restore(
+	_ context.Context,
+	_ *security.UserID,
+	id resource.ID,
+	_ bool,
+) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, exists := r.items[id]
+	if !exists {
+		return resource.ErrNotFound
+	}
+	item.DeletedAt = nil
+	item.DeletedBy = nil
+	r.items[id] = item
 	return nil
 }
 
@@ -1935,12 +1979,13 @@ func TestAppResourceFacades(t *testing.T) {
 	if err := application.DeleteResource(ctx, security.System(), created.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := application.Resource(
+	deleted, err := application.Resource(
 		ctx,
 		security.System(),
 		created.ID,
-	); !errors.Is(err, resource.ErrNotFound) {
-		t.Fatalf("deleted resource error = %v", err)
+	)
+	if err != nil || deleted.DeletedAt == nil {
+		t.Fatalf("soft-deleted resource = %#v, %v", deleted, err)
 	}
 }
 

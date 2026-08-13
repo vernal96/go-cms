@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strings"
 
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
@@ -75,9 +74,9 @@ func (pageType) Normalize(payload Payload) (Payload, error) {
 		contentType := "html"
 		payload.ContentType = &contentType
 	}
-	if !contentTypePattern.MatchString(*payload.ContentType) {
+	if *payload.ContentType != "html" {
 		return Payload{}, fmt.Errorf(
-			"invalid page content_type %q",
+			"unsupported page content_type %q",
 			*payload.ContentType,
 		)
 	}
@@ -170,10 +169,6 @@ func (resourceLinkType) Normalize(
 
 	return clonePayload(payload), nil
 }
-
-var contentTypePattern = regexp.MustCompile(
-	`^[a-z0-9][a-z0-9.+-]*$`,
-)
 
 func validExternalURL(value string) bool {
 	if value == "" || strings.TrimSpace(value) != value {

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
+	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -170,7 +171,12 @@ func (r *Repository) Create(
 	if err != nil {
 		return site.Site{}, err
 	}
-	result, err := scanOne(r.connector.Pool().QueryRow(ctx, `
+	tx, err := r.connector.Pool().Begin(ctx)
+	if err != nil {
+		return site.Site{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	result, err := scanOne(tx.QueryRow(ctx, `
 INSERT INTO core.sites
     (profile_code, domain, locale, settings, is_public, created_by, updated_by)
 VALUES ($1, $2, $3, $4::jsonb, $5, $6, $6)
@@ -185,6 +191,13 @@ RETURNING `+siteColumns+`;`,
 	if err != nil {
 		return site.Site{}, translateError("create core site", err)
 	}
+	if err := replaceFileReferences(ctx, tx, "site", int64(result.ID), item.FileReferences); err != nil {
+		return site.Site{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return site.Site{}, err
+	}
+	result.FileReferences = cloneFileReferences(item.FileReferences)
 	return result, nil
 }
 
@@ -203,7 +216,12 @@ func (r *Repository) Update(
 	if err != nil {
 		return site.Site{}, err
 	}
-	result, err := scanOne(r.connector.Pool().QueryRow(ctx, `
+	tx, err := r.connector.Pool().Begin(ctx)
+	if err != nil {
+		return site.Site{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	result, err := scanOne(tx.QueryRow(ctx, `
 UPDATE core.sites
 SET profile_code = $2, domain = $3, locale = $4, settings = $5::jsonb,
     is_public = $6, updated_at = now(), updated_by = $7
@@ -220,6 +238,13 @@ RETURNING `+siteColumns+`;`,
 	if err != nil {
 		return site.Site{}, translateError(fmt.Sprintf("update core site %d", item.ID), err)
 	}
+	if err := replaceFileReferences(ctx, tx, "site", int64(result.ID), item.FileReferences); err != nil {
+		return site.Site{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return site.Site{}, err
+	}
+	result.FileReferences = cloneFileReferences(item.FileReferences)
 	return result, nil
 }
 
@@ -227,14 +252,29 @@ func (r *Repository) Delete(ctx context.Context, id site.ID) error {
 	if ctx == nil {
 		return errors.New("delete site context is nil")
 	}
-	result, err := r.connector.Pool().Exec(ctx, `DELETE FROM core.sites WHERE id = $1;`, id)
+	tx, err := r.connector.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `
+DELETE FROM core.file_field_references
+WHERE owner_kind = 'resource'
+  AND owner_id IN (SELECT id FROM core.resources WHERE site_id = $1);
+`, id); err != nil {
+		return fmt.Errorf("delete site resource file references: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM core.file_field_references WHERE owner_kind = 'site' AND owner_id = $1;`, id); err != nil {
+		return fmt.Errorf("delete site file references: %w", err)
+	}
+	result, err := tx.Exec(ctx, `DELETE FROM core.sites WHERE id = $1;`, id)
 	if err != nil {
 		return fmt.Errorf("delete core site %d: %w", id, err)
 	}
 	if result.RowsAffected() == 0 {
 		return site.ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 type rowScanner interface {
@@ -307,6 +347,37 @@ func decodeSettings(raw []byte) (map[string]any, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+func replaceFileReferences(
+	ctx context.Context,
+	tx pgx.Tx,
+	ownerKind string,
+	ownerID int64,
+	references map[string]file.ID,
+) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM core.file_field_references WHERE owner_kind = $1 AND owner_id = $2;`, ownerKind, ownerID); err != nil {
+		return fmt.Errorf("delete file field references: %w", err)
+	}
+	for key, id := range references {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO core.file_field_references (owner_kind, owner_id, field_key, file_id)
+VALUES ($1, $2, $3, $4);`, ownerKind, ownerID, key, id); err != nil {
+			return fmt.Errorf("insert file field reference: %w", err)
+		}
+	}
+	return nil
+}
+
+func cloneFileReferences(source map[string]file.ID) map[string]file.ID {
+	if source == nil {
+		return nil
+	}
+	result := make(map[string]file.ID, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 func translateError(operation string, err error) error {

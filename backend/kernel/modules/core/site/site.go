@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 	"golang.org/x/text/language"
@@ -46,16 +48,17 @@ var (
 )
 
 type Site struct {
-	ID          ID
-	ProfileCode kernel.ProfileCode
-	Domain      string
-	Locale      string
-	Settings    map[string]any
-	IsPublic    bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	CreatedBy   *security.UserID
-	UpdatedBy   *security.UserID
+	ID             ID
+	ProfileCode    kernel.ProfileCode
+	Domain         string
+	Locale         string
+	Settings       map[string]any
+	IsPublic       bool
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	CreatedBy      *security.UserID
+	UpdatedBy      *security.UserID
+	FileReferences map[string]file.ID
 }
 
 type Repository interface {
@@ -134,6 +137,7 @@ type CreateInput struct {
 type Runtime struct {
 	site           Site
 	profileRuntime *kernel.ProfileRuntime
+	fileReferences []field.FileReference
 }
 
 func NewRuntime(
@@ -185,10 +189,16 @@ func NewRuntime(
 		return nil, fmt.Errorf("validate site settings: %w", err)
 	}
 	item.Settings = cloneSettings(settings)
+	fileReferences, err := paramSchema.FileReferences(settings)
+	if err != nil {
+		return nil, fmt.Errorf("collect site file references: %w", err)
+	}
+	item.FileReferences = fileReferenceMap(fileReferences)
 
 	return &Runtime{
 		site:           item,
 		profileRuntime: profileRuntime,
+		fileReferences: fileReferences,
 	}, nil
 }
 
@@ -197,6 +207,7 @@ func (r *Runtime) Site() Site {
 	result.Settings = cloneSettings(result.Settings)
 	result.CreatedBy = cloneUserID(result.CreatedBy)
 	result.UpdatedBy = cloneUserID(result.UpdatedBy)
+	result.FileReferences = cloneFileReferences(result.FileReferences)
 	return result
 }
 
@@ -219,6 +230,7 @@ type Catalog struct {
 	repository Repository
 	profiles   ProfileResolver
 	access     Access
+	files      file.Service
 
 	snapshot   atomic.Pointer[runtimeSnapshot]
 	mutationMu sync.Mutex
@@ -228,6 +240,7 @@ func NewCatalog(
 	repository Repository,
 	profiles ProfileResolver,
 	access Access,
+	fileServices ...file.Service,
 ) (*Catalog, error) {
 	if repository == nil {
 		return nil, errors.New("site repository is nil")
@@ -244,6 +257,9 @@ func NewCatalog(
 		repository: repository,
 		profiles:   profiles,
 		access:     access,
+	}
+	if len(fileServices) > 0 {
+		catalog.files = fileServices[0]
 	}
 
 	catalog.snapshot.Store(&runtimeSnapshot{
@@ -358,6 +374,9 @@ func (c *Catalog) Reload(ctx context.Context) error {
 				err,
 			)
 		}
+		if err := c.validateFileReferences(ctx, security.System(), runtime.fileReferences, nil); err != nil {
+			return fmt.Errorf("validate site file references at index %d: %w", index, err)
+		}
 
 		domain := runtime.site.Domain
 
@@ -417,6 +436,9 @@ func (c *Catalog) Create(
 		IsPublic:    input.IsPublic,
 	}, profileRuntime)
 	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if err := c.validateFileReferences(ctx, actor, nextRuntime.fileReferences, nil); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if _, exists := currentSnapshot.byDomain[nextRuntime.site.Domain]; exists {
@@ -491,6 +513,9 @@ func (c *Catalog) Update(
 
 	nextRuntime, err := NewRuntime(item, profileRuntime)
 	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if err := c.validateFileReferences(ctx, actor, nextRuntime.fileReferences, current.site.FileReferences); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if existing, exists := currentSnapshot.byDomain[nextRuntime.site.Domain]; exists && existing.site.ID != input.ID {
@@ -620,6 +645,55 @@ func cloneSettings(source map[string]any) map[string]any {
 		result[key] = cloneSettingValue(value)
 	}
 
+	return result
+}
+
+func (c *Catalog) validateFileReferences(
+	ctx context.Context,
+	actor security.Actor,
+	references []field.FileReference,
+	trusted map[string]file.ID,
+) error {
+	if len(references) == 0 {
+		return nil
+	}
+	if c.files == nil {
+		return errors.New("site file service is unavailable")
+	}
+	for _, reference := range references {
+		if trusted[reference.Key] == file.ID(reference.ID) {
+			continue
+		}
+		item, err := c.files.GetFile(ctx, actor, file.ID(reference.ID))
+		if err != nil {
+			return fmt.Errorf("file field %q: %w", reference.Key, err)
+		}
+		if !field.FileMatches(reference.Options, item.Storage, item.MIMEType) {
+			return fmt.Errorf("file field %q rejects selected file", reference.Key)
+		}
+	}
+	return nil
+}
+
+func fileReferenceMap(references []field.FileReference) map[string]file.ID {
+	if len(references) == 0 {
+		return nil
+	}
+	result := make(map[string]file.ID, len(references))
+	for _, reference := range references {
+		result[reference.Key] = file.ID(reference.ID)
+	}
+	return result
+}
+
+func cloneFileReferences(source map[string]file.ID) map[string]file.ID {
+	if source == nil {
+		return nil
+	}
+	result := make(map[string]file.ID, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
 	return result
 }
 

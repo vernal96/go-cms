@@ -387,6 +387,7 @@ func (c *usersCommand) update(
 		if err != nil {
 			return err
 		}
+		input.UpdateAvatar = true
 	}
 	updated, err := c.application.UpdateUser(
 		ctx,

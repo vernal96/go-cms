@@ -31,6 +31,11 @@ type Reference struct {
 	Path string
 }
 
+type DiskInfo struct {
+	Code       Code
+	Visibility Visibility
+}
+
 type Disk interface {
 	Code() Code
 	Visibility() Visibility
@@ -76,6 +81,11 @@ type Factory interface {
 
 type Resolver interface {
 	Disk(Code) (Disk, bool)
+}
+
+type Catalog interface {
+	Resolver
+	Disks() []DiskInfo
 }
 
 type Binding struct {

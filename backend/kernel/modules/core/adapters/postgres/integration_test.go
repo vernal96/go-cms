@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -76,18 +77,26 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 16 {
+	if len(entries) != 24 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	expected := map[string]bool{
-		"000005_identity.up.sql":           false,
-		"000005_identity.down.sql":         false,
-		"000006_permissions.up.sql":        false,
-		"000006_permissions.down.sql":      false,
-		"000007_resource_widgets.up.sql":   false,
-		"000007_resource_widgets.down.sql": false,
-		"000008_user_blocking.up.sql":      false,
-		"000008_user_blocking.down.sql":    false,
+		"000005_identity.up.sql":                false,
+		"000005_identity.down.sql":              false,
+		"000006_permissions.up.sql":             false,
+		"000006_permissions.down.sql":           false,
+		"000007_resource_widgets.up.sql":        false,
+		"000007_resource_widgets.down.sql":      false,
+		"000008_user_blocking.up.sql":           false,
+		"000008_user_blocking.down.sql":         false,
+		"000009_file_field_references.up.sql":   false,
+		"000009_file_field_references.down.sql": false,
+		"000010_user_preferences.up.sql":        false,
+		"000010_user_preferences.down.sql":      false,
+		"000011_user_accent_color.up.sql":       false,
+		"000011_user_accent_color.down.sql":     false,
+		"000012_resource_editor_tree.up.sql":    false,
+		"000012_resource_editor_tree.down.sql":  false,
 	}
 	for _, entry := range entries {
 		if _, exists := expected[entry.Name()]; exists {
@@ -97,6 +106,21 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	for name, found := range expected {
 		if !found {
 			t.Fatalf("migration %q is not embedded", name)
+		}
+	}
+	accentMigration, err := fs.ReadFile(
+		sources[0].FS,
+		sources[0].Path+"/000011_user_accent_color.up.sql",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expectedSQL := range []string{
+		"DEFAULT 'blue'",
+		"'blue', 'violet', 'indigo', 'emerald', 'amber', 'rose'",
+	} {
+		if !strings.Contains(string(accentMigration), expectedSQL) {
+			t.Fatalf("accent migration does not contain %q", expectedSQL)
 		}
 	}
 }
@@ -173,7 +197,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 7 || !hasVersion || dirty {
+	if version != 12 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,
@@ -547,7 +571,8 @@ SELECT
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(rawSettings) != `{}` {
+		expectedSettings := `{"checkbox_value":false,"email_value":"admin@example.test","float_value":1.5,"integer_value":10,"multi_select_value":["alpha","beta"],"phone_value":"+79991234567","radio_value":"first","select_value":"alpha","string_value":` + strconv.Quote(item.Domain) + `,"textarea_value":"Демонстрационные настройки сайта"}`
+		if string(rawSettings) != expectedSettings {
 			t.Fatalf("settings = %s", rawSettings)
 		}
 	}
@@ -830,6 +855,7 @@ WHERE id = $1;
 			Title:        "Widget child",
 			Slug:         "widget-child",
 			Path:         &widgetChildPath,
+			Annotation:   "Widget annotation",
 			IsPublic:     true,
 			IsSearchable: true,
 			InMenu:       true,
@@ -868,6 +894,46 @@ WHERE id = $1;
 	}
 	if !childFound {
 		t.Fatal("created child missing from lazy resource list")
+	}
+	lifecycle, ok := resourceRepository.(resource.LifecycleRepository)
+	if !ok {
+		t.Fatal("resource lifecycle repository is unavailable")
+	}
+	if err := lifecycle.SoftDelete(ctx, nil, widgetChild.ID); err != nil {
+		t.Fatalf("soft delete resource child: %v", err)
+	}
+	deletedChild, err := resourceRepository.ByID(ctx, widgetChild.ID)
+	if err != nil || deletedChild.DeletedAt == nil || deletedChild.Annotation != "Widget annotation" {
+		t.Fatalf("soft-deleted resource = %#v, %v", deletedChild, err)
+	}
+	if err := lifecycle.Restore(ctx, nil, widgetChild.ID, false); err != nil {
+		t.Fatalf("restore resource child: %v", err)
+	}
+	restoredChild, err := resourceRepository.ByID(ctx, widgetChild.ID)
+	if err != nil || restoredChild.DeletedAt != nil {
+		t.Fatalf("restored resource = %#v, %v", restoredChild, err)
+	}
+	siblingPath := "/sibling"
+	sibling, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: root.SiteID, ParentID: &root.ID, Type: resourcetype.Page,
+		Title: "Sibling", Slug: "sibling", Path: &siblingPath,
+		IsPublic: true, IsSearchable: true, InMenu: true, InSitemap: true,
+		Settings: map[string]any{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create resource sibling: %v", err)
+	}
+	nextSibling := resource.Clone(sibling)
+	nextSibling.Sort = 0
+	if _, err := resourceRepository.Update(ctx, nil, sibling, nextSibling, nil); err != nil {
+		t.Fatalf("move resource sibling: %v", err)
+	}
+	children, err = resourceManagement.ListChildren(ctx, root.SiteID, &root.ID)
+	if err != nil || len(children) < 2 || children[0].ID != sibling.ID || children[0].Sort != 0 || children[1].Sort != 1 {
+		t.Fatalf("reordered resource children = %#v, %v", children, err)
+	}
+	if err := resourceRepository.Delete(ctx, sibling.ID); err != nil {
+		t.Fatalf("delete resource sibling: %v", err)
 	}
 	roots, err = resourceManagement.ListChildren(ctx, root.SiteID, nil)
 	if err != nil {
@@ -1310,22 +1376,23 @@ WHERE id = ANY($2);
 		func(context.Context, []corefile.File) error {
 			return nil
 		},
-	); err != nil {
-		t.Fatalf("delete media source file: %v", err)
+	); !errors.Is(err, corefile.ErrInUse) {
+		t.Fatalf("delete used media source file error = %v", err)
 	}
 	if _, err := mediaRepository.ByID(
 		ctx,
 		replacementMedia.ID,
-	); !errors.Is(err, media.ErrNotFound) {
-		t.Fatalf("media after file delete = %v", err)
+	); err != nil {
+		t.Fatalf("media after rejected file delete = %v", err)
 	}
 	rootAfterFileDelete, err := resourceRepository.ByID(ctx, root.ID)
 	if err != nil {
 		t.Fatalf("load resource after media file delete: %v", err)
 	}
-	if rootAfterFileDelete.ImageMediaID != nil {
+	if rootAfterFileDelete.ImageMediaID == nil ||
+		*rootAfterFileDelete.ImageMediaID != replacementMedia.ID {
 		t.Fatalf(
-			"resource media after file delete = %#v",
+			"resource media after rejected file delete = %#v",
 			rootAfterFileDelete.ImageMediaID,
 		)
 	}
@@ -1343,7 +1410,7 @@ WHERE id = ANY($2);
 		t.Fatalf("missing site update error = %v", err)
 	}
 
-	if err := seedManager.Down(ctx, devSeedPlan, 2); err != nil {
+	if err := seedManager.Down(ctx, devSeedPlan, 3); err != nil {
 		t.Fatalf("dev seed down: %v", err)
 	}
 	if err := seedManager.Down(ctx, sharedSeedPlan, 1); err != nil {

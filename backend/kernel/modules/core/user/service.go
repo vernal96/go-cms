@@ -202,7 +202,9 @@ func (s *ApplicationService) Update(
 	next.LastName = input.LastName
 	next.MiddleName = input.MiddleName
 	next.Phone = input.Phone
-	next.AvatarMediaID = input.AvatarMediaID
+	if input.UpdateAvatar {
+		next.AvatarMediaID = input.AvatarMediaID
+	}
 	next, err = normalize(next)
 	if err != nil {
 		return User{}, err
@@ -219,6 +221,52 @@ func (s *ApplicationService) Update(
 		return User{}, fmt.Errorf("update user: %w", err)
 	}
 	return Clone(updated.User), nil
+}
+
+func (s *ApplicationService) UpdateCurrent(
+	ctx context.Context,
+	actor security.Actor,
+	input UpdateCurrentInput,
+) (User, error) {
+	current, err := s.currentRecord(ctx, actor)
+	if err != nil {
+		return User{}, err
+	}
+	next := cloneRecord(current)
+	next.Name = input.Name
+	next.LastName = input.LastName
+	next.MiddleName = input.MiddleName
+	next.Phone = input.Phone
+	return s.updateRecord(ctx, actor, current, next)
+}
+
+func (s *ApplicationService) UpdateCurrentPreferences(
+	ctx context.Context,
+	actor security.Actor,
+	preferences Preferences,
+) (User, error) {
+	current, err := s.currentRecord(ctx, actor)
+	if err != nil {
+		return User{}, err
+	}
+	next := cloneRecord(current)
+	next.ColorScheme = preferences.ColorScheme
+	next.AccentColor = preferences.AccentColor
+	return s.updateRecord(ctx, actor, current, next)
+}
+
+func (s *ApplicationService) UpdateCurrentAvatar(
+	ctx context.Context,
+	actor security.Actor,
+	avatarMediaID *media.ID,
+) (User, error) {
+	current, err := s.currentRecord(ctx, actor)
+	if err != nil {
+		return User{}, err
+	}
+	next := cloneRecord(current)
+	next.AvatarMediaID = cloneMediaID(avatarMediaID)
+	return s.updateRecord(ctx, actor, current, next)
 }
 
 func (s *ApplicationService) ChangePassword(
@@ -248,6 +296,42 @@ func (s *ApplicationService) ChangePassword(
 	)
 	if err != nil {
 		return User{}, fmt.Errorf("change user password: %w", err)
+	}
+	return Clone(updated.User), nil
+}
+
+func (s *ApplicationService) ChangeCurrentPassword(
+	ctx context.Context,
+	actor security.Actor,
+	currentPassword string,
+	newPassword string,
+) (User, error) {
+	current, err := s.currentRecord(ctx, actor)
+	if err != nil {
+		return User{}, err
+	}
+	valid, _, err := s.hasher.Verify(currentPassword, current.PasswordHash)
+	if err != nil {
+		return User{}, fmt.Errorf("verify current user password: %w", err)
+	}
+	if !valid {
+		return User{}, ErrInvalidCurrentPassword
+	}
+	if err := validatePassword(newPassword); err != nil {
+		return User{}, err
+	}
+	passwordHash, err := s.hasher.Hash(newPassword)
+	if err != nil {
+		return User{}, fmt.Errorf("hash current user password: %w", err)
+	}
+	updated, err := s.repository.ChangePassword(
+		ctx,
+		actor.AuditUserID(),
+		current.ID,
+		passwordHash,
+	)
+	if err != nil {
+		return User{}, fmt.Errorf("change current user password: %w", err)
 	}
 	return Clone(updated.User), nil
 }
@@ -392,6 +476,56 @@ func (s *ApplicationService) byID(
 	return cloneRecord(record), nil
 }
 
+func (s *ApplicationService) currentRecord(
+	ctx context.Context,
+	actor security.Actor,
+) (Record, error) {
+	if ctx == nil {
+		return Record{}, errors.New("current user context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return Record{}, err
+	}
+	id, exists := actor.UserID()
+	if !exists {
+		return Record{}, security.ErrUnauthenticated
+	}
+	record, err := s.byID(ctx, id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Record{}, security.ErrUnauthenticated
+		}
+		return Record{}, err
+	}
+	if record.BlockedAt != nil {
+		return Record{}, security.ErrUnauthenticated
+	}
+	return record, nil
+}
+
+func (s *ApplicationService) updateRecord(
+	ctx context.Context,
+	actor security.Actor,
+	current Record,
+	next Record,
+) (User, error) {
+	normalized, err := normalize(next)
+	if err != nil {
+		return User{}, err
+	}
+	updated, err := s.repository.Update(
+		ctx,
+		actor.AuditUserID(),
+		current,
+		normalized,
+		s.validateAvatar,
+	)
+	if err != nil {
+		return User{}, fmt.Errorf("update current user: %w", err)
+	}
+	return Clone(updated.User), nil
+}
+
 func (s *ApplicationService) validateAvatar(
 	ctx context.Context,
 	id media.ID,
@@ -417,6 +551,12 @@ func normalize(record Record) (Record, error) {
 	record.LastName = normalizeOptional(record.LastName)
 	record.MiddleName = normalizeOptional(record.MiddleName)
 	record.Phone = normalizeOptional(record.Phone)
+	if record.ColorScheme == "" {
+		record.ColorScheme = ColorSchemeSystem
+	}
+	if record.AccentColor == "" {
+		record.AccentColor = AccentColorBlue
+	}
 
 	if !loginPattern.MatchString(record.Login) {
 		return Record{}, errors.New("invalid user login")
@@ -428,6 +568,19 @@ func normalize(record Record) (Record, error) {
 	}
 	if record.Name == "" || utf8.RuneCountInString(record.Name) > 200 {
 		return Record{}, errors.New("invalid user name")
+	}
+	if record.ColorScheme != ColorSchemeLight &&
+		record.ColorScheme != ColorSchemeDark &&
+		record.ColorScheme != ColorSchemeSystem {
+		return Record{}, errors.New("invalid user color scheme")
+	}
+	if record.AccentColor != AccentColorBlue &&
+		record.AccentColor != AccentColorViolet &&
+		record.AccentColor != AccentColorIndigo &&
+		record.AccentColor != AccentColorEmerald &&
+		record.AccentColor != AccentColorAmber &&
+		record.AccentColor != AccentColorRose {
+		return Record{}, errors.New("invalid user accent color")
 	}
 	return record, nil
 }

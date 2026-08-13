@@ -7,6 +7,7 @@ import RadioField from './RadioField.vue'
 import SelectField from './SelectField.vue'
 import TextareaField from './TextareaField.vue'
 import TextField from './TextField.vue'
+import FileField from './FileField.vue'
 
 defineProps<{ field: FieldDefinition }>()
 const model = defineModel<unknown>()
@@ -45,6 +46,12 @@ const model = defineModel<unknown>()
     :multiple="field.options?.multiple ?? false"
   />
   <textarea-field v-else-if="field.type === 'textarea'" v-model="model" />
+  <file-field
+    v-else-if="field.type === 'file'"
+    v-model="model"
+    :storages="field.options?.storages"
+    :mime-types="field.options?.mime_types"
+  />
   <el-alert
     v-else
     type="error"

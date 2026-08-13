@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
@@ -139,15 +140,19 @@ func TestAdminSessionReturnsSafeCurrentUserPayload(t *testing.T) {
 
 	lastName := "Иванов"
 	middleName := "Иванович"
+	avatarID := media.ID(7)
 	authorizer := &accessAuthorizer{}
 	runtime := &Runtime{
 		users: currentUserService{current: user.User{
-			ID:         42,
-			Login:      "admin",
-			Email:      "admin@example.test",
-			Name:       "Иван",
-			LastName:   &lastName,
-			MiddleName: &middleName,
+			ID:            42,
+			Login:         "admin",
+			Email:         "admin@example.test",
+			Name:          "Иван",
+			LastName:      &lastName,
+			MiddleName:    &middleName,
+			AvatarMediaID: &avatarID,
+			ColorScheme:   user.ColorSchemeDark,
+			AccentColor:   user.AccentColorViolet,
 		}},
 		authorization: authorizer,
 	}
@@ -184,6 +189,11 @@ func TestAdminSessionReturnsSafeCurrentUserPayload(t *testing.T) {
 		payload.User.Email != "admin@example.test" ||
 		payload.User.DisplayName != "Иванов Иван Иванович" {
 		t.Fatalf("payload = %#v", payload)
+	}
+	if payload.User.ColorScheme != user.ColorSchemeDark ||
+		payload.User.AccentColor != user.AccentColorViolet || !payload.User.HasAvatar ||
+		payload.User.AvatarUpdatedAt == nil {
+		t.Fatalf("profile session payload = %#v", payload.User)
 	}
 }
 

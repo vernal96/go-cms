@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
@@ -50,6 +51,7 @@ type Service struct {
 	sites      SiteResolver
 	media      media.Service
 	authorizer security.Authorizer
+	files      file.Service
 }
 
 func NewService(
@@ -57,6 +59,7 @@ func NewService(
 	sites SiteResolver,
 	mediaService media.Service,
 	authorizer security.Authorizer,
+	fileServices ...file.Service,
 ) (*Service, error) {
 	if repository == nil {
 		return nil, errors.New("resource repository is nil")
@@ -71,12 +74,16 @@ func NewService(
 		return nil, errors.New("resource authorizer is nil")
 	}
 
-	return &Service{
+	result := &Service{
 		repository: repository,
 		sites:      sites,
 		media:      mediaService,
 		authorizer: authorizer,
-	}, nil
+	}
+	if len(fileServices) > 0 {
+		result.files = fileServices[0]
+	}
+	return result, nil
 }
 
 func (s *Service) Create(
@@ -116,6 +123,7 @@ func (s *Service) Create(
 		Title:            input.Title,
 		MenuTitle:        input.MenuTitle,
 		Slug:             input.Slug,
+		Annotation:       input.Annotation,
 		Content:          input.Content,
 		ImageMediaID:     cloneMediaID(input.ImageMediaID),
 		TargetResourceID: cloneID(input.TargetResourceID),
@@ -132,11 +140,22 @@ func (s *Service) Create(
 		CreatedBy:        actor.AuditUserID(),
 		UpdatedBy:        actor.AuditUserID(),
 	}
+	if item.Slug == "" {
+		if item.ParentID != nil {
+			item.Slug = GenerateSlug(item.Title)
+		} else if _, lookupErr := s.repository.ByPath(ctx, item.SiteID, "/"); lookupErr == nil {
+			item.Slug = GenerateSlug(item.Title)
+		} else if !errors.Is(lookupErr, ErrNotFound) {
+			return Resource{}, fmt.Errorf("check main resource: %w", lookupErr)
+		}
+	}
 
 	normalized, err := s.normalize(
 		ctx,
+		actor,
 		item,
 		siteRuntime,
+		nil,
 		nil,
 	)
 	if err != nil {
@@ -268,6 +287,7 @@ func (s *Service) Update(
 		Title:            input.Title,
 		MenuTitle:        input.MenuTitle,
 		Slug:             input.Slug,
+		Annotation:       input.Annotation,
 		Content:          input.Content,
 		ImageMediaID:     cloneMediaID(input.ImageMediaID),
 		TargetResourceID: cloneID(input.TargetResourceID),
@@ -285,6 +305,11 @@ func (s *Service) Update(
 		UpdatedAt:        current.UpdatedAt,
 		CreatedBy:        cloneUserID(current.CreatedBy),
 		UpdatedBy:        actor.AuditUserID(),
+		DeletedAt:        cloneTime(current.DeletedAt),
+		DeletedBy:        cloneUserID(current.DeletedBy),
+	}
+	if item.Slug == "" && !(item.ParentID == nil && current.ParentID == nil && current.Path != nil && *current.Path == "/") {
+		item.Slug = GenerateSlug(item.Title)
 	}
 
 	if err := s.ensureNoParentCycle(ctx, item); err != nil {
@@ -293,9 +318,11 @@ func (s *Service) Update(
 
 	normalized, err := s.normalize(
 		ctx,
+		actor,
 		item,
 		siteRuntime,
 		nil,
+		current.FileReferences,
 	)
 	if err != nil {
 		return Resource{}, err
@@ -343,10 +370,81 @@ func (s *Service) Delete(
 		return errors.New("resource id is invalid")
 	}
 
-	if err := s.repository.Delete(ctx, id); err != nil {
+	lifecycle, ok := s.repository.(LifecycleRepository)
+	if !ok {
+		return errors.New("resource lifecycle repository is unavailable")
+	}
+	if err := lifecycle.SoftDelete(ctx, actor.AuditUserID(), id); err != nil {
 		return fmt.Errorf("delete resource %d: %w", id, err)
 	}
 	return nil
+}
+
+func (s *Service) Restore(ctx context.Context, actor security.Actor, id ID, withDescendants bool) error {
+	if err := validateContext(ctx, "resource restore"); err != nil {
+		return err
+	}
+	if err := s.authorizer.Check(ctx, actor, deletePermission); err != nil {
+		return err
+	}
+	if id <= 0 {
+		return errors.New("resource id is invalid")
+	}
+	lifecycle, ok := s.repository.(LifecycleRepository)
+	if !ok {
+		return errors.New("resource lifecycle repository is unavailable")
+	}
+	if err := lifecycle.Restore(ctx, actor.AuditUserID(), id, withDescendants); err != nil {
+		return fmt.Errorf("restore resource %d: %w", id, err)
+	}
+	return nil
+}
+
+func (s *Service) DeletePermanent(ctx context.Context, actor security.Actor, id ID) error {
+	if err := validateContext(ctx, "resource permanent delete"); err != nil {
+		return err
+	}
+	if err := s.authorizer.Check(ctx, actor, deletePermission); err != nil {
+		return err
+	}
+	if id <= 0 {
+		return errors.New("resource id is invalid")
+	}
+	if err := s.repository.Delete(ctx, id); err != nil {
+		return fmt.Errorf("permanently delete resource %d: %w", id, err)
+	}
+	return nil
+}
+
+func (s *Service) Move(ctx context.Context, actor security.Actor, id ID, parentID *ID, position int) (Resource, error) {
+	if position < 0 {
+		return Resource{}, fmt.Errorf("%w: resource position is invalid", ErrInvalid)
+	}
+	current, err := s.Get(ctx, actor, id)
+	if err != nil {
+		return Resource{}, err
+	}
+	if current.DeletedAt != nil {
+		return Resource{}, ErrInvalidTree
+	}
+	return s.Update(ctx, actor, UpdateInput{
+		ID: current.ID, ParentID: parentID, Type: current.Type, Template: current.Template,
+		ContentType: current.ContentType, Title: current.Title, MenuTitle: current.MenuTitle,
+		Slug: current.Slug, Annotation: current.Annotation, Content: current.Content,
+		ImageMediaID: current.ImageMediaID, TargetResourceID: current.TargetResourceID,
+		ExternalURL: current.ExternalURL, IsPublic: current.IsPublic, IsSearchable: current.IsSearchable,
+		InMenu: current.InMenu, InSitemap: current.InSitemap, Sort: position,
+		PublishedAt: current.PublishedAt, UnpublishedAt: current.UnpublishedAt,
+		Settings: current.Settings, Widgets: widgetInputsFromBindings(current.Widgets),
+	})
+}
+
+func widgetInputsFromBindings(source []WidgetBinding) []WidgetInput {
+	result := make([]WidgetInput, len(source))
+	for index, binding := range source {
+		result[index] = WidgetInput{Code: binding.Code, Params: cloneMap(binding.Params)}
+	}
+	return result
 }
 
 func (s *Service) Tree(
@@ -404,9 +502,11 @@ func (s *Service) Tree(
 		storedPath := cloneString(item.Path)
 		result, err := s.normalize(
 			ctx,
+			security.System(),
 			item,
 			siteRuntime,
 			rawByID,
+			nil,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -448,7 +548,7 @@ func (s *Service) validateStored(
 	}
 
 	storedPath := cloneString(item.Path)
-	normalized, err := s.normalize(ctx, item, siteRuntime, nil)
+	normalized, err := s.normalize(ctx, security.System(), item, siteRuntime, nil, nil)
 	if err != nil {
 		return Resource{}, err
 	}
@@ -463,9 +563,11 @@ func (s *Service) validateStored(
 
 func (s *Service) normalize(
 	ctx context.Context,
+	actor security.Actor,
 	item Resource,
 	siteRuntime *site.Runtime,
 	known map[ID]Resource,
+	trustedFileReferences map[string]file.ID,
 ) (Resource, error) {
 	item = Clone(item)
 	item.Title = strings.TrimSpace(item.Title)
@@ -524,6 +626,9 @@ func (s *Service) normalize(
 	)
 	if err != nil {
 		return Resource{}, err
+	}
+	if parent != nil && parent.DeletedAt != nil && item.DeletedAt == nil {
+		return Resource{}, ErrInvalidTree
 	}
 
 	payload := resourcetype.Payload{
@@ -590,6 +695,14 @@ func (s *Service) normalize(
 			)
 		}
 		payload.Settings = settings
+		fileReferences, err := templateRuntime.FieldSchema().FileReferences(settings)
+		if err != nil {
+			return Resource{}, fmt.Errorf("collect resource file references: %w", err)
+		}
+		if err := s.validateFileReferences(ctx, actor, fileReferences, trustedFileReferences); err != nil {
+			return Resource{}, err
+		}
+		item.FileReferences = resourceFileReferenceMap(fileReferences)
 	}
 
 	switch resourceType.PathMode() {
@@ -616,6 +729,39 @@ func (s *Service) normalize(
 	item.Settings = cloneMap(payload.Settings)
 	item.Widgets = widgets
 	return item, nil
+}
+
+func (s *Service) validateFileReferences(ctx context.Context, actor security.Actor, references []field.FileReference, trusted map[string]file.ID) error {
+	if len(references) == 0 {
+		return nil
+	}
+	if s.files == nil {
+		return errors.New("resource file service is unavailable")
+	}
+	for _, reference := range references {
+		if trusted[reference.Key] == file.ID(reference.ID) {
+			continue
+		}
+		item, err := s.files.GetFile(ctx, actor, file.ID(reference.ID))
+		if err != nil {
+			return fmt.Errorf("file field %q: %w", reference.Key, err)
+		}
+		if !field.FileMatches(reference.Options, item.Storage, item.MIMEType) {
+			return fmt.Errorf("file field %q rejects selected file", reference.Key)
+		}
+	}
+	return nil
+}
+
+func resourceFileReferenceMap(references []field.FileReference) map[string]file.ID {
+	if len(references) == 0 {
+		return nil
+	}
+	result := make(map[string]file.ID, len(references))
+	for _, reference := range references {
+		result[reference.Key] = file.ID(reference.ID)
+	}
+	return result
 }
 
 func widgetBindings(source []WidgetInput) []WidgetBinding {

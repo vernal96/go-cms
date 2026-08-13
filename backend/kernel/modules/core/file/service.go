@@ -57,7 +57,7 @@ func NewService(
 	repository Repository,
 	disks DiskResolver,
 	authorizer security.Authorizer,
-) (Service, error) {
+) (ManagementService, error) {
 	if repository == nil {
 		return nil, errors.New("file repository is nil")
 	}
@@ -71,6 +71,79 @@ func NewService(
 		repository: repository,
 		disks:      disks,
 		authorizer: authorizer,
+	}, nil
+}
+
+func (s *service) Disks(
+	ctx context.Context,
+	actor security.Actor,
+) ([]filesystem.DiskInfo, error) {
+	if err := validateContext(ctx, "list filesystem disks"); err != nil {
+		return nil, err
+	}
+	if err := s.authorizer.Check(ctx, actor, readPermission); err != nil {
+		return nil, err
+	}
+	catalog, ok := s.disks.(interface{ Disks() []filesystem.DiskInfo })
+	if !ok {
+		return nil, errors.New("filesystem disk catalog is unavailable")
+	}
+	return append([]filesystem.DiskInfo(nil), catalog.Disks()...), nil
+}
+
+func (s *service) Browse(
+	ctx context.Context,
+	actor security.Actor,
+	storage filesystem.Code,
+	folderID *FolderID,
+) (BrowserListing, error) {
+	if err := validateContext(ctx, "browse file folder"); err != nil {
+		return BrowserListing{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, readPermission); err != nil {
+		return BrowserListing{}, err
+	}
+	disk, err := s.disk(storage)
+	if err != nil {
+		return BrowserListing{}, err
+	}
+	repository, err := s.managementRepository()
+	if err != nil {
+		return BrowserListing{}, err
+	}
+
+	var current *Folder
+	var breadcrumbs []Folder
+	if folderID != nil {
+		item, err := repository.FolderByID(ctx, *folderID)
+		if err != nil {
+			return BrowserListing{}, fmt.Errorf("get browsed file folder: %w", err)
+		}
+		if item.Storage != storage {
+			return BrowserListing{}, ErrStorageMismatch
+		}
+		item = CloneFolder(item)
+		current = &item
+		breadcrumbs, err = repository.FolderAncestors(ctx, *folderID)
+		if err != nil {
+			return BrowserListing{}, fmt.Errorf("list folder breadcrumbs: %w", err)
+		}
+	}
+	folders, err := repository.ListFolderEntries(ctx, storage, folderID)
+	if err != nil {
+		return BrowserListing{}, fmt.Errorf("list file folders: %w", err)
+	}
+	files, err := repository.ListFiles(ctx, storage, folderID)
+	if err != nil {
+		return BrowserListing{}, fmt.Errorf("list files: %w", err)
+	}
+	return BrowserListing{
+		Storage:     storage,
+		Visibility:  disk.Visibility(),
+		Folder:      current,
+		Breadcrumbs: breadcrumbs,
+		Folders:     folders,
+		Files:       files,
 	}, nil
 }
 
@@ -111,6 +184,50 @@ func (s *service) CreateFolder(
 	})
 	if err != nil {
 		return Folder{}, fmt.Errorf("create file folder: %w", err)
+	}
+	return CloneFolder(result), nil
+}
+
+func (s *service) CreateAvailableFolder(
+	ctx context.Context,
+	actor security.Actor,
+	input CreateFolderInput,
+) (Folder, error) {
+	if err := validateContext(ctx, "create available file folder"); err != nil {
+		return Folder{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, createPermission); err != nil {
+		return Folder{}, err
+	}
+	name, err := normalizeName(input.Name)
+	if err != nil {
+		return Folder{}, err
+	}
+	if _, err := s.disk(input.Storage); err != nil {
+		return Folder{}, err
+	}
+	if input.ParentID != nil {
+		parent, err := s.repository.FolderByID(ctx, *input.ParentID)
+		if err != nil {
+			return Folder{}, fmt.Errorf("get parent file folder: %w", err)
+		}
+		if parent.Storage != input.Storage {
+			return Folder{}, ErrStorageMismatch
+		}
+	}
+	repository, err := s.managementRepository()
+	if err != nil {
+		return Folder{}, err
+	}
+	result, err := repository.CreateAvailableFolder(ctx, Folder{
+		ParentID:  cloneFolderID(input.ParentID),
+		Storage:   input.Storage,
+		Name:      name,
+		CreatedBy: actor.AuditUserID(),
+		UpdatedBy: actor.AuditUserID(),
+	})
+	if err != nil {
+		return Folder{}, fmt.Errorf("create available file folder: %w", err)
 	}
 	return CloneFolder(result), nil
 }
@@ -181,6 +298,23 @@ func (s *service) Upload(
 	actor security.Actor,
 	input UploadInput,
 ) (File, error) {
+	return s.upload(ctx, actor, input, false)
+}
+
+func (s *service) UploadAvailable(
+	ctx context.Context,
+	actor security.Actor,
+	input UploadInput,
+) (File, error) {
+	return s.upload(ctx, actor, input, true)
+}
+
+func (s *service) upload(
+	ctx context.Context,
+	actor security.Actor,
+	input UploadInput,
+	autoRename bool,
+) (File, error) {
 	if err := validateContext(ctx, "upload file"); err != nil {
 		return File{}, err
 	}
@@ -212,13 +346,15 @@ func (s *service) Upload(
 			return File{}, fmt.Errorf("get parent file: %w", err)
 		}
 	}
-	if err := s.repository.NameAvailable(
-		ctx,
-		input.Storage,
-		input.FolderID,
-		name,
-	); err != nil {
-		return File{}, err
+	if !autoRename {
+		if err := s.repository.NameAvailable(
+			ctx,
+			input.Storage,
+			input.FolderID,
+			name,
+		); err != nil {
+			return File{}, err
+		}
 	}
 
 	header := make([]byte, 512)
@@ -255,7 +391,18 @@ func (s *service) Upload(
 		CreatedBy:      actor.AuditUserID(),
 		UpdatedBy:      actor.AuditUserID(),
 	}
-	result, createErr := s.repository.CreateFile(ctx, item)
+	var result File
+	var createErr error
+	if autoRename {
+		repository, err := s.managementRepository()
+		if err != nil {
+			_ = disk.Delete(context.WithoutCancel(ctx), key)
+			return File{}, err
+		}
+		result, createErr = repository.CreateAvailableFile(ctx, item)
+	} else {
+		result, createErr = s.repository.CreateFile(ctx, item)
+	}
 	if createErr != nil {
 		cleanupErr := disk.Delete(context.WithoutCancel(ctx), key)
 		return File{}, errors.Join(
@@ -421,6 +568,131 @@ func (s *service) MoveFolder(
 	return CloneFolder(result), nil
 }
 
+func (s *service) RenameFile(
+	ctx context.Context,
+	actor security.Actor,
+	input RenameFileInput,
+) (File, error) {
+	if err := validateContext(ctx, "rename file"); err != nil {
+		return File{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, updatePermission); err != nil {
+		return File{}, err
+	}
+	if input.ID <= 0 {
+		return File{}, errors.New("file id is invalid")
+	}
+	name, err := normalizeName(input.Name)
+	if err != nil {
+		return File{}, err
+	}
+	repository, err := s.managementRepository()
+	if err != nil {
+		return File{}, err
+	}
+	result, err := repository.RenameFile(ctx, actor.AuditUserID(), input.ID, name)
+	if err != nil {
+		return File{}, fmt.Errorf("rename file %d: %w", input.ID, err)
+	}
+	return Clone(result), nil
+}
+
+func (s *service) RenameFolder(
+	ctx context.Context,
+	actor security.Actor,
+	input RenameFolderInput,
+) (Folder, error) {
+	if err := validateContext(ctx, "rename file folder"); err != nil {
+		return Folder{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, updatePermission); err != nil {
+		return Folder{}, err
+	}
+	if input.ID <= 0 {
+		return Folder{}, errors.New("file folder id is invalid")
+	}
+	name, err := normalizeName(input.Name)
+	if err != nil {
+		return Folder{}, err
+	}
+	repository, err := s.managementRepository()
+	if err != nil {
+		return Folder{}, err
+	}
+	result, err := repository.RenameFolder(ctx, actor.AuditUserID(), input.ID, name)
+	if err != nil {
+		return Folder{}, fmt.Errorf("rename file folder %d: %w", input.ID, err)
+	}
+	return CloneFolder(result), nil
+}
+
+func (s *service) MoveItems(
+	ctx context.Context,
+	actor security.Actor,
+	input MoveItemsInput,
+) ([]Folder, []File, error) {
+	if err := validateContext(ctx, "move filesystem items"); err != nil {
+		return nil, nil, err
+	}
+	if err := s.authorizer.Check(ctx, actor, updatePermission); err != nil {
+		return nil, nil, err
+	}
+	if len(input.Items) == 0 {
+		return nil, nil, errors.New("filesystem move items are empty")
+	}
+	if err := validateItemReferences(input.Items); err != nil {
+		return nil, nil, err
+	}
+	if _, err := s.disk(input.Storage); err != nil {
+		return nil, nil, err
+	}
+	if input.FolderID != nil {
+		folder, err := s.repository.FolderByID(ctx, *input.FolderID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("get target file folder: %w", err)
+		}
+		if folder.Storage != input.Storage {
+			return nil, nil, ErrStorageMismatch
+		}
+	}
+	repository, err := s.managementRepository()
+	if err != nil {
+		return nil, nil, err
+	}
+	folders, files, err := repository.MoveItems(ctx, actor.AuditUserID(), input)
+	if err != nil {
+		return nil, nil, fmt.Errorf("move filesystem items: %w", err)
+	}
+	return folders, files, nil
+}
+
+func (s *service) DeleteItems(
+	ctx context.Context,
+	actor security.Actor,
+	input DeleteItemsInput,
+) error {
+	if err := validateContext(ctx, "delete filesystem items"); err != nil {
+		return err
+	}
+	if err := s.authorizer.Check(ctx, actor, deletePermission); err != nil {
+		return err
+	}
+	if len(input.Items) == 0 {
+		return errors.New("filesystem delete items are empty")
+	}
+	if err := validateItemReferences(input.Items); err != nil {
+		return err
+	}
+	repository, err := s.managementRepository()
+	if err != nil {
+		return err
+	}
+	if err := repository.DeleteItems(ctx, input.Items, s.deletePhysical); err != nil {
+		return fmt.Errorf("delete filesystem items: %w", err)
+	}
+	return nil
+}
+
 func (s *service) DeleteFile(
 	ctx context.Context,
 	actor security.Actor,
@@ -563,6 +835,28 @@ func (s *service) disk(code filesystem.Code) (filesystem.Disk, error) {
 	return disk, nil
 }
 
+func (s *service) managementRepository() (ManagementRepository, error) {
+	repository, ok := s.repository.(ManagementRepository)
+	if !ok {
+		return nil, errors.New("file management repository is unavailable")
+	}
+	return repository, nil
+}
+
+func validateItemReferences(items []ItemReference) error {
+	seen := make(map[ItemReference]struct{}, len(items))
+	for _, item := range items {
+		if item.ID <= 0 || (item.Kind != ItemFile && item.Kind != ItemFolder) {
+			return errors.New("filesystem item reference is invalid")
+		}
+		if _, exists := seen[item]; exists {
+			return errors.New("filesystem item reference is duplicated")
+		}
+		seen[item] = struct{}{}
+	}
+	return nil
+}
+
 func reference(item File) filesystem.Reference {
 	return filesystem.Reference{
 		ID:   strconv.FormatInt(int64(item.ID), 10),
@@ -622,4 +916,4 @@ func (c *byteCounter) Write(source []byte) (int, error) {
 	return len(source), nil
 }
 
-var _ Service = (*service)(nil)
+var _ ManagementService = (*service)(nil)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue'
+import { onBeforeUnmount, onMounted, watch } from 'vue'
 import { ElCard, ElIcon } from 'element-plus'
 import { Loading, Platform } from '@element-plus/icons-vue'
 
@@ -9,6 +9,7 @@ import LoginView from './components/LoginView.vue'
 import { useAdminAuth } from './auth/use-admin-auth'
 import { setAdminUnauthorizedHandler } from './api/admin-api'
 import type { LoginCredentials } from './types/auth'
+import { applyAppearance, disposeColorScheme } from './theme'
 
 const {
   status,
@@ -20,8 +21,15 @@ const {
   bootstrap,
   signIn,
   logout,
+  refreshSession,
   dispose,
 } = useAdminAuth()
+
+watch(
+  () => [user.value?.color_scheme ?? 'system', user.value?.accent_color ?? 'blue'] as const,
+  ([scheme, accent]) => applyAppearance(scheme, accent),
+  { immediate: true },
+)
 
 function handleSignIn(credentials: LoginCredentials): void {
   void signIn(credentials)
@@ -34,6 +42,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   setAdminUnauthorizedHandler(null)
   dispose()
+  disposeColorScheme()
 })
 </script>
 
@@ -69,9 +78,10 @@ onBeforeUnmount(() => {
 
   <admin-dashboard
     v-else-if="status === 'authorized' && user && accessToken"
-    :display-name="user.display_name"
+    :user="user"
     :access-token="accessToken"
     :permissions="permissions"
     @logout="logout"
+    @profile-updated="refreshSession"
   />
 </template>

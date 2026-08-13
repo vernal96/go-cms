@@ -13,6 +13,7 @@ const supportedTypes = new Set([
   'textarea',
   'email',
   'phone',
+  'file',
 ])
 
 export function unsupportedFieldTypes(fields: FieldDefinition[]): string[] {
@@ -34,6 +35,8 @@ export function createFieldValues(
     } else if (field.type === 'select' && field.options?.multiple) {
       result[field.key] = []
     } else if (field.type === 'int' || field.type === 'float') {
+      result[field.key] = null
+    } else if (field.type === 'file') {
       result[field.key] = null
     } else {
       result[field.key] = ''
@@ -85,6 +88,10 @@ export function validateFieldValues(
       typeof value !== 'number'
     ) {
       errors[field.key] = 'Введите число.'
+      continue
+    }
+    if (field.type === 'file' && (typeof value !== 'number' || !Number.isInteger(value) || value <= 0)) {
+      errors[field.key] = 'Выберите файл.'
       continue
     }
 

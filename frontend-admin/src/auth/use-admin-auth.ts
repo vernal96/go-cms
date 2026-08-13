@@ -138,6 +138,13 @@ export function useAdminAuth(
     }
   }
 
+  async function refreshSession(): Promise<void> {
+    if (!accessToken.value) return
+    const response = await dependencies.loadSession(accessToken.value)
+    user.value = response.user
+    permissions.value = new Set(response.permissions)
+  }
+
   function scheduleExpiration(session: StoredSession): void {
     clearExpirationTimer()
     const delay = Date.parse(session.expiresAt) - dependencies.now()
@@ -179,6 +186,7 @@ export function useAdminAuth(
     bootstrap,
     signIn,
     logout,
+    refreshSession,
     dispose,
   }
 }

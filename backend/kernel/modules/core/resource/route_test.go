@@ -94,6 +94,18 @@ func TestRouteResolverChecksPublicationPathModeAndPermission(t *testing.T) {
 			want: ErrNotFound,
 		},
 		{
+			name: "deleted",
+			item: Resource{
+				ID:        1,
+				SiteID:    1,
+				Type:      "page",
+				Path:      &path,
+				IsPublic:  true,
+				DeletedAt: timePointer(now),
+			},
+			want: ErrNotFound,
+		},
+		{
 			name: "no path type",
 			item: Resource{
 				ID:       1,

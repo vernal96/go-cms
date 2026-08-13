@@ -6,10 +6,12 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
+	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/group"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
@@ -27,7 +29,9 @@ type managementHTTP struct {
 
 func registerManagementRoutes(router chi.Router, management *Management) {
 	handler := &managementHTTP{management: management}
+	registerProfileRoutes(router, handler)
 	registerIdentityRoutes(router, handler)
+	registerFilesystemRoutes(router, handler)
 	router.Get("/dashboard", handler.dashboard)
 	router.Get("/sites/options", handler.listSiteOptions)
 	router.Get("/sites", handler.listSites)
@@ -42,6 +46,10 @@ func registerManagementRoutes(router chi.Router, management *Management) {
 	router.Get("/sites/{siteID}/resource-options", handler.resourceOptions)
 	router.Get("/sites/{siteID}/resources/{resourceID}", handler.getResource)
 	router.Patch("/sites/{siteID}/resources/{resourceID}", handler.updateResource)
+	router.Post("/sites/{siteID}/resources/{resourceID}/move", handler.moveResource)
+	router.Delete("/sites/{siteID}/resources/{resourceID}", handler.deleteResource)
+	router.Post("/sites/{siteID}/resources/{resourceID}/restore", handler.restoreResource)
+	router.Delete("/sites/{siteID}/resources/{resourceID}/permanent", handler.deleteResourcePermanent)
 }
 
 func (h *managementHTTP) dashboard(response http.ResponseWriter, request *http.Request) {
@@ -246,20 +254,24 @@ func (h *managementHTTP) getResource(response http.ResponseWriter, request *http
 }
 
 type updateResourceRequest struct {
-	ParentID     *resource.ID      `json:"parent_id"`
-	Type         resourcetype.Code `json:"type"`
-	Template     *template.Code    `json:"template_code"`
-	Title        string            `json:"title"`
-	MenuTitle    string            `json:"menu_title"`
-	Slug         string            `json:"slug"`
-	Content      string            `json:"content"`
-	ExternalURL  *string           `json:"external_url"`
-	IsPublic     *bool             `json:"is_public"`
-	IsSearchable *bool             `json:"is_searchable"`
-	InMenu       *bool             `json:"in_menu"`
-	InSitemap    *bool             `json:"in_sitemap"`
-	Sort         *int              `json:"sort"`
-	Settings     map[string]any    `json:"settings"`
+	ParentID      *resource.ID      `json:"parent_id"`
+	Type          resourcetype.Code `json:"type"`
+	Template      *template.Code    `json:"template_code"`
+	Title         string            `json:"title"`
+	MenuTitle     string            `json:"menu_title"`
+	Slug          string            `json:"slug"`
+	Annotation    string            `json:"annotation"`
+	Content       string            `json:"content"`
+	ContentType   *string           `json:"content_type"`
+	ExternalURL   *string           `json:"external_url"`
+	IsPublic      *bool             `json:"is_public"`
+	IsSearchable  *bool             `json:"is_searchable"`
+	InMenu        *bool             `json:"in_menu"`
+	InSitemap     *bool             `json:"in_sitemap"`
+	Sort          *int              `json:"sort"`
+	PublishedAt   *time.Time        `json:"published_at"`
+	UnpublishedAt *time.Time        `json:"unpublished_at"`
+	Settings      map[string]any    `json:"settings"`
 }
 
 func (h *managementHTTP) updateResource(response http.ResponseWriter, request *http.Request) {
@@ -284,23 +296,103 @@ func (h *managementHTTP) updateResource(response http.ResponseWriter, request *h
 	result, err := h.management.UpdateResource(
 		request.Context(), actor(request), siteID, resourceID,
 		ResourceUpdateInput{
-			ParentID:     payload.ParentID,
-			Type:         payload.Type,
-			Template:     payload.Template,
-			Title:        payload.Title,
-			MenuTitle:    payload.MenuTitle,
-			Slug:         payload.Slug,
-			Content:      payload.Content,
-			ExternalURL:  payload.ExternalURL,
-			IsPublic:     *payload.IsPublic,
-			IsSearchable: *payload.IsSearchable,
-			InMenu:       *payload.InMenu,
-			InSitemap:    *payload.InSitemap,
-			Sort:         *payload.Sort,
-			Settings:     payload.Settings,
+			ParentID:      payload.ParentID,
+			Type:          payload.Type,
+			Template:      payload.Template,
+			Title:         payload.Title,
+			MenuTitle:     payload.MenuTitle,
+			Slug:          payload.Slug,
+			Annotation:    payload.Annotation,
+			Content:       payload.Content,
+			ContentType:   payload.ContentType,
+			ExternalURL:   payload.ExternalURL,
+			IsPublic:      *payload.IsPublic,
+			IsSearchable:  *payload.IsSearchable,
+			InMenu:        *payload.InMenu,
+			InSitemap:     *payload.InSitemap,
+			Sort:          *payload.Sort,
+			PublishedAt:   payload.PublishedAt,
+			UnpublishedAt: payload.UnpublishedAt,
+			Settings:      payload.Settings,
 		},
 	)
 	writeResult(response, http.StatusOK, result, err)
+}
+
+type moveResourceRequest struct {
+	ParentID *resource.ID `json:"parent_id"`
+	Position *int         `json:"position"`
+}
+
+func (h *managementHTTP) moveResource(response http.ResponseWriter, request *http.Request) {
+	siteID, ok := siteID(response, request)
+	if !ok {
+		return
+	}
+	resourceID, ok := resourceID(response, request)
+	if !ok {
+		return
+	}
+	var payload moveResourceRequest
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	if payload.Position == nil || *payload.Position < 0 {
+		writeValidation(response, "position is required")
+		return
+	}
+	result, err := h.management.MoveResource(request.Context(), actor(request), siteID, resourceID, payload.ParentID, *payload.Position)
+	writeResult(response, http.StatusOK, result, err)
+}
+
+func (h *managementHTTP) deleteResource(response http.ResponseWriter, request *http.Request) {
+	h.resourceDelete(response, request, false)
+}
+
+func (h *managementHTTP) deleteResourcePermanent(response http.ResponseWriter, request *http.Request) {
+	h.resourceDelete(response, request, true)
+}
+
+func (h *managementHTTP) resourceDelete(response http.ResponseWriter, request *http.Request, permanent bool) {
+	siteID, ok := siteID(response, request)
+	if !ok {
+		return
+	}
+	resourceID, ok := resourceID(response, request)
+	if !ok {
+		return
+	}
+	err := h.management.DeleteResource(request.Context(), actor(request), siteID, resourceID, permanent)
+	if err != nil {
+		writeManagementError(response, err)
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+type restoreResourceRequest struct {
+	WithDescendants bool `json:"with_descendants"`
+}
+
+func (h *managementHTTP) restoreResource(response http.ResponseWriter, request *http.Request) {
+	siteID, ok := siteID(response, request)
+	if !ok {
+		return
+	}
+	resourceID, ok := resourceID(response, request)
+	if !ok {
+		return
+	}
+	var payload restoreResourceRequest
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	err := h.management.RestoreResource(request.Context(), actor(request), siteID, resourceID, payload.WithDescendants)
+	if err != nil {
+		writeManagementError(response, err)
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
 }
 
 func actor(request *http.Request) security.Actor {
@@ -379,10 +471,22 @@ func writeManagementError(response http.ResponseWriter, err error) {
 		httptransport.WriteJSONError(response, http.StatusForbidden, "forbidden", "operation is forbidden")
 	case errors.Is(err, access.ErrNotPrivileged):
 		httptransport.WriteJSONError(response, http.StatusForbidden, "forbidden", "privileged access is required")
-	case errors.Is(err, site.ErrNotFound), errors.Is(err, resource.ErrNotFound), errors.Is(err, user.ErrNotFound), errors.Is(err, group.ErrNotFound):
+	case errors.Is(err, site.ErrNotFound), errors.Is(err, resource.ErrNotFound), errors.Is(err, user.ErrNotFound), errors.Is(err, group.ErrNotFound), errors.Is(err, file.ErrNotFound), errors.Is(err, file.ErrFolderNotFound), errors.Is(err, file.ErrStorageNotFound):
 		httptransport.WriteJSONError(response, http.StatusNotFound, "not_found", "requested object was not found")
-	case errors.Is(err, site.ErrConflict), errors.Is(err, resource.ErrConflict), errors.Is(err, user.ErrConflict), errors.Is(err, group.ErrConflict):
+	case errors.Is(err, site.ErrConflict), errors.Is(err, resource.ErrConflict), errors.Is(err, user.ErrConflict), errors.Is(err, group.ErrConflict), errors.Is(err, file.ErrConflict):
 		httptransport.WriteJSONError(response, http.StatusConflict, "conflict", "object conflicts with existing data")
+	case errors.Is(err, file.ErrInUse):
+		httptransport.WriteJSONError(response, http.StatusConflict, "file_in_use", "file is used by content")
+	case errors.Is(err, file.ErrStorageMismatch):
+		httptransport.WriteJSONError(response, http.StatusConflict, "storage_mismatch", "items cannot be moved between disks")
+	case errors.Is(err, file.ErrInvalidTree):
+		httptransport.WriteJSONError(response, http.StatusConflict, "invalid_tree", "folder cannot be moved into itself")
+	case errors.Is(err, resource.ErrInvalidTree):
+		httptransport.WriteJSONError(response, http.StatusConflict, "invalid_tree", "resource tree operation is invalid")
+	case errors.Is(err, resource.ErrReferenced):
+		httptransport.WriteJSONError(response, http.StatusConflict, "resource_referenced", "resource is referenced")
+	case errors.Is(err, file.ErrInvalidReference):
+		writeValidation(response, "file reference is invalid")
 	case errors.Is(err, group.ErrProtected):
 		httptransport.WriteJSONError(response, http.StatusConflict, "protected_group", "admin group is protected")
 	case errors.Is(err, user.ErrSelfBlock):

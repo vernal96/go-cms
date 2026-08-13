@@ -4,18 +4,26 @@ import { flushPromises, shallowMount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { adminRequest } from '../api/admin-api'
+import { adminRequest, adminRequestVoid } from '../api/admin-api'
 import { useSelectedSite } from '../composables/use-selected-site'
 import ResourceTree from './ResourceTree.vue'
 
-vi.mock('../api/admin-api', () => ({ adminRequest: vi.fn() }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
+vi.mock('../api/admin-api', () => ({ adminRequest: vi.fn(), adminRequestVoid: vi.fn() }))
+vi.mock('vue-router', () => ({
+  useRouter: () => ({
+    push: vi.fn(),
+    afterEach: vi.fn(() => vi.fn()),
+    currentRoute: { value: { params: {} } },
+  }),
+}))
 
 const requestMock = vi.mocked(adminRequest)
+const requestVoidMock = vi.mocked(adminRequestVoid)
 
 describe('ResourceTree', () => {
   beforeEach(() => {
     requestMock.mockReset()
+    requestVoidMock.mockReset()
     useSelectedSite().reset()
     useSelectedSite().setSelected({ id: 7, domain: 'example.com' })
   })
@@ -93,5 +101,54 @@ describe('ResourceTree', () => {
 
     await wrapper.setProps({ canCreate: true })
     expect(wrapper.findComponent({ name: 'ElButton' }).exists()).toBe(true)
+  })
+
+  it('moves a resource into a folder as its last child', async () => {
+    requestMock.mockResolvedValue({})
+    const wrapper = shallowMount(ResourceTree, {
+      props: { accessToken: 'token', canCreate: false, canUpdate: true },
+    })
+    const tree = wrapper.findComponent({ name: 'ElTree' })
+
+    tree.vm.$emit(
+      'node-drop',
+      { data: { id: 3, deleted: false, loadError: false } },
+      { data: { id: 8, deleted: false, loadError: false } },
+      'inner',
+    )
+    await flushPromises()
+
+    expect(requestMock).toHaveBeenCalledWith(
+      '/api/admin/sites/7/resources/3/move',
+      'token',
+      {
+        method: 'POST',
+        body: JSON.stringify({ parent_id: 8, position: 2_147_483_647 }),
+      },
+    )
+  })
+
+  it('shows restore actions and permanent delete for a deleted resource', async () => {
+    const wrapper = shallowMount(ResourceTree, {
+      props: { accessToken: 'token', canCreate: false, canDelete: true },
+    })
+    const tree = wrapper.findComponent({ name: 'ElTree' })
+    const event = new MouseEvent('contextmenu', { clientX: 100, clientY: 100 })
+
+    tree.vm.$emit('node-contextmenu', event, {
+      id: 12,
+      display_title: 'Удалённый ресурс',
+      deleted: true,
+      has_children: true,
+      loadError: false,
+    })
+    await nextTick()
+
+    const menu = wrapper.find('.resource-context-menu')
+    expect(menu.exists()).toBe(true)
+    expect(menu.text()).toContain('Восстановить')
+    expect(menu.text()).toContain('Восстановить с потомками')
+    expect(menu.text()).toContain('Удалить окончательно')
+    expect(menu.find('.is-danger').exists()).toBe(true)
   })
 })

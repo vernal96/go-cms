@@ -123,8 +123,8 @@ async function submit(): Promise<void> {
   errorMessage.value = null
   serverFieldErrors.value = []
   localFieldErrors.value = {}
-  if (!form.title.trim() || (parent.value && !form.slug.trim())) {
-    errorMessage.value = 'Заполните название и slug дочернего ресурса.'
+  if (!form.title.trim()) {
+    errorMessage.value = 'Заполните заголовок ресурса.'
     return
   }
   if (form.type === 'page' && !form.template_code) {
@@ -214,10 +214,10 @@ defineExpose({ open })
       <el-form-item label="Название в меню"
         ><el-input v-model="form.menu_title"
       /></el-form-item>
-      <el-form-item label="Slug"
+      <el-form-item label="Код"
         ><el-input
           v-model="form.slug"
-          placeholder="Можно оставить пустым только для корневой страницы"
+          placeholder="Оставьте пустым для генерации по заголовку"
       /></el-form-item>
       <el-form-item v-if="form.type === 'link'" label="Адрес ссылки">
         <el-input

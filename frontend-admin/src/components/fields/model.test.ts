@@ -79,6 +79,14 @@ const fields: FieldDefinition[] = [
     rules: [],
     options: { pattern: '^\\+[1-9][0-9]{1,14}$' },
   },
+  {
+    key: 'asset',
+    type: 'file',
+    label: 'Asset',
+    required: true,
+    rules: [],
+    options: { storages: ['public'], mime_types: ['image/*'] },
+  },
 ]
 
 describe('dynamic field model', () => {
@@ -94,6 +102,7 @@ describe('dynamic field model', () => {
       area: '',
       email: '',
       phone: '',
+      asset: null,
     })
   })
 
@@ -106,6 +115,7 @@ describe('dynamic field model', () => {
       float: 'Поле обязательно.',
       radio: 'Поле обязательно.',
       single: 'Поле обязательно.',
+      asset: 'Поле обязательно.',
     })
     const errors = validateFieldValues(fields, {
       text: 'x',
@@ -118,12 +128,14 @@ describe('dynamic field model', () => {
       area: 'too long',
       email: 'bad',
       phone: '8999',
+      asset: -1,
     })
     expect(errors.text).toContain('Минимальное')
     expect(errors.integer).toContain('Максимальное')
     expect(errors.area).toContain('Максимальное')
     expect(errors.email).toContain('электронной')
     expect(errors.phone).toContain('E.164')
+    expect(errors.asset).toContain('Выберите файл')
   })
 
   it('blocks unknown types and maps backend validation rules', () => {

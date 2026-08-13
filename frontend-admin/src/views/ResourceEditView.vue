@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   ElAlert,
   ElButton,
+  ElDatePicker,
+  ElEmpty,
   ElForm,
   ElFormItem,
+  ElIcon,
   ElInput,
   ElInputNumber,
   ElMessage,
@@ -13,11 +16,15 @@ import {
   ElSelect,
   ElSkeleton,
   ElSwitch,
+  ElTabPane,
+  ElTabs,
 } from 'element-plus'
+import { RefreshRight } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { AdminAPIError, adminRequest } from '../api/admin-api'
+import { AdminAPIError, adminRequest, adminRequestVoid } from '../api/admin-api'
 import DynamicFieldsForm from '../components/fields/DynamicFieldsForm.vue'
+import RichTextEditor from '../components/RichTextEditor.vue'
 import {
   createFieldValues,
   fieldErrorMessage,
@@ -25,6 +32,7 @@ import {
   validateFieldValues,
   type DynamicFieldErrors,
 } from '../components/fields/model'
+import { generateResourceCode } from '../resource-code'
 import type {
   ResourceDetailsResponse,
   ResourceMetadata,
@@ -34,28 +42,34 @@ import type {
 } from '../types/admin'
 import type { FieldValidationError } from '../types/auth'
 
-const props = defineProps<{
-  accessToken: string
-  permissions: ReadonlySet<string>
-}>()
+const props = defineProps<{ accessToken: string; permissions: ReadonlySet<string> }>()
 const emit = defineEmits<{ unauthorized: [] }>()
 const route = useRoute()
 const router = useRouter()
+const previousTitle = document.title
+
 const loading = ref(true)
 const submitting = ref(false)
+const deleting = ref(false)
 const loadError = ref<string | null>(null)
 const submitError = ref<string | null>(null)
-const serverFieldErrors = ref<FieldValidationError[]>([])
-const localFieldErrors = ref<DynamicFieldErrors>({})
+const activeTab = ref('main')
 const metadata = ref<ResourceMetadata>({ types: [], templates: [] })
 const options = ref<ResourceOption[]>([])
 const canUpdate = ref(false)
+const canDelete = ref(false)
+const canRestore = ref(false)
+const deleted = ref(false)
+const deletedAt = ref<string | null>(null)
+const serverFieldErrors = ref<FieldValidationError[]>([])
+const localFieldErrors = ref<DynamicFieldErrors>({})
 
 const form = reactive({
   parent_id: null as number | null,
   type: 'page' as 'page' | 'link',
   template_code: '',
   title: '',
+  annotation: '',
   menu_title: '',
   slug: '',
   content: '',
@@ -64,22 +78,24 @@ const form = reactive({
   is_searchable: true,
   in_menu: true,
   in_sitemap: true,
-  sort: 0,
+  position: 1,
+  published_at: null as Date | null,
+  unpublished_at: null as Date | null,
   settings: {} as Record<string, unknown>,
 })
 
 const resourceId = computed(() => Number(route.params.resourceId))
 const siteId = computed(() => Number(route.params.siteId))
-const selectedTemplate = computed(
-  () =>
-    metadata.value.templates.find((item) => item.code === form.template_code) ??
-    null,
+const selectedTemplate = computed(() =>
+  metadata.value.templates.find((item) => item.code === form.template_code) ?? null,
 )
+const hideInMenu = computed({
+  get: () => !form.in_menu,
+  set: (value: boolean) => { form.in_menu = !value },
+})
 const displayedFieldErrors = computed<DynamicFieldErrors>(() => {
   const result = { ...localFieldErrors.value }
-  for (const error of serverFieldErrors.value) {
-    result[error.key] = fieldErrorMessage(error.rule, error.param)
-  }
+  for (const error of serverFieldErrors.value) result[error.key] = fieldErrorMessage(error.rule, error.param)
   return result
 })
 const parentOptions = computed(() => {
@@ -95,47 +111,43 @@ const parentOptions = computed(() => {
 async function load(): Promise<void> {
   loading.value = true
   loadError.value = null
-  submitError.value = null
   try {
     const [details, loadedMetadata, loadedOptions] = await Promise.all([
-      adminRequest<ResourceDetailsResponse>(
-        `/api/admin/sites/${siteId.value}/resources/${resourceId.value}`,
-        props.accessToken,
-      ),
-      adminRequest<ResourceMetadata>(
-        `/api/admin/sites/${siteId.value}/resource-metadata`,
-        props.accessToken,
-      ),
-      adminRequest<ResourceOptionsResponse>(
-        `/api/admin/sites/${siteId.value}/resource-options`,
-        props.accessToken,
-      ),
+      adminRequest<ResourceDetailsResponse>(`/api/admin/sites/${siteId.value}/resources/${resourceId.value}`, props.accessToken),
+      adminRequest<ResourceMetadata>(`/api/admin/sites/${siteId.value}/resource-metadata`, props.accessToken),
+      adminRequest<ResourceOptionsResponse>(`/api/admin/sites/${siteId.value}/resource-options`, props.accessToken),
     ])
     metadata.value = loadedMetadata
     options.value = loadedOptions.items
     canUpdate.value = details.permissions.update
-    const resource = details.resource
+    canDelete.value = details.permissions.delete
+    canRestore.value = details.permissions.restore
+    const item = details.resource
+    deleted.value = item.deleted
+    deletedAt.value = item.deleted_at
     Object.assign(form, {
-      parent_id: resource.parent_id,
-      type: resource.type,
-      template_code: resource.template_code ?? '',
-      title: resource.title,
-      menu_title: resource.menu_title,
-      slug: resource.slug,
-      content: resource.content,
-      external_url: resource.external_url ?? '',
-      is_public: resource.is_public,
-      is_searchable: resource.is_searchable,
-      in_menu: resource.in_menu,
-      in_sitemap: resource.in_sitemap,
-      sort: resource.sort,
+      parent_id: item.parent_id,
+      type: item.type,
+      template_code: item.template_code ?? '',
+      title: item.title,
+      annotation: item.annotation,
+      menu_title: item.menu_title,
+      slug: item.slug,
+      content: item.content,
+      external_url: item.external_url ?? '',
+      is_public: item.is_public,
+      is_searchable: item.is_searchable,
+      in_menu: item.in_menu,
+      in_sitemap: item.in_sitemap,
+      position: item.sort + 1,
+      published_at: item.published_at ? new Date(item.published_at) : null,
+      unpublished_at: item.unpublished_at ? new Date(item.unpublished_at) : null,
       settings: createFieldValues(
-        loadedMetadata.templates.find(
-          (item) => item.code === resource.template_code,
-        )?.fields ?? [],
-        resource.settings,
+        loadedMetadata.templates.find((template) => template.code === item.template_code)?.fields ?? [],
+        item.settings,
       ),
     })
+    document.title = `${item.title} — Админка`
   } catch (error) {
     handleError(error, 'Не удалось загрузить ресурс.')
   } finally {
@@ -149,15 +161,9 @@ async function changeType(value: 'page' | 'link'): Promise<void> {
     await ElMessageBox.confirm(
       'При смене типа несовместимые данные и настройки будут полностью очищены.',
       'Сменить тип ресурса?',
-      {
-        type: 'warning',
-        confirmButtonText: 'Сменить',
-        cancelButtonText: 'Отмена',
-      },
+      { type: 'warning', confirmButtonText: 'Сменить', cancelButtonText: 'Отмена' },
     )
-  } catch {
-    return
-  }
+  } catch { return }
   form.type = value
   serverFieldErrors.value = []
   localFieldErrors.value = {}
@@ -176,63 +182,80 @@ async function changeTemplate(value: string): Promise<void> {
   if (value === form.template_code) return
   try {
     await ElMessageBox.confirm(
-      'Настройки предыдущего шаблона будут полностью очищены.',
+      'Параметры предыдущего шаблона будут полностью очищены.',
       'Сменить шаблон?',
-      {
-        type: 'warning',
-        confirmButtonText: 'Сменить',
-        cancelButtonText: 'Отмена',
-      },
+      { type: 'warning', confirmButtonText: 'Сменить', cancelButtonText: 'Отмена' },
     )
-  } catch {
-    return
-  }
+  } catch { return }
   form.template_code = value
   form.settings = createFieldValues(selectedTemplate.value?.fields ?? [])
   serverFieldErrors.value = []
   localFieldErrors.value = {}
 }
 
+function generateCode(): void {
+  const generated = generateResourceCode(form.title)
+  if (!generated) {
+    ElMessage.warning('Не удалось сформировать код из заголовка')
+    return
+  }
+  form.slug = generated
+}
+
 async function submit(): Promise<void> {
   submitError.value = null
   serverFieldErrors.value = []
   localFieldErrors.value = {}
-  if (!form.title.trim() || (form.parent_id !== null && !form.slug.trim())) {
-    submitError.value = 'Заполните название и slug дочернего ресурса.'
+  if (!form.title.trim()) {
+    submitError.value = 'Заполните заголовок ресурса.'
+    activeTab.value = 'main'
     return
   }
   if (form.type === 'page' && !form.template_code) {
     submitError.value = 'Выберите шаблон страницы.'
+    activeTab.value = 'main'
     return
   }
   if (form.type === 'link' && !form.external_url.trim()) {
-    submitError.value = 'Укажите адрес ссылки.'
+    submitError.value = 'Укажите внешний URL.'
+    activeTab.value = 'main'
     return
   }
-  const fields =
-    form.type === 'page' ? (selectedTemplate.value?.fields ?? []) : []
-  if (unsupportedFieldTypes(fields).length > 0) {
-    submitError.value =
-      'Форма содержит неизвестные типы полей и не может быть отправлена.'
+  if (form.published_at && form.unpublished_at && form.unpublished_at <= form.published_at) {
+    submitError.value = 'Дата окончания публикации должна быть позже даты начала.'
+    activeTab.value = 'settings'
+    return
+  }
+  const fields = form.type === 'page' ? (selectedTemplate.value?.fields ?? []) : []
+  if (unsupportedFieldTypes(fields).length) {
+    submitError.value = 'Форма содержит неизвестные типы полей и не может быть отправлена.'
+    activeTab.value = 'fields'
     return
   }
   localFieldErrors.value = validateFieldValues(fields, form.settings)
-  if (Object.keys(localFieldErrors.value).length > 0) return
+  if (Object.keys(localFieldErrors.value).length) {
+    activeTab.value = 'fields'
+    return
+  }
 
   const payload: ResourceUpdatePayload = {
     parent_id: form.parent_id,
     type: form.type,
     template_code: form.type === 'page' ? form.template_code : null,
     title: form.title.trim(),
+    annotation: form.annotation,
     menu_title: form.menu_title.trim(),
     slug: form.slug.trim(),
+    content_type: form.type === 'page' ? 'html' : null,
     content: form.type === 'page' ? form.content : '',
     external_url: form.type === 'link' ? form.external_url.trim() : null,
     is_public: form.is_public,
     is_searchable: form.is_searchable,
     in_menu: form.in_menu,
     in_sitemap: form.in_sitemap,
-    sort: form.sort,
+    sort: Math.max(0, form.position - 1),
+    published_at: form.published_at?.toISOString() ?? null,
+    unpublished_at: form.unpublished_at?.toISOString() ?? null,
     settings: form.type === 'page' ? { ...form.settings } : {},
   }
   submitting.value = true
@@ -242,28 +265,58 @@ async function submit(): Promise<void> {
       props.accessToken,
       { method: 'PATCH', body: JSON.stringify(payload) },
     )
+    form.slug = response.resource.slug
+    form.position = response.resource.sort + 1
     form.settings = createFieldValues(fields, response.resource.settings)
+    document.title = `${response.resource.title} — Админка`
+    notifyTreeChanged()
     ElMessage.success('Ресурс сохранён')
   } catch (error) {
-    if (error instanceof AdminAPIError)
-      serverFieldErrors.value = error.fieldErrors
+    if (error instanceof AdminAPIError) serverFieldErrors.value = error.fieldErrors
     handleError(error, 'Не удалось сохранить ресурс.', true)
   } finally {
     submitting.value = false
   }
 }
 
-function handleError(
-  error: unknown,
-  fallback: string,
-  submittingRequest = false,
-): void {
-  if (error instanceof AdminAPIError && error.status === 401) {
-    emit('unauthorized')
-    return
+async function changeDeleted(next: boolean): Promise<void> {
+  if (deleting.value || !canDelete.value || (!next && !canRestore.value)) return
+  try {
+    await ElMessageBox.confirm(
+      next
+        ? 'Ресурс и все его потомки будут помечены удалёнными.'
+        : 'Будет восстановлен только текущий ресурс.',
+      next ? 'Удалить ресурс?' : 'Восстановить ресурс?',
+      { type: 'warning', confirmButtonText: next ? 'Удалить' : 'Восстановить', cancelButtonText: 'Отмена' },
+    )
+  } catch { return }
+  deleting.value = true
+  try {
+    if (next) {
+      await adminRequestVoid(`/api/admin/sites/${siteId.value}/resources/${resourceId.value}`, props.accessToken, { method: 'DELETE' })
+    } else {
+      await adminRequestVoid(`/api/admin/sites/${siteId.value}/resources/${resourceId.value}/restore`, props.accessToken, {
+        method: 'POST', body: JSON.stringify({ with_descendants: false }),
+      })
+    }
+    notifyTreeChanged()
+    await load()
+    ElMessage.success(next ? 'Ресурс удалён' : 'Ресурс восстановлен')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : 'Не удалось изменить статус ресурса.')
+  } finally {
+    deleting.value = false
   }
+}
+
+function notifyTreeChanged(): void {
+  window.dispatchEvent(new CustomEvent('admin:resource-tree-changed', { detail: { siteId: siteId.value } }))
+}
+
+function handleError(error: unknown, fallback: string, submitRequest = false): void {
+  if (error instanceof AdminAPIError && error.status === 401) { emit('unauthorized'); return }
   const message = error instanceof Error ? error.message : fallback
-  if (submittingRequest) submitError.value = message
+  if (submitRequest) submitError.value = message
   else loadError.value = message
 }
 
@@ -273,11 +326,7 @@ function descendantIDs(items: ResourceOption[], rootID: number): Set<number> {
   while (changed) {
     changed = false
     for (const item of items) {
-      if (
-        item.parent_id !== null &&
-        result.has(item.parent_id) &&
-        !result.has(item.id)
-      ) {
+      if (item.parent_id !== null && result.has(item.parent_id) && !result.has(item.id)) {
         result.add(item.id)
         changed = true
       }
@@ -300,141 +349,99 @@ function optionDepth(item: ResourceOption, items: ResourceOption[]): number {
 }
 
 onMounted(() => void load())
-watch(
-  () => [route.params.siteId, route.params.resourceId],
-  () => void load(),
-)
+onBeforeUnmount(() => { document.title = previousTitle })
+watch(() => [route.params.siteId, route.params.resourceId], () => void load())
 </script>
 
 <template>
   <section class="workspace-page resource-edit-page">
-    <header class="page-header">
+    <header class="page-header resource-page-header">
       <div>
-        <h1>Редактор ресурса</h1>
-        <p>Основные свойства и поля шаблона</p>
+        <h1>{{ form.title || 'Ресурс' }}</h1>
+        <p v-if="deleted" class="resource-deleted-caption">Удалён {{ deletedAt ? new Date(deletedAt).toLocaleString() : '' }}</p>
+        <p v-else>Редактирование ресурса</p>
       </div>
-      <el-button @click="router.push('/admin/sites')">К сайтам</el-button>
-    </header>
-    <el-skeleton v-if="loading" animated :rows="10" />
-    <el-alert
-      v-else-if="loadError"
-      type="error"
-      :closable="false"
-      :title="loadError"
-    />
-    <el-form
-      v-else
-      class="resource-edit-form"
-      label-position="top"
-      :model="form"
-      @submit.prevent="submit"
-    >
-      <el-alert
-        v-if="submitError"
-        class="form-alert"
-        type="error"
-        :closable="false"
-        :title="submitError"
-      />
-      <div class="resource-form-grid">
-        <el-form-item label="Родитель">
-          <el-select
-            v-model="form.parent_id"
-            class="full-width"
-            clearable
-            placeholder="Корневой ресурс"
-            @clear="form.parent_id = null"
-          >
-            <el-option
-              v-for="item in parentOptions"
-              :key="item.id"
-              :label="item.indentedTitle"
-              :value="item.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="Тип" required>
-          <el-select
-            :model-value="form.type"
-            class="full-width"
-            @change="changeType"
-          >
-            <el-option
-              v-for="item in metadata.types"
-              :key="item.code"
-              :label="item.label"
-              :value="item.code"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="form.type === 'page'" label="Шаблон" required>
-          <el-select
-            :model-value="form.template_code"
-            class="full-width"
-            @change="changeTemplate"
-          >
-            <el-option
-              v-for="item in metadata.templates"
-              :key="item.code"
-              :label="item.label"
-              :value="item.code"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="Название" required
-          ><el-input v-model="form.title"
-        /></el-form-item>
-        <el-form-item label="Название в меню"
-          ><el-input v-model="form.menu_title"
-        /></el-form-item>
-        <el-form-item label="Slug"
-          ><el-input v-model="form.slug"
-        /></el-form-item>
-        <el-form-item label="Сортировка"
-          ><el-input-number v-model="form.sort" class="full-width" :step="1"
-        /></el-form-item>
-      </div>
-      <el-form-item v-if="form.type === 'page'" label="Контент">
-        <el-input v-model="form.content" type="textarea" :rows="8" />
-      </el-form-item>
-      <el-form-item v-else label="Внешний URL" required>
-        <el-input
-          v-model="form.external_url"
-          placeholder="https://example.com"
-        />
-      </el-form-item>
-      <div class="resource-flags">
-        <el-form-item label="Публичный"
-          ><el-switch v-model="form.is_public"
-        /></el-form-item>
-        <el-form-item label="В поиске"
-          ><el-switch v-model="form.is_searchable"
-        /></el-form-item>
-        <el-form-item label="В меню"
-          ><el-switch v-model="form.in_menu"
-        /></el-form-item>
-        <el-form-item label="В sitemap"
-          ><el-switch v-model="form.in_sitemap"
-        /></el-form-item>
-      </div>
-      <dynamic-fields-form
-        v-if="form.type === 'page' && selectedTemplate"
-        :fields="selectedTemplate.fields"
-        :model-value="form.settings"
-        :errors="displayedFieldErrors"
-        @update:model-value="form.settings = $event"
-      />
-      <div class="form-actions">
-        <el-button @click="router.push('/admin/sites')">Отмена</el-button>
-        <el-button
-          type="primary"
-          native-type="submit"
-          :loading="submitting"
-          :disabled="!canUpdate"
-        >
+      <div class="page-header-actions">
+        <el-button @click="router.push('/admin/sites')">К сайтам</el-button>
+        <el-button type="primary" :loading="submitting" :disabled="!canUpdate || loading" @click="submit">
           Сохранить
         </el-button>
       </div>
+    </header>
+
+    <el-alert v-if="loadError" type="error" :closable="false" :title="loadError" show-icon />
+    <el-skeleton v-else-if="loading" :rows="10" animated />
+    <el-form v-else :model="form" label-position="top" class="resource-editor-form" :class="{ 'is-readonly': !canUpdate }">
+      <el-alert v-if="submitError" class="form-alert" type="error" :closable="false" :title="submitError" show-icon />
+      <el-tabs v-model="activeTab" class="resource-tabs">
+        <el-tab-pane label="Основное" name="main">
+          <div class="resource-main-grid">
+            <div class="resource-main-primary">
+              <el-form-item label="Заголовок" required><el-input v-model="form.title" :disabled="!canUpdate" /></el-form-item>
+              <el-form-item label="Аннотация (введение)"><el-input v-model="form.annotation" type="textarea" :rows="7" :disabled="!canUpdate" /></el-form-item>
+            </div>
+            <div class="resource-main-secondary">
+              <el-form-item v-if="form.type === 'page'" label="Шаблон" required>
+                <el-select :model-value="form.template_code" class="full-width" :disabled="!canUpdate" @change="changeTemplate">
+                  <el-option v-for="item in metadata.templates" :key="item.code" :label="item.label" :value="item.code" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="Код">
+                <el-input v-model="form.slug" :disabled="!canUpdate">
+                  <template #append><el-button :disabled="!canUpdate" aria-label="Сформировать код по заголовку" title="Сформировать по заголовку" @click="generateCode"><el-icon><RefreshRight /></el-icon></el-button></template>
+                </el-input>
+              </el-form-item>
+              <el-form-item label="Пункт меню"><el-input v-model="form.menu_title" :disabled="!canUpdate" /></el-form-item>
+              <div class="resource-switches">
+                <el-form-item label="Опубликован"><el-switch v-model="form.is_public" :disabled="!canUpdate" /></el-form-item>
+                <el-form-item label="Не показывать в меню"><el-switch v-model="hideInMenu" :disabled="!canUpdate" /></el-form-item>
+              </div>
+            </div>
+          </div>
+          <el-form-item v-if="form.type === 'page'" label="Контент" class="resource-content-field">
+            <rich-text-editor v-model="form.content" :disabled="!canUpdate" />
+          </el-form-item>
+          <el-form-item v-else label="Внешний URL" required class="resource-content-field">
+            <el-input v-model="form.external_url" placeholder="https://example.com" :disabled="!canUpdate" />
+          </el-form-item>
+        </el-tab-pane>
+
+        <el-tab-pane label="Настройки" name="settings">
+          <div class="resource-settings-grid">
+            <div>
+              <el-form-item label="Родительский ресурс">
+                <el-select v-model="form.parent_id" clearable class="full-width" :disabled="!canUpdate || deleted">
+                  <el-option v-for="item in parentOptions" :key="item.id" :label="item.indentedTitle" :value="item.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="Тип ресурса">
+                <el-select :model-value="form.type" class="full-width" :disabled="!canUpdate || deleted" @change="changeType">
+                  <el-option v-for="item in metadata.types" :key="item.code" :label="item.label" :value="item.code" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="Тип содержимого"><el-input model-value="HTML" disabled /></el-form-item>
+              <el-form-item label="Позиция в меню"><el-input-number v-model="form.position" :min="1" :step="1" class="full-width" :disabled="!canUpdate || deleted" /></el-form-item>
+            </div>
+            <div>
+              <el-form-item label="Начало публикации"><el-date-picker v-model="form.published_at" type="datetime" class="full-width" format="DD.MM.YYYY HH:mm" :disabled="!canUpdate" /></el-form-item>
+              <el-form-item label="Окончание публикации"><el-date-picker v-model="form.unpublished_at" type="datetime" class="full-width" format="DD.MM.YYYY HH:mm" :disabled="!canUpdate" /></el-form-item>
+              <el-form-item label="Доступен для поиска"><el-switch v-model="form.is_searchable" :disabled="!canUpdate" /></el-form-item>
+              <el-form-item label="Удалён">
+                <el-switch :model-value="deleted" :loading="deleting" :disabled="!canDelete || (deleted && !canRestore)" @change="changeDeleted" />
+                <span v-if="deleted && !canRestore" class="field-help">Сначала восстановите родительский ресурс</span>
+              </el-form-item>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="Параметры полей" name="fields">
+          <el-empty v-if="form.type === 'link'" description="У ссылок нет параметров шаблона" />
+          <el-empty v-else-if="!selectedTemplate?.fields.length" description="У шаблона нет дополнительных полей" />
+          <div v-else :class="{ 'dynamic-fields-readonly': !canUpdate }">
+            <dynamic-fields-form v-model="form.settings" :fields="selectedTemplate.fields" :errors="displayedFieldErrors" />
+          </div>
+        </el-tab-pane>
+      </el-tabs>
     </el-form>
   </section>
 </template>

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 )
 
@@ -21,6 +22,7 @@ func TestFieldDefinitionsSerializeAllOptions(t *testing.T) {
 		{Key: "textarea", Type: field.TypeTextarea, Label: "Textarea"},
 		{Key: "email", Type: field.TypeEmail, Label: "Email"},
 		{Key: "phone", Type: field.TypePhone, Label: "Phone", Options: field.PhoneOptions{}},
+		{Key: "asset", Type: field.TypeFile, Label: "Asset", Options: field.FileOptions{Storages: []filesystem.Code{"public"}, MIMETypes: []string{"image/*"}}},
 	}
 
 	result, err := fieldDefinitions(definitions)
@@ -42,9 +44,11 @@ func TestFieldDefinitionsSerializeAllOptions(t *testing.T) {
 	floatOptions := decoded[2]["options"].(map[string]any)
 	selectOptions := decoded[5]["options"].(map[string]any)
 	phoneOptions := decoded[8]["options"].(map[string]any)
+	fileOptions := decoded[9]["options"].(map[string]any)
 	if integerOptions["step"] != float64(2) || floatOptions["step"] != 0.25 ||
-		selectOptions["multiple"] != true || phoneOptions["pattern"] != e164Pattern {
-		t.Fatalf("serialized options = %#v %#v %#v %#v", integerOptions, floatOptions, selectOptions, phoneOptions)
+		selectOptions["multiple"] != true || phoneOptions["pattern"] != e164Pattern ||
+		fileOptions["storages"].([]any)[0] != "public" || fileOptions["mime_types"].([]any)[0] != "image/*" {
+		t.Fatalf("serialized options = %#v %#v %#v %#v %#v", integerOptions, floatOptions, selectOptions, phoneOptions, fileOptions)
 	}
 }
 
