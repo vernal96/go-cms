@@ -295,6 +295,24 @@ LIMIT $3 OFFSET $4;
 	return user.Page{Items: items, Total: total}, rows.Err()
 }
 
+func (r *Repository) Statistics(ctx context.Context) (user.Statistics, error) {
+	if ctx == nil {
+		return user.Statistics{}, errors.New("user statistics context is nil")
+	}
+	var result user.Statistics
+	err := r.connector.Pool().QueryRow(ctx, `
+SELECT
+    count(*),
+    count(*) FILTER (WHERE blocked_at IS NULL),
+    count(*) FILTER (WHERE blocked_at IS NOT NULL)
+FROM core.users;
+`).Scan(&result.Total, &result.Active, &result.Blocked)
+	if err != nil {
+		return user.Statistics{}, fmt.Errorf("count core user statistics: %w", err)
+	}
+	return result, nil
+}
+
 func (r *Repository) Update(
 	ctx context.Context,
 	actorID *security.UserID,
@@ -710,3 +728,5 @@ func translateError(err error) error {
 }
 
 var _ user.Repository = (*Repository)(nil)
+var _ user.ManagementRepository = (*Repository)(nil)
+var _ user.StatisticsRepository = (*Repository)(nil)

@@ -435,6 +435,57 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 	return items, nil
 }
 
+func (r *Repository) Statistics(
+	ctx context.Context,
+	query resource.StatisticsQuery,
+) (resource.Statistics, error) {
+	if ctx == nil {
+		return resource.Statistics{}, errors.New("resource statistics context is nil")
+	}
+	allowed := make([]int64, len(query.Scope.SiteIDs))
+	for index, id := range query.Scope.SiteIDs {
+		allowed[index] = int64(id)
+	}
+	breakdown := make([]int64, len(query.SiteIDs))
+	for index, id := range query.SiteIDs {
+		breakdown[index] = int64(id)
+	}
+
+	result := resource.Statistics{BySite: make(map[site.ID]int, len(breakdown))}
+	if err := r.connector.Pool().QueryRow(ctx, `
+SELECT count(*)
+FROM core.resources
+WHERE $1 OR site_id = ANY($2::bigint[]);`, query.Scope.All, allowed).Scan(&result.Total); err != nil {
+		return resource.Statistics{}, fmt.Errorf("count core resource statistics: %w", err)
+	}
+	if len(breakdown) == 0 {
+		return result, nil
+	}
+
+	rows, err := r.connector.Pool().Query(ctx, `
+SELECT site_id, count(*)
+FROM core.resources
+WHERE site_id = ANY($1::bigint[])
+  AND ($2 OR site_id = ANY($3::bigint[]))
+GROUP BY site_id;`, breakdown, query.Scope.All, allowed)
+	if err != nil {
+		return resource.Statistics{}, fmt.Errorf("query core resource statistics: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var siteID site.ID
+		var count int
+		if err := rows.Scan(&siteID, &count); err != nil {
+			return resource.Statistics{}, fmt.Errorf("scan core resource statistics: %w", err)
+		}
+		result.BySite[siteID] = count
+	}
+	if err := rows.Err(); err != nil {
+		return resource.Statistics{}, fmt.Errorf("iterate core resource statistics: %w", err)
+	}
+	return result, nil
+}
+
 func (r *Repository) ExistsInSite(
 	ctx context.Context,
 	siteID site.ID,
@@ -1256,3 +1307,4 @@ func translateDeleteError(err error) error {
 
 var _ resource.Repository = (*Repository)(nil)
 var _ resource.ManagementRepository = (*Repository)(nil)
+var _ resource.StatisticsRepository = (*Repository)(nil)

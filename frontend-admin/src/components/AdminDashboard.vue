@@ -53,7 +53,11 @@ function handleAPIError(error: unknown): void {
 }
 
 onMounted(() => {
-  void selected.initialize(props.accessToken).catch(handleAPIError)
+  if (can('core.site.read')) {
+    void selected.initialize(props.accessToken).catch(handleAPIError)
+  } else {
+    selected.clearSelected()
+  }
 })
 onBeforeUnmount(selected.reset)
 </script>
@@ -62,9 +66,13 @@ onBeforeUnmount(selected.reset)
   <el-container class="admin-shell">
     <el-header class="topbar" height="64px">
       <div class="brand-search">
-        <div class="brand-mark" aria-label="Go CMS">
+        <router-link
+          to="/admin/dashboard"
+          class="brand-mark"
+          aria-label="На главную"
+        >
           <el-icon :size="24"><Platform /></el-icon>
-        </div>
+        </router-link>
         <site-selector
           v-if="!isIdentityRoute && can('core.site.read')"
           :access-token="accessToken"
@@ -116,12 +124,14 @@ onBeforeUnmount(selected.reset)
       <el-aside v-if="!isIdentityRoute" class="resource-sidebar" width="320px">
         <el-scrollbar class="resource-scrollbar">
           <resource-tree
-            v-if="can('core.resource.read')"
+            v-if="can('core.site.read') && can('core.resource.read')"
             :access-token="accessToken"
             :can-create="can('core.resource.create')"
             @error="handleAPIError"
           />
-          <div v-else class="sidebar-empty">Нет доступа к ресурсам</div>
+          <div v-else class="sidebar-empty">
+            {{ can('core.site.read') ? 'Нет доступа к ресурсам' : 'Нет доступа к сайтам' }}
+          </div>
         </el-scrollbar>
       </el-aside>
 

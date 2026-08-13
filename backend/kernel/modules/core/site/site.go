@@ -76,6 +76,10 @@ type ManagementRepository interface {
 	Delete(context.Context, ID) error
 }
 
+type StatisticsRepository interface {
+	Statistics(context.Context, StatisticsQuery) (Statistics, error)
+}
+
 type Scope struct {
 	All     bool
 	SiteIDs []ID
@@ -91,6 +95,18 @@ type ListQuery struct {
 type Page struct {
 	Items []Site
 	Total int
+}
+
+type StatisticsQuery struct {
+	Scope Scope
+	Limit int
+}
+
+type Statistics struct {
+	Items   []Site
+	Total   int
+	Public  int
+	Private int
 }
 
 type Access interface {

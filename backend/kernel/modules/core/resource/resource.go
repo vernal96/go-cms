@@ -160,6 +160,20 @@ type ManagementRepository interface {
 	ListChildren(context.Context, site.ID, *ID) ([]Child, error)
 }
 
+type StatisticsRepository interface {
+	Statistics(context.Context, StatisticsQuery) (Statistics, error)
+}
+
+type StatisticsQuery struct {
+	Scope   site.Scope
+	SiteIDs []site.ID
+}
+
+type Statistics struct {
+	Total  int
+	BySite map[site.ID]int
+}
+
 var slugPattern = regexp.MustCompile(
 	`^[a-z0-9]+(?:-[a-z0-9]+)*$`,
 )

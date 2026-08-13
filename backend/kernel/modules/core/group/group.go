@@ -126,6 +126,10 @@ type ManagementRepository interface {
 	ListPage(context.Context, ListQuery) (Page, error)
 }
 
+type StatisticsRepository interface {
+	Count(context.Context) (int, error)
+}
+
 type Service interface {
 	AssignmentValidator
 	Create(context.Context, security.Actor, CreateInput) (Group, error)

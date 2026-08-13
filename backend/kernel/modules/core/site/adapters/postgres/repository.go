@@ -112,6 +112,52 @@ LIMIT $4 OFFSET $5;`,
 	return site.Page{Items: items, Total: total}, nil
 }
 
+func (r *Repository) Statistics(
+	ctx context.Context,
+	query site.StatisticsQuery,
+) (site.Statistics, error) {
+	if ctx == nil {
+		return site.Statistics{}, errors.New("site statistics context is nil")
+	}
+	if query.Limit < 1 || query.Limit > 100 {
+		return site.Statistics{}, errors.New("site statistics limit is invalid")
+	}
+	allowed := make([]int64, len(query.Scope.SiteIDs))
+	for index, id := range query.Scope.SiteIDs {
+		allowed[index] = int64(id)
+	}
+
+	var result site.Statistics
+	err := r.connector.Pool().QueryRow(ctx, `
+SELECT
+    count(*),
+    count(*) FILTER (WHERE is_public),
+    count(*) FILTER (WHERE NOT is_public)
+FROM core.sites
+WHERE $1 OR id = ANY($2::bigint[]);`, query.Scope.All, allowed).Scan(
+		&result.Total,
+		&result.Public,
+		&result.Private,
+	)
+	if err != nil {
+		return site.Statistics{}, fmt.Errorf("count core site statistics: %w", err)
+	}
+
+	rows, err := r.connector.Pool().Query(ctx, `SELECT `+siteColumns+`
+FROM core.sites
+WHERE $1 OR id = ANY($2::bigint[])
+ORDER BY domain, id
+LIMIT $3;`, query.Scope.All, allowed, query.Limit)
+	if err != nil {
+		return site.Statistics{}, fmt.Errorf("query core site statistics: %w", err)
+	}
+	result.Items, err = scanSites(rows)
+	if err != nil {
+		return site.Statistics{}, err
+	}
+	return result, nil
+}
+
 func (r *Repository) Create(
 	ctx context.Context,
 	actorID *security.UserID,
@@ -276,3 +322,4 @@ func translateError(operation string, err error) error {
 
 var _ site.Repository = (*Repository)(nil)
 var _ site.ManagementRepository = (*Repository)(nil)
+var _ site.StatisticsRepository = (*Repository)(nil)

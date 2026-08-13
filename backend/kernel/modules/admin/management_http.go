@@ -28,6 +28,7 @@ type managementHTTP struct {
 func registerManagementRoutes(router chi.Router, management *Management) {
 	handler := &managementHTTP{management: management}
 	registerIdentityRoutes(router, handler)
+	router.Get("/dashboard", handler.dashboard)
 	router.Get("/sites/options", handler.listSiteOptions)
 	router.Get("/sites", handler.listSites)
 	router.Post("/sites", handler.createSite)
@@ -41,6 +42,11 @@ func registerManagementRoutes(router chi.Router, management *Management) {
 	router.Get("/sites/{siteID}/resource-options", handler.resourceOptions)
 	router.Get("/sites/{siteID}/resources/{resourceID}", handler.getResource)
 	router.Patch("/sites/{siteID}/resources/{resourceID}", handler.updateResource)
+}
+
+func (h *managementHTTP) dashboard(response http.ResponseWriter, request *http.Request) {
+	result, err := h.management.Dashboard(request.Context(), actor(request))
+	writeResult(response, http.StatusOK, result, err)
 }
 
 func (h *managementHTTP) listSites(response http.ResponseWriter, request *http.Request) {

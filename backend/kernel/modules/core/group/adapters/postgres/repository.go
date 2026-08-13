@@ -180,6 +180,17 @@ LIMIT $2 OFFSET $3;
 	return group.Page{Items: items, Total: total}, rows.Err()
 }
 
+func (r *Repository) Count(ctx context.Context) (int, error) {
+	if ctx == nil {
+		return 0, errors.New("group count context is nil")
+	}
+	var result int
+	if err := r.connector.Pool().QueryRow(ctx, `SELECT count(*) FROM core.groups;`).Scan(&result); err != nil {
+		return 0, fmt.Errorf("count core groups: %w", err)
+	}
+	return result, nil
+}
+
 func (r *Repository) Update(
 	ctx context.Context,
 	actorID *security.UserID,
@@ -685,3 +696,5 @@ func rollbackOnError(transaction pgx.Tx, resultErr *error) func() {
 }
 
 var _ group.Repository = (*Repository)(nil)
+var _ group.ManagementRepository = (*Repository)(nil)
+var _ group.StatisticsRepository = (*Repository)(nil)

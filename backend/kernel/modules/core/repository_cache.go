@@ -121,6 +121,17 @@ func (r *cachedSiteRepository) ListPage(
 	return management.ListPage(ctx, query)
 }
 
+func (r *cachedSiteRepository) Statistics(
+	ctx context.Context,
+	query site.StatisticsQuery,
+) (site.Statistics, error) {
+	statistics, ok := r.base.(site.StatisticsRepository)
+	if !ok {
+		return site.Statistics{}, errors.New("site statistics repository is unavailable")
+	}
+	return statistics.Statistics(ctx, query)
+}
+
 func (r *cachedSiteRepository) Create(
 	ctx context.Context,
 	actorID *security.UserID,
@@ -307,6 +318,17 @@ func (r *cachedResourceRepository) ListChildren(
 	return management.ListChildren(ctx, siteID, parentID)
 }
 
+func (r *cachedResourceRepository) Statistics(
+	ctx context.Context,
+	query resource.StatisticsQuery,
+) (resource.Statistics, error) {
+	statistics, ok := r.base.(resource.StatisticsRepository)
+	if !ok {
+		return resource.Statistics{}, errors.New("resource statistics repository is unavailable")
+	}
+	return statistics.Statistics(ctx, query)
+}
+
 func (r *cachedResourceRepository) Update(
 	ctx context.Context,
 	actorID *security.UserID,
@@ -432,5 +454,7 @@ func resourceTags(item resource.Resource) []cache.Tag {
 var _ Database = (*cachedDatabase)(nil)
 var _ site.Repository = (*cachedSiteRepository)(nil)
 var _ site.ManagementRepository = (*cachedSiteRepository)(nil)
+var _ site.StatisticsRepository = (*cachedSiteRepository)(nil)
 var _ resource.Repository = (*cachedResourceRepository)(nil)
 var _ resource.ManagementRepository = (*cachedResourceRepository)(nil)
+var _ resource.StatisticsRepository = (*cachedResourceRepository)(nil)

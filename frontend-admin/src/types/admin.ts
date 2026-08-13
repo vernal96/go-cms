@@ -91,6 +91,33 @@ export interface SiteFormPayload {
   settings: Record<string, unknown>
 }
 
+export interface DashboardSite {
+  id: number
+  domain: string
+  is_public: boolean
+  resource_count?: number
+}
+
+export interface DashboardResponse {
+  sites?: {
+    total: number
+    public: number
+    private: number
+    items: DashboardSite[]
+  }
+  resources?: {
+    total: number
+  }
+  users?: {
+    total: number
+    active: number
+    blocked: number
+  }
+  groups?: {
+    total: number
+  }
+}
+
 export interface ResourceTreeItem {
   id: number
   parent_id: number | null

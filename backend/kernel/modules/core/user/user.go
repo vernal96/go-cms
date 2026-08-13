@@ -145,6 +145,16 @@ type ManagementRepository interface {
 	ListPage(context.Context, ListQuery) (Page, error)
 }
 
+type StatisticsRepository interface {
+	Statistics(context.Context) (Statistics, error)
+}
+
+type Statistics struct {
+	Total   int
+	Active  int
+	Blocked int
+}
+
 type PasswordHasher interface {
 	Hash(string) (string, error)
 	Verify(string, string) (valid bool, needsRehash bool, err error)
