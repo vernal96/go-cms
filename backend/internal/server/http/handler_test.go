@@ -222,6 +222,14 @@ type groupRepository struct {
 	coregroup.Repository
 }
 
+func (userRepository) ListPage(context.Context, coreuser.ListQuery) (coreuser.Page, error) {
+	return coreuser.Page{}, nil
+}
+
+func (groupRepository) ListPage(context.Context, coregroup.ListQuery) (coregroup.Page, error) {
+	return coregroup.Page{}, nil
+}
+
 type accessRepository struct{}
 
 func (accessRepository) Subject(

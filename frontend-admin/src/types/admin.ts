@@ -195,3 +195,85 @@ export interface AdminTableAction {
   danger?: boolean
   visible?: (row: Record<string, unknown>) => boolean
 }
+
+export interface UserCapabilities {
+  update: boolean
+  change_password: boolean
+  edit_groups: boolean
+  block: boolean
+  unblock: boolean
+}
+
+export interface AdminUser {
+  id: number
+  login: string
+  email: string
+  name: string
+  last_name: string | null
+  middle_name: string | null
+  phone: string | null
+  last_login_at: string | null
+  created_at: string
+  updated_at: string
+  blocked: boolean
+  blocked_at: string | null
+  capabilities: UserCapabilities
+}
+
+export interface UserListResponse {
+  items: AdminUser[]
+  pagination: Pagination
+  permissions: { read: boolean; create: boolean; update: boolean; block: boolean }
+}
+
+export interface UserDetailsResponse {
+  user: AdminUser
+}
+
+export interface UserInfoPayload {
+  login: string
+  email: string
+  name: string
+  last_name: string | null
+  middle_name: string | null
+  phone: string | null
+}
+
+export interface AdminGroup {
+  id: number
+  code: string
+  name: string
+  system: boolean
+  super: boolean
+  can_update: boolean
+  can_delete: boolean
+  can_manage_permissions: boolean
+}
+
+export interface GroupListResponse {
+  items: AdminGroup[]
+  pagination: Pagination
+  permissions: PermissionSet
+}
+
+export interface GroupOptionsResponse {
+  items: AdminGroup[]
+  pagination: Pagination
+}
+
+export interface GroupDetailsResponse {
+  group: AdminGroup
+  permission_codes: string[]
+}
+
+export interface PermissionDefinition {
+  code: string
+  module: string
+  entity: string
+  action: 'read' | 'create' | 'update' | 'delete'
+}
+
+export interface PermissionCatalogResponse {
+  items: PermissionDefinition[]
+  can_manage: boolean
+}

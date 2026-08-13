@@ -492,6 +492,14 @@ func (a *App) boot(ctx context.Context) error {
 	if !ok {
 		return errors.New("resource management repository is unavailable")
 	}
+	userManagementRepository, ok := runtimeCoreDatabase.Users().(coreuser.ManagementRepository)
+	if !ok {
+		return errors.New("user management repository is unavailable")
+	}
+	groupManagementRepository, ok := runtimeCoreDatabase.Groups().(coregroup.ManagementRepository)
+	if !ok {
+		return errors.New("group management repository is unavailable")
+	}
 
 	adminManagement, err := admin.NewManagement(admin.ManagementDependencies{
 		Profiles:           a.definition.Profiles,
@@ -502,6 +510,11 @@ func (a *App) boot(ctx context.Context) error {
 		ResourceRepository: resourceManagementRepository,
 		Authorizer:         accessService,
 		SiteAccessPolicy:   a.definition.SiteAccessPolicy,
+		Users:              userService,
+		UserRepository:     userManagementRepository,
+		Groups:             groupService,
+		GroupRepository:    groupManagementRepository,
+		Access:             accessService,
 	})
 	if err != nil {
 		return err
@@ -1201,7 +1214,7 @@ func (a *App) ChangeUserPassword(
 	return service.ChangePassword(ctx, actor, id, password)
 }
 
-func (a *App) DeleteUser(
+func (a *App) BlockUser(
 	ctx context.Context,
 	actor security.Actor,
 	id coreuser.ID,
@@ -1215,10 +1228,10 @@ func (a *App) DeleteUser(
 	if a.closed.Load() {
 		return coreuser.User{}, ErrClosed
 	}
-	return service.Delete(ctx, actor, id)
+	return service.Block(ctx, actor, id)
 }
 
-func (a *App) RestoreUser(
+func (a *App) UnblockUser(
 	ctx context.Context,
 	actor security.Actor,
 	id coreuser.ID,
@@ -1232,7 +1245,7 @@ func (a *App) RestoreUser(
 	if a.closed.Load() {
 		return coreuser.User{}, ErrClosed
 	}
-	return service.Restore(ctx, actor, id)
+	return service.Unblock(ctx, actor, id)
 }
 
 func (a *App) Authenticate(

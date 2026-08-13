@@ -49,12 +49,12 @@ type Application interface {
 		user.ID,
 		string,
 	) (user.User, error)
-	DeleteUser(
+	BlockUser(
 		context.Context,
 		security.Actor,
 		user.ID,
 	) (user.User, error)
-	RestoreUser(
+	UnblockUser(
 		context.Context,
 		security.Actor,
 		user.ID,
@@ -167,7 +167,7 @@ func (c *usersCommand) Run(
 	if len(args) == 0 || args[0] == "help" {
 		_, err := fmt.Fprintln(
 			streams.Out,
-			"Usage: console users <create|get|list|update|password|delete|restore> [flags]",
+			"Usage: console users <create|get|list|update|password|block|unblock> [flags]",
 		)
 		return err
 	}
@@ -176,7 +176,7 @@ func (c *usersCommand) Run(
 	case "create":
 		return c.create(ctx, args[1:], streams)
 
-	case "get", "delete", "restore", "password":
+	case "get", "block", "unblock", "password":
 		flags := newFlagSet("users "+args[0], streams)
 		rawID := flags.Int64("id", 0, "user id")
 		if err := parseFlags(flags, args[1:]); err != nil {
@@ -190,11 +190,11 @@ func (c *usersCommand) Run(
 		case "get":
 			item, err := c.application.User(ctx, security.System(), id)
 			return writeResult(streams.Out, item, err)
-		case "delete":
-			item, err := c.application.DeleteUser(ctx, security.System(), id)
+		case "block":
+			item, err := c.application.BlockUser(ctx, security.System(), id)
 			return writeResult(streams.Out, item, err)
-		case "restore":
-			item, err := c.application.RestoreUser(ctx, security.System(), id)
+		case "unblock":
+			item, err := c.application.UnblockUser(ctx, security.System(), id)
 			return writeResult(streams.Out, item, err)
 		default:
 			password, err := readPassword(streams.In)

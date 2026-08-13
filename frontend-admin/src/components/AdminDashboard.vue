@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import {
   ElAside,
   ElAvatar,
@@ -14,7 +14,7 @@ import {
   ElScrollbar,
 } from 'element-plus'
 import { ArrowDown, Platform, UserFilled } from '@element-plus/icons-vue'
-import { RouterLink, RouterView } from 'vue-router'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
 import { AdminAPIError } from '../api/admin-api'
 import { useSelectedSite } from '../composables/use-selected-site'
@@ -29,6 +29,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{ logout: [] }>()
 const selected = useSelectedSite()
+const route = useRoute()
+const router = useRouter()
+const isIdentityRoute = computed(() => route.path.startsWith('/admin/users') || route.path.startsWith('/admin/groups'))
 
 function can(code: string): boolean {
   return props.permissions.has(code)
@@ -36,6 +39,11 @@ function can(code: string): boolean {
 
 function handleUserCommand(command: string): void {
   if (command === 'logout') emit('logout')
+}
+
+function handleManagementCommand(command: string): void {
+  if (command === 'users') void router.push('/admin/users')
+  if (command === 'groups') void router.push('/admin/groups')
 }
 
 function handleAPIError(error: unknown): void {
@@ -58,11 +66,12 @@ onBeforeUnmount(selected.reset)
           <el-icon :size="24"><Platform /></el-icon>
         </div>
         <site-selector
-          v-if="can('core.site.read')"
+          v-if="!isIdentityRoute && can('core.site.read')"
           :access-token="accessToken"
           :can-create="can('core.site.create')"
           @error="handleAPIError"
         />
+        <span v-else-if="isIdentityRoute" class="global-section-title">Управление доступом</span>
       </div>
 
       <div class="topbar-main">
@@ -70,6 +79,22 @@ onBeforeUnmount(selected.reset)
           <router-link v-if="can('core.site.read')" to="/admin/sites" class="topbar-link">
             Сайты
           </router-link>
+          <el-dropdown
+            v-if="can('core.user.read') || can('core.group.read')"
+            trigger="click"
+            @command="handleManagementCommand"
+          >
+            <el-button text class="topbar-link management-menu-trigger" :class="{ 'is-active': isIdentityRoute }">
+              Пользователи
+              <el-icon><ArrowDown /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item v-if="can('core.user.read')" command="users">Пользователи</el-dropdown-item>
+                <el-dropdown-item v-if="can('core.group.read')" command="groups">Группы</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </nav>
         <el-dropdown placement="bottom-end" trigger="click" @command="handleUserCommand">
           <el-button class="user-control" text aria-label="Открыть меню пользователя">
@@ -88,7 +113,7 @@ onBeforeUnmount(selected.reset)
     </el-header>
 
     <el-container class="admin-body">
-      <el-aside class="resource-sidebar" width="320px">
+      <el-aside v-if="!isIdentityRoute" class="resource-sidebar" width="320px">
         <el-scrollbar class="resource-scrollbar">
           <resource-tree
             v-if="can('core.resource.read')"

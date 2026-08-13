@@ -90,8 +90,8 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
 RETURNING
     id, login, email, password_hash, name,
     last_name, middle_name, phone, avatar_media_id,
-    last_login_at, created_at, updated_at, deleted_at,
-    created_by, updated_by, deleted_by;
+    last_login_at, created_at, updated_at, blocked_at,
+    created_by, updated_by, blocked_by;
 `,
 		record.Login,
 		record.Email,
@@ -191,8 +191,8 @@ func (r *Repository) ByID(
 SELECT
     id, login, email, password_hash, name,
     last_name, middle_name, phone, avatar_media_id,
-    last_login_at, created_at, updated_at, deleted_at,
-    created_by, updated_by, deleted_by
+    last_login_at, created_at, updated_at, blocked_at,
+    created_by, updated_by, blocked_by
 FROM core.users
 WHERE id = $1;
 `, id))
@@ -210,8 +210,8 @@ func (r *Repository) ByIdentifier(
 SELECT
     id, login, email, password_hash, name,
     last_name, middle_name, phone, avatar_media_id,
-    last_login_at, created_at, updated_at, deleted_at,
-    created_by, updated_by, deleted_by
+    last_login_at, created_at, updated_at, blocked_at,
+    created_by, updated_by, blocked_by
 FROM core.users
 WHERE login = $1 OR email = $1
 LIMIT 1;
@@ -229,8 +229,8 @@ func (r *Repository) List(
 SELECT
     id, login, email, password_hash, name,
     last_name, middle_name, phone, avatar_media_id,
-    last_login_at, created_at, updated_at, deleted_at,
-    created_by, updated_by, deleted_by
+    last_login_at, created_at, updated_at, blocked_at,
+    created_by, updated_by, blocked_by
 FROM core.users
 ORDER BY id;
 `)
@@ -248,6 +248,51 @@ ORDER BY id;
 		result = append(result, record)
 	}
 	return result, rows.Err()
+}
+
+func (r *Repository) ListPage(
+	ctx context.Context,
+	query user.ListQuery,
+) (user.Page, error) {
+	if ctx == nil {
+		return user.Page{}, errors.New("list user page context is nil")
+	}
+	offset := (query.Page - 1) * query.PerPage
+	predicate := `
+($1 = '' OR login ILIKE '%' || $1 || '%' OR email ILIKE '%' || $1 || '%'
+ OR concat_ws(' ', last_name, name, middle_name) ILIKE '%' || $1 || '%')
+AND ($2 = 'all' OR ($2 = 'active' AND blocked_at IS NULL)
+ OR ($2 = 'blocked' AND blocked_at IS NOT NULL))`
+	var total int
+	if err := r.connector.Pool().QueryRow(ctx, `
+SELECT count(*) FROM core.users WHERE `+predicate+`;
+`, query.Search, query.Status).Scan(&total); err != nil {
+		return user.Page{}, err
+	}
+	rows, err := r.connector.Pool().Query(ctx, `
+SELECT
+    id, login, email, password_hash, name,
+    last_name, middle_name, phone, avatar_media_id,
+    last_login_at, created_at, updated_at, blocked_at,
+    created_by, updated_by, blocked_by
+FROM core.users
+WHERE `+predicate+`
+ORDER BY id DESC
+LIMIT $3 OFFSET $4;
+`, query.Search, query.Status, query.PerPage, offset)
+	if err != nil {
+		return user.Page{}, err
+	}
+	defer rows.Close()
+	items := make([]user.User, 0, query.PerPage)
+	for rows.Next() {
+		record, err := scanRecord(rows)
+		if err != nil {
+			return user.Page{}, err
+		}
+		items = append(items, user.Clone(record.User))
+	}
+	return user.Page{Items: items, Total: total}, rows.Err()
 }
 
 func (r *Repository) Update(
@@ -270,8 +315,8 @@ func (r *Repository) Update(
 SELECT
     id, login, email, password_hash, name,
     last_name, middle_name, phone, avatar_media_id,
-    last_login_at, created_at, updated_at, deleted_at,
-    created_by, updated_by, deleted_by
+    last_login_at, created_at, updated_at, blocked_at,
+    created_by, updated_by, blocked_by
 FROM core.users
 WHERE id = $1
 FOR UPDATE;
@@ -332,8 +377,8 @@ WHERE id = $1
 RETURNING
     id, login, email, password_hash, name,
     last_name, middle_name, phone, avatar_media_id,
-    last_login_at, created_at, updated_at, deleted_at,
-    created_by, updated_by, deleted_by;
+    last_login_at, created_at, updated_at, blocked_at,
+    created_by, updated_by, blocked_by;
 `,
 		next.ID,
 		next.Login,
@@ -383,8 +428,8 @@ WHERE id = $1
 RETURNING
     id, login, email, password_hash, name,
     last_name, middle_name, phone, avatar_media_id,
-    last_login_at, created_at, updated_at, deleted_at,
-    created_by, updated_by, deleted_by;
+    last_login_at, created_at, updated_at, blocked_at,
+    created_by, updated_by, blocked_by;
 `, id, passwordHash, actorID))
 	return translateRecordResult(record, translateError(err))
 }
@@ -405,12 +450,12 @@ SET
     updated_at = now(),
     updated_by = id
 WHERE id = $1
-  AND deleted_at IS NULL
+  AND blocked_at IS NULL
 RETURNING
     id, login, email, password_hash, name,
     last_name, middle_name, phone, avatar_media_id,
-    last_login_at, created_at, updated_at, deleted_at,
-    created_by, updated_by, deleted_by;
+    last_login_at, created_at, updated_at, blocked_at,
+    created_by, updated_by, blocked_by;
 `, id, passwordHash))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return user.Record{}, user.ErrInvalidCredentials
@@ -418,52 +463,118 @@ RETURNING
 	return record, translateError(err)
 }
 
-func (r *Repository) Delete(
+func (r *Repository) Block(
 	ctx context.Context,
 	actorID *security.UserID,
 	id user.ID,
-) (user.Record, error) {
+) (_ user.Record, resultErr error) {
 	if ctx == nil {
-		return user.Record{}, errors.New("delete user context is nil")
+		return user.Record{}, errors.New("block user context is nil")
 	}
-	record, err := scanRecord(r.connector.Pool().QueryRow(ctx, `
+	transaction, err := r.connector.Pool().BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return user.Record{}, fmt.Errorf("begin user block: %w", err)
+	}
+	defer rollbackOnError(transaction, &resultErr)()
+
+	if _, err := transaction.Exec(ctx, "LOCK TABLE core.users IN SHARE ROW EXCLUSIVE MODE"); err != nil {
+		return user.Record{}, fmt.Errorf("lock user administration: %w", err)
+	}
+	if _, err := transaction.Exec(ctx, "LOCK TABLE core.user_groups IN SHARE ROW EXCLUSIVE MODE"); err != nil {
+		return user.Record{}, fmt.Errorf("lock user administration: %w", err)
+	}
+
+	current, err := scanRecord(transaction.QueryRow(ctx, `
+SELECT
+    id, login, email, password_hash, name,
+    last_name, middle_name, phone, avatar_media_id,
+    last_login_at, created_at, updated_at, blocked_at,
+    created_by, updated_by, blocked_by
+FROM core.users
+WHERE id = $1
+FOR UPDATE;
+`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return user.Record{}, user.ErrNotFound
+	}
+	if err != nil {
+		return user.Record{}, err
+	}
+	if current.BlockedAt == nil {
+		var (
+			isAdministrator bool
+			activeAdmins    int
+		)
+		if err := transaction.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM core.user_groups ug
+    JOIN core.groups g ON g.id = ug.group_id
+    WHERE ug.user_id = $1 AND g.code = 'admin'
+);
+`, id).Scan(&isAdministrator); err != nil {
+			return user.Record{}, err
+		}
+		if isAdministrator {
+			if err := transaction.QueryRow(ctx, `
+SELECT count(*)
+FROM core.user_groups ug
+JOIN core.groups g ON g.id = ug.group_id
+JOIN core.users u ON u.id = ug.user_id
+WHERE g.code = 'admin' AND u.blocked_at IS NULL;
+`).Scan(&activeAdmins); err != nil {
+				return user.Record{}, err
+			}
+			if activeAdmins <= 1 {
+				return user.Record{}, user.ErrLastAdministrator
+			}
+		}
+	}
+
+	record, err := scanRecord(transaction.QueryRow(ctx, `
 UPDATE core.users
 SET
-    deleted_at = COALESCE(deleted_at, now()),
-    deleted_by = COALESCE(deleted_by, $2),
+    blocked_at = COALESCE(blocked_at, now()),
+    blocked_by = COALESCE(blocked_by, $2),
     updated_at = now(),
     updated_by = $2
 WHERE id = $1
 RETURNING
     id, login, email, password_hash, name,
     last_name, middle_name, phone, avatar_media_id,
-    last_login_at, created_at, updated_at, deleted_at,
-    created_by, updated_by, deleted_by;
+    last_login_at, created_at, updated_at, blocked_at,
+    created_by, updated_by, blocked_by;
 `, id, actorID))
-	return translateRecordResult(record, translateError(err))
+	if err != nil {
+		return user.Record{}, translateError(err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return user.Record{}, translateError(err)
+	}
+	return record, nil
 }
 
-func (r *Repository) Restore(
+func (r *Repository) Unblock(
 	ctx context.Context,
 	actorID *security.UserID,
 	id user.ID,
 ) (user.Record, error) {
 	if ctx == nil {
-		return user.Record{}, errors.New("restore user context is nil")
+		return user.Record{}, errors.New("unblock user context is nil")
 	}
 	record, err := scanRecord(r.connector.Pool().QueryRow(ctx, `
 UPDATE core.users
 SET
-    deleted_at = NULL,
-    deleted_by = NULL,
+    blocked_at = NULL,
+    blocked_by = NULL,
     updated_at = now(),
     updated_by = $2
 WHERE id = $1
 RETURNING
     id, login, email, password_hash, name,
     last_name, middle_name, phone, avatar_media_id,
-    last_login_at, created_at, updated_at, deleted_at,
-    created_by, updated_by, deleted_by;
+    last_login_at, created_at, updated_at, blocked_at,
+    created_by, updated_by, blocked_by;
 `, id, actorID))
 	return translateRecordResult(record, translateError(err))
 }
@@ -538,10 +649,10 @@ func scanRecord(scanner rowScanner) (user.Record, error) {
 		&record.LastLoginAt,
 		&record.CreatedAt,
 		&record.UpdatedAt,
-		&record.DeletedAt,
+		&record.BlockedAt,
 		&record.CreatedBy,
 		&record.UpdatedBy,
-		&record.DeletedBy,
+		&record.BlockedBy,
 	)
 	return record, err
 }

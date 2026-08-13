@@ -91,14 +91,14 @@ WHERE code IN ('console-group-one', 'console-group-two');
 	firstGroup, err := database.Groups().Create(ctx, nil, group.Group{
 		Code: "console-group-one",
 		Name: "Console Group One",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("create first group: %v", err)
 	}
 	secondGroup, err := database.Groups().Create(ctx, nil, group.Group{
 		Code: "console-group-two",
 		Name: "Console Group Two",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("create second group: %v", err)
 	}
@@ -134,8 +134,8 @@ WHERE user_id = $1;
 		t.Fatalf("memberships = %d", memberships)
 	}
 
-	if _, err := userRepository.Delete(ctx, nil, created.ID); err != nil {
-		t.Fatalf("soft delete user: %v", err)
+	if _, err := userRepository.Block(ctx, nil, created.ID); err != nil {
+		t.Fatalf("block user: %v", err)
 	}
 	if _, err := userRepository.Create(
 		ctx,

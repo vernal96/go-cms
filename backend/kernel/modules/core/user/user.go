@@ -22,6 +22,8 @@ var (
 	ErrEmailExists        = &identityConflictError{field: "email"}
 	ErrInvalidReference   = errors.New("invalid user reference")
 	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrSelfBlock          = errors.New("cannot block current user")
+	ErrLastAdministrator  = errors.New("cannot block last active administrator")
 )
 
 type identityConflictError struct {
@@ -48,10 +50,10 @@ type User struct {
 	LastLoginAt   *time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
-	DeletedAt     *time.Time
+	BlockedAt     *time.Time
 	CreatedBy     *security.UserID
 	UpdatedBy     *security.UserID
-	DeletedBy     *security.UserID
+	BlockedBy     *security.UserID
 }
 
 type Record struct {
@@ -87,6 +89,26 @@ type AuthenticateInput struct {
 	Password   string
 }
 
+type ListStatus string
+
+const (
+	ListAll     ListStatus = "all"
+	ListActive  ListStatus = "active"
+	ListBlocked ListStatus = "blocked"
+)
+
+type ListQuery struct {
+	Search  string
+	Status  ListStatus
+	Page    int
+	PerPage int
+}
+
+type Page struct {
+	Items []User
+	Total int
+}
+
 type ValidateAvatarMedia func(context.Context, media.ID) error
 
 type Repository interface {
@@ -114,8 +136,13 @@ type Repository interface {
 		string,
 	) (Record, error)
 	RecordLogin(context.Context, ID, *string) (Record, error)
-	Delete(context.Context, *security.UserID, ID) (Record, error)
-	Restore(context.Context, *security.UserID, ID) (Record, error)
+	Block(context.Context, *security.UserID, ID) (Record, error)
+	Unblock(context.Context, *security.UserID, ID) (Record, error)
+}
+
+type ManagementRepository interface {
+	Repository
+	ListPage(context.Context, ListQuery) (Page, error)
 }
 
 type PasswordHasher interface {
@@ -152,8 +179,8 @@ type Service interface {
 		ID,
 		string,
 	) (User, error)
-	Delete(context.Context, security.Actor, ID) (User, error)
-	Restore(context.Context, security.Actor, ID) (User, error)
+	Block(context.Context, security.Actor, ID) (User, error)
+	Unblock(context.Context, security.Actor, ID) (User, error)
 	Authenticate(context.Context, AuthenticateInput) (User, error)
 }
 
@@ -175,10 +202,10 @@ func Clone(item User) User {
 	item.Phone = cloneString(item.Phone)
 	item.AvatarMediaID = cloneMediaID(item.AvatarMediaID)
 	item.LastLoginAt = cloneTime(item.LastLoginAt)
-	item.DeletedAt = cloneTime(item.DeletedAt)
+	item.BlockedAt = cloneTime(item.BlockedAt)
 	item.CreatedBy = cloneUserID(item.CreatedBy)
 	item.UpdatedBy = cloneUserID(item.UpdatedBy)
-	item.DeletedBy = cloneUserID(item.DeletedBy)
+	item.BlockedBy = cloneUserID(item.BlockedBy)
 	return item
 }
 

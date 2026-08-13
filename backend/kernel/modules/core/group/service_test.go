@@ -80,6 +80,7 @@ func (r *memoryRepository) Create(
 	_ context.Context,
 	actorID *security.UserID,
 	item Group,
+	permissions []permission.Code,
 ) (Group, error) {
 	for _, existing := range r.groups {
 		if existing.Code == item.Code {
@@ -93,6 +94,10 @@ func (r *memoryRepository) Create(
 	item.CreatedBy = cloneUserID(actorID)
 	item.UpdatedBy = cloneUserID(actorID)
 	r.groups[item.ID] = Clone(item)
+	r.permissions[item.ID] = make(map[permission.Code]PermissionGrant)
+	for _, code := range permissions {
+		r.permissions[item.ID][code] = PermissionGrant{GroupID: item.ID, Permission: code}
+	}
 	return Clone(item), nil
 }
 
@@ -131,6 +136,7 @@ func (r *memoryRepository) Update(
 	_ context.Context,
 	actorID *security.UserID,
 	item Group,
+	permissions *[]permission.Code,
 ) (Group, error) {
 	if _, exists := r.groups[item.ID]; !exists {
 		return Group{}, ErrNotFound
@@ -138,6 +144,12 @@ func (r *memoryRepository) Update(
 	item.UpdatedAt = time.Now().UTC()
 	item.UpdatedBy = cloneUserID(actorID)
 	r.groups[item.ID] = Clone(item)
+	if permissions != nil {
+		r.permissions[item.ID] = make(map[permission.Code]PermissionGrant)
+		for _, code := range *permissions {
+			r.permissions[item.ID][code] = PermissionGrant{GroupID: item.ID, Permission: code}
+		}
+	}
 	return Clone(item), nil
 }
 
@@ -209,6 +221,28 @@ func (r *memoryRepository) GroupsForUser(
 		}
 	}
 	return result, nil
+}
+
+func (r *memoryRepository) ReplaceUserGroups(
+	_ context.Context,
+	actorID *security.UserID,
+	userID security.UserID,
+	groupIDs []ID,
+) error {
+	for groupID, members := range r.memberships {
+		delete(members, userID)
+		r.memberships[groupID] = members
+	}
+	for _, groupID := range groupIDs {
+		if _, exists := r.groups[groupID]; !exists {
+			return ErrInvalidReference
+		}
+		if r.memberships[groupID] == nil {
+			r.memberships[groupID] = make(map[security.UserID]Membership)
+		}
+		r.memberships[groupID][userID] = Membership{UserID: userID, GroupID: groupID, CreatedBy: cloneUserID(actorID)}
+	}
+	return nil
 }
 
 func (r *memoryRepository) GrantPermission(
@@ -438,4 +472,24 @@ func TestPermissionGrantsRequirePrivilegeAndKnownCatalogCode(
 }
 
 var _ access.Service = testAccess{}
+
+func TestAdminGroupCannotBeDeletedOrDemoted(t *testing.T) {
+	t.Parallel()
+	repository := newMemoryRepository()
+	service, err := NewService(repository, testAccess{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := service.Create(context.Background(), security.System(), CreateInput{Code: AdminCode, Name: "Administrator", IsSuper: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Delete(context.Background(), security.System(), admin.ID); !errors.Is(err, ErrProtected) {
+		t.Fatalf("delete admin error = %v", err)
+	}
+	if _, err := service.Update(context.Background(), security.System(), UpdateInput{ID: admin.ID, Name: admin.Name, IsSuper: false}); !errors.Is(err, ErrProtected) {
+		t.Fatalf("demote admin error = %v", err)
+	}
+}
+
 var _ Repository = (*memoryRepository)(nil)

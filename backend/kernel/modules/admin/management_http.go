@@ -9,10 +9,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/modules/core/access"
+	"github.com/vernal96/go-cms/kernel/modules/core/group"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
@@ -23,6 +27,7 @@ type managementHTTP struct {
 
 func registerManagementRoutes(router chi.Router, management *Management) {
 	handler := &managementHTTP{management: management}
+	registerIdentityRoutes(router, handler)
 	router.Get("/sites/options", handler.listSiteOptions)
 	router.Get("/sites", handler.listSites)
 	router.Post("/sites", handler.createSite)
@@ -366,10 +371,20 @@ func writeManagementError(response http.ResponseWriter, err error) {
 		writeUnauthorized(response)
 	case errors.Is(err, security.ErrForbidden):
 		httptransport.WriteJSONError(response, http.StatusForbidden, "forbidden", "operation is forbidden")
-	case errors.Is(err, site.ErrNotFound), errors.Is(err, resource.ErrNotFound):
+	case errors.Is(err, access.ErrNotPrivileged):
+		httptransport.WriteJSONError(response, http.StatusForbidden, "forbidden", "privileged access is required")
+	case errors.Is(err, site.ErrNotFound), errors.Is(err, resource.ErrNotFound), errors.Is(err, user.ErrNotFound), errors.Is(err, group.ErrNotFound):
 		httptransport.WriteJSONError(response, http.StatusNotFound, "not_found", "requested object was not found")
-	case errors.Is(err, site.ErrConflict), errors.Is(err, resource.ErrConflict):
+	case errors.Is(err, site.ErrConflict), errors.Is(err, resource.ErrConflict), errors.Is(err, user.ErrConflict), errors.Is(err, group.ErrConflict):
 		httptransport.WriteJSONError(response, http.StatusConflict, "conflict", "object conflicts with existing data")
+	case errors.Is(err, group.ErrProtected):
+		httptransport.WriteJSONError(response, http.StatusConflict, "protected_group", "admin group is protected")
+	case errors.Is(err, user.ErrSelfBlock):
+		httptransport.WriteJSONError(response, http.StatusConflict, "self_block_forbidden", "current user cannot be blocked")
+	case errors.Is(err, user.ErrLastAdministrator), errors.Is(err, group.ErrLastAdministrator):
+		httptransport.WriteJSONError(response, http.StatusConflict, "last_administrator", "at least one active administrator is required")
+	case errors.Is(err, group.ErrInvalidReference), errors.Is(err, user.ErrInvalidReference), errors.Is(err, permission.ErrUnknown):
+		writeValidation(response, "request data is invalid")
 	case errors.Is(err, ErrValidation):
 		var validation ValidationError
 		if errors.As(err, &validation) && len(validation.Fields) > 0 {

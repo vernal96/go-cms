@@ -39,7 +39,7 @@ func (r *Repository) Subject(
 	var subject access.Subject
 	err := r.connector.Pool().QueryRow(ctx, `
 SELECT
-    deleted_at IS NULL,
+    blocked_at IS NULL,
     EXISTS (
         SELECT 1
         FROM core.user_groups

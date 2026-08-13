@@ -61,11 +61,21 @@ func (s *ApplicationService) Create(
 			return Group{}, err
 		}
 	}
+	permissions, err := s.normalizePermissions(input.PermissionCodes)
+	if err != nil {
+		return Group{}, err
+	}
+	if len(permissions) > 0 {
+		if err := s.requirePrivileged(ctx, actor); err != nil {
+			return Group{}, err
+		}
+	}
 
 	created, err := s.repository.Create(
 		ctx,
 		actor.AuditUserID(),
 		item,
+		permissions,
 	)
 	if err != nil {
 		return Group{}, fmt.Errorf("create group: %w", err)
@@ -172,6 +182,23 @@ func (s *ApplicationService) Update(
 			return Group{}, err
 		}
 	}
+	if current.Code == AdminCode && !input.IsSuper {
+		return Group{}, ErrProtected
+	}
+	var permissions *[]permission.Code
+	if input.PermissionCodes != nil {
+		if current.IsSuper {
+			return Group{}, ErrProtected
+		}
+		if err := s.requirePrivileged(ctx, actor); err != nil {
+			return Group{}, err
+		}
+		normalized, err := s.normalizePermissions(*input.PermissionCodes)
+		if err != nil {
+			return Group{}, err
+		}
+		permissions = &normalized
+	}
 	current.Name = input.Name
 	current.IsSuper = input.IsSuper
 	current, err = normalize(current)
@@ -182,6 +209,7 @@ func (s *ApplicationService) Update(
 		ctx,
 		actor.AuditUserID(),
 		current,
+		permissions,
 	)
 	if err != nil {
 		return Group{}, fmt.Errorf("update group: %w", err)
@@ -200,6 +228,9 @@ func (s *ApplicationService) Delete(
 	item, err := s.byID(ctx, id)
 	if err != nil {
 		return err
+	}
+	if item.Code == AdminCode {
+		return ErrProtected
 	}
 	if item.IsSuper {
 		if err := s.requirePrivileged(ctx, actor); err != nil {
@@ -307,6 +338,39 @@ func (s *ApplicationService) GroupsForUser(
 	return result, nil
 }
 
+func (s *ApplicationService) ReplaceUserGroups(
+	ctx context.Context,
+	actor security.Actor,
+	userID security.UserID,
+	ids []ID,
+) error {
+	if userID <= 0 {
+		return errors.New("invalid user id")
+	}
+	requested, err := s.ValidateUserAssignment(ctx, actor, ids)
+	if err != nil {
+		return err
+	}
+	current, err := s.repository.GroupsForUser(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("list current user groups: %w", err)
+	}
+	if hasGroupCode(current, AdminCode) != hasGroupCode(requested, AdminCode) {
+		if err := s.requirePrivileged(ctx, actor); err != nil {
+			return err
+		}
+	}
+	if err := s.repository.ReplaceUserGroups(
+		ctx,
+		actor.AuditUserID(),
+		userID,
+		ids,
+	); err != nil {
+		return fmt.Errorf("replace user groups: %w", err)
+	}
+	return nil
+}
+
 func (s *ApplicationService) GrantPermission(
 	ctx context.Context,
 	actor security.Actor,
@@ -326,8 +390,12 @@ func (s *ApplicationService) GrantPermission(
 			code,
 		)
 	}
-	if _, err := s.byID(ctx, id); err != nil {
+	item, err := s.byID(ctx, id)
+	if err != nil {
 		return PermissionGrant{}, err
+	}
+	if item.Code == AdminCode {
+		return PermissionGrant{}, ErrProtected
 	}
 	grant, err := s.repository.GrantPermission(
 		ctx,
@@ -355,6 +423,13 @@ func (s *ApplicationService) RevokePermission(
 	}
 	if !containsCode(s.access.Codes(), code) {
 		return fmt.Errorf("%w: %s", permission.ErrUnknown, code)
+	}
+	item, err := s.byID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if item.Code == AdminCode {
+		return ErrProtected
 	}
 	if err := s.repository.RevokePermission(ctx, id, code); err != nil {
 		return fmt.Errorf("revoke group permission: %w", err)
@@ -427,6 +502,33 @@ func normalize(item Group) (Group, error) {
 func containsCode(codes []permission.Code, wanted permission.Code) bool {
 	for _, code := range codes {
 		if code == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *ApplicationService) normalizePermissions(
+	codes []permission.Code,
+) ([]permission.Code, error) {
+	result := make([]permission.Code, 0, len(codes))
+	seen := make(map[permission.Code]struct{}, len(codes))
+	for _, code := range codes {
+		if !containsCode(s.access.Codes(), code) {
+			return nil, fmt.Errorf("%w: %s", permission.ErrUnknown, code)
+		}
+		if _, exists := seen[code]; exists {
+			return nil, fmt.Errorf("duplicate permission %s", code)
+		}
+		seen[code] = struct{}{}
+		result = append(result, code)
+	}
+	return result, nil
+}
+
+func hasGroupCode(items []Group, code string) bool {
+	for _, item := range items {
+		if item.Code == code {
 			return true
 		}
 	}

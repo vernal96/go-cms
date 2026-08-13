@@ -223,6 +223,26 @@ input {
   border-bottom-color: var(--admin-primary);
 }
 
+.management-menu-trigger.el-button {
+  height: 64px;
+  margin: 0;
+  border-radius: 0;
+}
+
+.management-menu-trigger.el-button.is-active {
+  color: var(--admin-primary);
+  border-bottom-color: var(--admin-primary);
+}
+
+.global-section-title {
+  overflow: hidden;
+  color: #606266;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .site-selector {
   display: flex;
   flex: 1;
@@ -418,6 +438,106 @@ input {
 
 .admin-table-toolbar .el-input {
   max-width: 360px;
+}
+
+.status-filter {
+  width: 190px;
+}
+
+.form-page {
+  max-width: 1120px;
+}
+
+.editor-card {
+  border-color: var(--admin-border-color);
+}
+
+.editor-card .el-alert {
+  margin-bottom: 18px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 20px;
+}
+
+.identity-form,
+.password-form,
+.group-form {
+  max-width: 760px;
+  padding-top: 12px;
+}
+
+.password-form {
+  max-width: 540px;
+}
+
+.password-toolbar {
+  display: flex;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.groups-choice {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 18px 0 24px;
+}
+
+.groups-choice .el-checkbox {
+  height: auto;
+  min-height: 42px;
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--admin-border-color);
+  border-radius: 8px;
+}
+
+.group-code,
+.permission-code,
+.field-hint {
+  margin-left: 8px;
+  color: #909399;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.field-hint {
+  margin: 6px 0 0;
+}
+
+.permissions-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin: 26px 0 14px;
+}
+
+.permissions-heading h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.permissions-heading p {
+  margin: 0;
+  color: #909399;
+  font-size: 13px;
+}
+
+.permission-code {
+  margin: 3px 0 0;
+}
+
+.permission-matrix {
+  width: 100%;
+}
+
+.form-submit {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 24px;
 }
 
 .table-skeleton-row {

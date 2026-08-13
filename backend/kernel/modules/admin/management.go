@@ -7,11 +7,14 @@ import (
 	"strings"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	"github.com/vernal96/go-cms/kernel/modules/core/group"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -39,6 +42,14 @@ var AdminPermissionCodes = []permission.Code{
 	ResourceCreatePermission,
 	ResourceUpdatePermission,
 	ResourceDeletePermission,
+	UserReadPermission,
+	UserCreatePermission,
+	UserUpdatePermission,
+	UserBlockPermission,
+	GroupReadPermission,
+	GroupCreatePermission,
+	GroupUpdatePermission,
+	GroupDeletePermission,
 }
 
 type SiteAccessScope struct {
@@ -81,6 +92,11 @@ type Management struct {
 	resourceRepo  resource.ManagementRepository
 	authorizer    security.Authorizer
 	policy        SiteAccessPolicy
+	users         user.Service
+	userRepo      user.ManagementRepository
+	groups        group.Service
+	groupRepo     group.ManagementRepository
+	access        access.Service
 }
 
 type ManagementDependencies struct {
@@ -92,6 +108,11 @@ type ManagementDependencies struct {
 	ResourceRepository resource.ManagementRepository
 	Authorizer         security.Authorizer
 	SiteAccessPolicy   SiteAccessPolicy
+	Users              user.Service
+	UserRepository     user.ManagementRepository
+	Groups             group.Service
+	GroupRepository    group.ManagementRepository
+	Access             access.Service
 }
 
 func NewManagement(dependencies ManagementDependencies) (*Management, error) {
@@ -110,6 +131,15 @@ func NewManagement(dependencies ManagementDependencies) (*Management, error) {
 	if dependencies.SiteAccessPolicy == nil {
 		return nil, errors.New("admin site access policy is nil")
 	}
+	if dependencies.Users == nil || dependencies.UserRepository == nil {
+		return nil, errors.New("admin user dependencies are nil")
+	}
+	if dependencies.Groups == nil || dependencies.GroupRepository == nil {
+		return nil, errors.New("admin group dependencies are nil")
+	}
+	if dependencies.Access == nil {
+		return nil, errors.New("admin access service is nil")
+	}
 	profiles := make([]kernel.Profile, len(dependencies.Profiles))
 	copy(profiles, dependencies.Profiles)
 	return &Management{
@@ -121,6 +151,11 @@ func NewManagement(dependencies ManagementDependencies) (*Management, error) {
 		resourceRepo:  dependencies.ResourceRepository,
 		authorizer:    dependencies.Authorizer,
 		policy:        dependencies.SiteAccessPolicy,
+		users:         dependencies.Users,
+		userRepo:      dependencies.UserRepository,
+		groups:        dependencies.Groups,
+		groupRepo:     dependencies.GroupRepository,
+		access:        dependencies.Access,
 	}, nil
 }
 

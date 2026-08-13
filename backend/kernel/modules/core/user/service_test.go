@@ -255,7 +255,7 @@ func (r *memoryRepository) RecordLogin(
 	return cloneRecord(record), nil
 }
 
-func (r *memoryRepository) Delete(
+func (r *memoryRepository) Block(
 	_ context.Context,
 	actorID *security.UserID,
 	id ID,
@@ -265,13 +265,13 @@ func (r *memoryRepository) Delete(
 		return Record{}, ErrNotFound
 	}
 	now := time.Now().UTC()
-	record.DeletedAt = &now
-	record.DeletedBy = cloneUserID(actorID)
+	record.BlockedAt = &now
+	record.BlockedBy = cloneUserID(actorID)
 	r.records[id] = record
 	return cloneRecord(record), nil
 }
 
-func (r *memoryRepository) Restore(
+func (r *memoryRepository) Unblock(
 	_ context.Context,
 	actorID *security.UserID,
 	id ID,
@@ -280,8 +280,8 @@ func (r *memoryRepository) Restore(
 	if !exists {
 		return Record{}, ErrNotFound
 	}
-	record.DeletedAt = nil
-	record.DeletedBy = nil
+	record.BlockedAt = nil
+	record.BlockedBy = nil
 	record.UpdatedBy = cloneUserID(actorID)
 	r.records[id] = record
 	return cloneRecord(record), nil
@@ -327,7 +327,7 @@ func TestCurrentReturnsOnlyAnActiveAuthenticatedUser(t *testing.T) {
 			Login:     "deleted",
 			Email:     "deleted@example.test",
 			Name:      "Deleted",
-			DeletedAt: &deletedAt,
+			BlockedAt: &deletedAt,
 		},
 		PasswordHash: "hash:a-valid-password",
 	}
@@ -358,7 +358,7 @@ func TestCurrentReturnsOnlyAnActiveAuthenticatedUser(t *testing.T) {
 	}
 }
 
-func TestCreateNormalizesIdentityAndReservesSoftDeletedValues(
+func TestCreateNormalizesIdentityAndReservesBlockedValues(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -386,7 +386,7 @@ func TestCreateNormalizesIdentityAndReservesSoftDeletedValues(
 		*created.CreatedBy != 99 {
 		t.Fatalf("created user = %#v", created)
 	}
-	if _, err := service.Delete(
+	if _, err := service.Block(
 		context.Background(),
 		security.System(),
 		created.ID,
@@ -404,6 +404,20 @@ func TestCreateNormalizesIdentityAndReservesSoftDeletedValues(
 		},
 	); !errors.Is(err, ErrConflict) {
 		t.Fatalf("reserved login error = %v", err)
+	}
+}
+
+func TestBlockRejectsCurrentUser(t *testing.T) {
+	t.Parallel()
+	service, _, _ := newService(t)
+	created, err := service.Create(context.Background(), security.System(), CreateInput{
+		Login: "self-block", Email: "self-block@example.test", Password: "a-valid-password", Name: "Self Block",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Block(context.Background(), security.User(created.ID), created.ID); !errors.Is(err, ErrSelfBlock) {
+		t.Fatalf("self block error = %v", err)
 	}
 }
 
@@ -576,7 +590,7 @@ func TestAuthenticateUsesGenericErrorsDummyHashAndRehashes(
 			Login:     "deleted",
 			Email:     "deleted@example.test",
 			Name:      "Deleted",
-			DeletedAt: &deletedAt,
+			BlockedAt: &deletedAt,
 		},
 		PasswordHash: "hash:a-valid-password",
 	}

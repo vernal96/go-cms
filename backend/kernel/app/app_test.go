@@ -542,6 +542,14 @@ type fakeGroupRepository struct {
 	coregroup.Repository
 }
 
+func (fakeUserRepository) ListPage(context.Context, coreuser.ListQuery) (coreuser.Page, error) {
+	return coreuser.Page{}, nil
+}
+
+func (fakeGroupRepository) ListPage(context.Context, coregroup.ListQuery) (coregroup.Page, error) {
+	return coregroup.Page{}, nil
+}
+
 type fakeAccessRepository struct {
 	coreaccess.Repository
 }

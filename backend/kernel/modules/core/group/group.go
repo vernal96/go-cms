@@ -12,10 +12,14 @@ import (
 
 type ID int64
 
+const AdminCode = "admin"
+
 var (
-	ErrNotFound         = errors.New("group not found")
-	ErrConflict         = errors.New("group conflict")
-	ErrInvalidReference = errors.New("invalid group reference")
+	ErrNotFound          = errors.New("group not found")
+	ErrConflict          = errors.New("group conflict")
+	ErrInvalidReference  = errors.New("invalid group reference")
+	ErrProtected         = errors.New("protected group")
+	ErrLastAdministrator = errors.New("cannot remove last active administrator")
 
 	codePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,63}$`)
 )
@@ -50,15 +54,28 @@ type PermissionGrant struct {
 }
 
 type CreateInput struct {
-	Code    string
-	Name    string
-	IsSuper bool
+	Code            string
+	Name            string
+	IsSuper         bool
+	PermissionCodes []permission.Code
 }
 
 type UpdateInput struct {
-	ID      ID
-	Name    string
-	IsSuper bool
+	ID              ID
+	Name            string
+	IsSuper         bool
+	PermissionCodes *[]permission.Code
+}
+
+type ListQuery struct {
+	Search  string
+	Page    int
+	PerPage int
+}
+
+type Page struct {
+	Items []Group
+	Total int
 }
 
 type AssignmentValidator interface {
@@ -70,11 +87,11 @@ type AssignmentValidator interface {
 }
 
 type Repository interface {
-	Create(context.Context, *security.UserID, Group) (Group, error)
+	Create(context.Context, *security.UserID, Group, []permission.Code) (Group, error)
 	ByID(context.Context, ID) (Group, error)
 	ByCode(context.Context, string) (Group, error)
 	List(context.Context) ([]Group, error)
-	Update(context.Context, *security.UserID, Group) (Group, error)
+	Update(context.Context, *security.UserID, Group, *[]permission.Code) (Group, error)
 	Delete(context.Context, ID) error
 	AddUser(
 		context.Context,
@@ -88,6 +105,12 @@ type Repository interface {
 		context.Context,
 		security.UserID,
 	) ([]Group, error)
+	ReplaceUserGroups(
+		context.Context,
+		*security.UserID,
+		security.UserID,
+		[]ID,
+	) error
 	GrantPermission(
 		context.Context,
 		*security.UserID,
@@ -96,6 +119,11 @@ type Repository interface {
 	) (PermissionGrant, error)
 	RevokePermission(context.Context, ID, permission.Code) error
 	Permissions(context.Context, ID) ([]PermissionGrant, error)
+}
+
+type ManagementRepository interface {
+	Repository
+	ListPage(context.Context, ListQuery) (Page, error)
 }
 
 type Service interface {
@@ -128,6 +156,12 @@ type Service interface {
 		security.Actor,
 		security.UserID,
 	) ([]Group, error)
+	ReplaceUserGroups(
+		context.Context,
+		security.Actor,
+		security.UserID,
+		[]ID,
+	) error
 	GrantPermission(
 		context.Context,
 		security.Actor,

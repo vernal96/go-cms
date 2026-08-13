@@ -14,8 +14,8 @@ ON CONFLICT (login) DO UPDATE
 SET email = EXCLUDED.email,
     password_hash = EXCLUDED.password_hash,
     name = EXCLUDED.name,
-    deleted_at = NULL,
-    deleted_by = NULL,
+    blocked_at = NULL,
+    blocked_by = NULL,
     updated_at = CURRENT_TIMESTAMP,
     updated_by = NULL;
 

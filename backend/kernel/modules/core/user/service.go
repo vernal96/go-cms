@@ -27,7 +27,7 @@ var (
 	readPermission   = permission.MustCode("core", "user", permission.Read)
 	createPermission = permission.MustCode("core", "user", permission.Create)
 	updatePermission = permission.MustCode("core", "user", permission.Update)
-	deletePermission = permission.MustCode("core", "user", permission.Delete)
+	blockPermission  = permission.MustCode("core", "user", permission.Delete)
 )
 
 type ApplicationService struct {
@@ -158,7 +158,7 @@ func (s *ApplicationService) Current(
 		}
 		return User{}, err
 	}
-	if record.DeletedAt != nil {
+	if record.BlockedAt != nil {
 		return User{}, security.ErrUnauthenticated
 	}
 	return Clone(record.User), nil
@@ -252,29 +252,32 @@ func (s *ApplicationService) ChangePassword(
 	return Clone(updated.User), nil
 }
 
-func (s *ApplicationService) Delete(
+func (s *ApplicationService) Block(
 	ctx context.Context,
 	actor security.Actor,
 	id ID,
 ) (User, error) {
-	if err := s.access.Check(ctx, actor, deletePermission); err != nil {
+	if err := s.access.Check(ctx, actor, blockPermission); err != nil {
 		return User{}, err
 	}
 	if id <= 0 {
 		return User{}, errors.New("invalid user id")
 	}
-	deleted, err := s.repository.Delete(
+	if actorID, exists := actor.UserID(); exists && actorID == id {
+		return User{}, ErrSelfBlock
+	}
+	blocked, err := s.repository.Block(
 		ctx,
 		actor.AuditUserID(),
 		id,
 	)
 	if err != nil {
-		return User{}, fmt.Errorf("delete user: %w", err)
+		return User{}, fmt.Errorf("block user: %w", err)
 	}
-	return Clone(deleted.User), nil
+	return Clone(blocked.User), nil
 }
 
-func (s *ApplicationService) Restore(
+func (s *ApplicationService) Unblock(
 	ctx context.Context,
 	actor security.Actor,
 	id ID,
@@ -285,15 +288,15 @@ func (s *ApplicationService) Restore(
 	if id <= 0 {
 		return User{}, errors.New("invalid user id")
 	}
-	restored, err := s.repository.Restore(
+	unblocked, err := s.repository.Unblock(
 		ctx,
 		actor.AuditUserID(),
 		id,
 	)
 	if err != nil {
-		return User{}, fmt.Errorf("restore user: %w", err)
+		return User{}, fmt.Errorf("unblock user: %w", err)
 	}
-	return Clone(restored.User), nil
+	return Clone(unblocked.User), nil
 }
 
 func (s *ApplicationService) Authenticate(
@@ -351,7 +354,7 @@ func (s *ApplicationService) Authenticate(
 	if err != nil {
 		return User{}, fmt.Errorf("verify user password: %w", err)
 	}
-	if !valid || record.DeletedAt != nil {
+	if !valid || record.BlockedAt != nil {
 		return User{}, ErrInvalidCredentials
 	}
 

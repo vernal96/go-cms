@@ -76,7 +76,7 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 14 {
+	if len(entries) != 16 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	expected := map[string]bool{
@@ -86,6 +86,8 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 		"000006_permissions.down.sql":      false,
 		"000007_resource_widgets.up.sql":   false,
 		"000007_resource_widgets.down.sql": false,
+		"000008_user_blocking.up.sql":      false,
+		"000008_user_blocking.down.sql":    false,
 	}
 	for _, entry := range entries {
 		if _, exists := expected[entry.Name()]; exists {
@@ -490,7 +492,7 @@ SELECT
         JOIN core.groups g ON g.id = ug.group_id
         WHERE u.login = 'admin'
           AND u.email = 'admin@example.test'
-          AND u.deleted_at IS NULL
+          AND u.blocked_at IS NULL
           AND g.code = 'admin'
           AND g.is_super
     ),
