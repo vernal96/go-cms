@@ -8,10 +8,13 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
+	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
+	"github.com/vernal96/go-cms/kernel/modules/resourceextension"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
@@ -143,8 +146,9 @@ const (
 )
 
 type pageResourceResponse struct {
-	Resource pageResourcePayload  `json:"resource"`
-	Widgets  []pageWidgetResponse `json:"widgets"`
+	Resource   pageResourcePayload  `json:"resource"`
+	Widgets    []pageWidgetResponse `json:"widgets"`
+	Extensions map[string]any       `json:"extensions,omitempty"`
 }
 
 type pageResourcePayload struct {
@@ -290,6 +294,14 @@ func (h pageResourceHandler) ServeHTTP(
 		result.Widgets = append(result.Widgets, rendered)
 	}
 
+	result.Extensions = h.publicExtensions(
+		ctx,
+		siteRuntime.Site(),
+		siteRuntime.Profile().Modules(),
+		item,
+		httptransport.PreviewFromContext(ctx),
+	)
+
 	raw, err := json.Marshal(result)
 	if err != nil {
 		h.logError(
@@ -313,6 +325,78 @@ func (h pageResourceHandler) ServeHTTP(
 	)
 	response.WriteHeader(http.StatusOK)
 	_, _ = response.Write(append(raw, '\n'))
+}
+
+func (h pageResourceHandler) publicExtensions(
+	ctx context.Context,
+	siteItem site.Site,
+	modules []kernel.ModuleRuntime,
+	item resource.Resource,
+	preview bool,
+) map[string]any {
+	result := make(map[string]any)
+	for _, moduleRuntime := range modules {
+		provider, ok := moduleRuntime.(resourceextension.PublicProvider)
+		if !ok {
+			continue
+		}
+		extension, err := provider.PublicResourceExtension(
+			ctx,
+			resourceextension.PublicRequest{
+				Site: siteItem, Resource: item, Preview: preview,
+			},
+		)
+		if err != nil {
+			h.logExtensionError(ctx, item, moduleRuntime.ModuleCode(), err)
+			continue
+		}
+		if extension.Code == "" {
+			continue
+		}
+		code := string(extension.Code)
+		if extension.Data == nil {
+			h.logExtensionError(
+				ctx,
+				item,
+				moduleRuntime.ModuleCode(),
+				errors.New("public resource extension returned nil data"),
+			)
+			continue
+		}
+		if _, exists := result[code]; exists {
+			h.logExtensionError(
+				ctx,
+				item,
+				moduleRuntime.ModuleCode(),
+				fmt.Errorf("public resource extension %q is duplicated", code),
+			)
+			continue
+		}
+		result[code] = extension.Data
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func (h pageResourceHandler) logExtensionError(
+	ctx context.Context,
+	item resource.Resource,
+	moduleCode kernel.ModuleCode,
+	err error,
+) {
+	if h.logger == nil {
+		return
+	}
+	h.logger.ErrorContext(
+		ctx,
+		"public resource extension failed",
+		slog.String("event", "resource.extension.failed"),
+		slog.Int64("resource.id", int64(item.ID)),
+		slog.String("module.code", string(moduleCode)),
+		slog.Any("error", err),
+	)
 }
 
 func (h pageResourceHandler) widgetError(

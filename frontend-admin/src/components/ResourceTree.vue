@@ -192,8 +192,10 @@ async function handleDrop(dragging: Node, drop: Node, type: 'before' | 'after' |
     parentId = target.id
     position = 2_147_483_647
   } else {
-    parentId = drop.level === 1 ? null : ((drop.parent.data as TreeNodeData | undefined)?.id ?? null)
-    const siblings = drop.parent.childNodes
+		const parent = drop.parent
+		if (!parent) return
+		parentId = drop.level === 1 ? null : ((parent.data as TreeNodeData | undefined)?.id ?? null)
+		const siblings = parent.childNodes
       .map((node) => node.data as TreeNodeData)
       .filter((item) => item.id !== source.id)
     const targetIndex = siblings.findIndex((item) => item.id === target.id)

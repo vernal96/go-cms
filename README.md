@@ -13,25 +13,55 @@ The frontend communicates with the backend only over HTTP. Browser requests use 
 
 ## Requirements
 
-- Go as declared in `backend/go.mod`
-- Node.js 24 or newer
-- Docker with Docker Compose
+- GNU Make
+- Docker with a recent Docker Compose version that supports `--wait`
+
+Go as declared in `backend/go.mod` and Node.js 24 or newer are only required
+when running backend or frontend checks directly on the host.
 
 ## Development
 
-Create the shared local environment file:
+Build, initialize, and start the complete development environment:
 
 ```bash
-cp .env.example .env
+make up
 ```
 
-Start the backend server, administration frontend, and infrastructure services:
+Running `make` without a target does the same thing. The command:
+
+- creates `.env` from `.env.example` when it is missing and never overwrites an
+  existing file;
+- builds the backend and administration images;
+- starts and waits for PostgreSQL, Kafka, RabbitMQ, Loki, and Grafana;
+- applies all database migrations and the development seeds;
+- starts the backend and administration frontend and waits for their
+  healthchecks.
+
+After startup, the services are available at these default addresses:
+
+- administration interface: `http://localhost:5173`;
+- backend API: `http://localhost:8080`;
+- Grafana: `http://localhost:3000`.
+
+Sign in to the administration interface with the development seed account:
 
 ```bash
-docker compose up --build
+login: admin
+password: admin-dev-only-2026
 ```
 
-The administration interface is available at `http://localhost:5173` by default, and the backend API is available at `http://localhost:8080`. The backend server starts automatically with its container.
+`make up` is idempotent and can be used again after pulling new changes. It
+reapplies pending migrations and seeds without deleting persistent data.
+
+Useful development commands:
+
+```bash
+make ps    # show the status of every service
+make logs  # follow logs from every service
+make build # rebuild application images
+make down  # stop containers without deleting persistent volumes
+make help  # show all Make targets
+```
 
 ## Checks
 

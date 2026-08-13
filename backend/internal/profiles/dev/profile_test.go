@@ -7,10 +7,11 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	"github.com/vernal96/go-cms/kernel/modules/seo"
 )
 
 func TestProfileContainsRequiredModulesInOrder(t *testing.T) {
-	if len(dev.Profile.Modules) != 2 {
+	if len(dev.Profile.Modules) != 3 {
 		t.Fatalf("profile module count = %d", len(dev.Profile.Modules))
 	}
 	if dev.Profile.Modules[0].Module.Code() != core.ModuleCode {
@@ -19,10 +20,16 @@ func TestProfileContainsRequiredModulesInOrder(t *testing.T) {
 			dev.Profile.Modules[0].Module.Code(),
 		)
 	}
-	if dev.Profile.Modules[1].Module.Code() != admin.ModuleCode {
+	if dev.Profile.Modules[1].Module.Code() != seo.ModuleCode {
 		t.Fatalf(
 			"second profile module = %q",
 			dev.Profile.Modules[1].Module.Code(),
+		)
+	}
+	if dev.Profile.Modules[2].Module.Code() != admin.ModuleCode {
+		t.Fatalf(
+			"third profile module = %q",
+			dev.Profile.Modules[2].Module.Code(),
 		)
 	}
 }

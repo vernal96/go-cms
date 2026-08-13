@@ -48,6 +48,36 @@ func testRuntimeServices() kernel.RuntimeServices {
 	}
 }
 
+func TestProfileRuntimeListsModuleRuntimesInProfileOrder(t *testing.T) {
+	t.Parallel()
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		testRuntimeServices(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := factory.Make(context.Background(), kernel.Profile{
+		Code: "ordered",
+		Modules: []kernel.ProfileModule{
+			{Module: registryModule{code: "first"}},
+			{Module: registryModule{code: "second"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modules := runtime.Modules()
+	if len(modules) != 2 || modules[0].ModuleCode() != "first" ||
+		modules[1].ModuleCode() != "second" {
+		t.Fatalf("module runtimes = %#v", modules)
+	}
+	modules[0] = nil
+	if runtime.Modules()[0] == nil {
+		t.Fatal("module runtime slice shares caller memory")
+	}
+}
+
 func (emptyDatabaseResolver) MainModuleDatabase(
 	kernel.ModuleCode,
 ) (kernel.ModuleDatabase, bool) {

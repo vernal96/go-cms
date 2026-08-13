@@ -51,6 +51,7 @@ type ModuleRuntime interface {
 
 type Registry interface {
 	Module(ModuleCode) (ModuleRuntime, bool)
+	Modules() []ModuleRuntime
 	FieldType(field.TypeCode) (field.Type, bool)
 	ResourceType(resourcetype.Code) (resourcetype.Type, bool)
 	Permission(permission.Code) (permission.Definition, bool)
@@ -69,6 +70,7 @@ type RegistryProvider interface {
 
 type RuntimeRegistry struct {
 	modules         map[ModuleCode]ModuleRuntime
+	moduleRuntimes  []ModuleRuntime
 	fieldTypes      map[field.TypeCode]field.Type
 	resourceTypes   map[resourcetype.Code]resourcetype.Type
 	permissions     map[permission.Code]permission.Definition
@@ -93,6 +95,10 @@ func (r *RuntimeRegistry) Module(
 ) (ModuleRuntime, bool) {
 	runtime, exists := r.modules[code]
 	return runtime, exists
+}
+
+func (r *RuntimeRegistry) Modules() []ModuleRuntime {
+	return append([]ModuleRuntime(nil), r.moduleRuntimes...)
 }
 
 func (r *RuntimeRegistry) FieldType(
@@ -138,6 +144,7 @@ func (r *RuntimeRegistry) add(runtime ModuleRuntime) error {
 	}
 
 	r.modules[code] = runtime
+	r.moduleRuntimes = append(r.moduleRuntimes, runtime)
 	return nil
 }
 
@@ -415,6 +422,13 @@ func (r *ProfileRuntime) Profile() Profile {
 
 func (r *ProfileRuntime) Registry() Registry {
 	return r.registry
+}
+
+func (r *ProfileRuntime) Modules() []ModuleRuntime {
+	if r == nil || r.registry == nil {
+		return nil
+	}
+	return r.registry.Modules()
 }
 
 func (r *ProfileRuntime) ParamSchema() *field.Schema {

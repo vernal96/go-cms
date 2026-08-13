@@ -207,6 +207,43 @@ export interface ResourceMetadata {
     icon: string
     fields: FieldDefinition[]
   }>
+  extensions: ResourceExtensionMetadata[]
+}
+
+export interface ResourceExtensionMetadata {
+  code: string
+  title: string
+  applies_to: Array<'page' | 'link'>
+  fields: Array<{
+    key: string
+    label: string
+    control: 'text' | 'textarea' | 'switch'
+    rows?: number
+  }>
+  variables: Array<{ code: string; label: string }>
+}
+
+export interface SEOSettings {
+  title_template: string
+  description_template: string
+  keywords_template: string
+  canonical_template: string
+  robots_index: boolean
+  robots_follow: boolean
+  og_title_template: string
+  og_description_template: string
+}
+
+export interface SEOPreview {
+  title: string
+  description: string
+  keywords: string[]
+  canonical_url: string
+  robots: { index: boolean; follow: boolean }
+  open_graph: { title: string; description: string }
+  warnings: Array<{ field: string; variable: string; message: string }>
+  title_characters: number
+  description_characters: number
 }
 
 export interface ResourceCreatePayload {

@@ -25,6 +25,9 @@ describe('ResourceCreateDialog', () => {
       title: 'Home',
       menu_title: '',
       display_title: 'Home',
+		sort: 0,
+		deleted: false,
+		deleted_at: null,
       has_children: false,
       can_create_child: true,
     }
@@ -50,6 +53,7 @@ describe('ResourceCreateDialog', () => {
             ],
           },
         ],
+			extensions: [],
       })
       .mockResolvedValueOnce(created)
     const wrapper = shallowMount(ResourceCreateDialog, {

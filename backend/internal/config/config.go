@@ -18,6 +18,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	corepostgres "github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres"
+	seopostgres "github.com/vernal96/go-cms/kernel/modules/seo/adapters/postgres"
 )
 
 type Config struct {
@@ -61,6 +62,7 @@ func (c Config) Application() appkernel.Definition {
 			Connector: mainpostgres.Factory(c.Postgres),
 			Adapters: []kernel.ModuleDatabaseFactory{
 				corepostgres.DatabaseFactory{},
+				seopostgres.DatabaseFactory{},
 			},
 		},
 		Filesystems: []filesystem.Factory{

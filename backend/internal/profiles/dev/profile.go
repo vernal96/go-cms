@@ -9,6 +9,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	"github.com/vernal96/go-cms/kernel/modules/seo"
 )
 
 const ProfileCode kernel.ProfileCode = "dev"
@@ -31,6 +32,9 @@ var Profile = kernel.Profile{
 					Namespace: "core/repository",
 				},
 			},
+		},
+		{
+			Module: seo.Module{},
 		},
 		{
 			Module: admin.Module{},

@@ -93,8 +93,9 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	if definition.MainDatabase.Connector.Code() != mainpostgres.ConnectionCode {
 		t.Fatalf("connection code = %q", definition.MainDatabase.Connector.Code())
 	}
-	if len(definition.MainDatabase.Adapters) != 1 ||
-		definition.MainDatabase.Adapters[0].ModuleCode() != core.ModuleCode {
+	if len(definition.MainDatabase.Adapters) != 2 ||
+		definition.MainDatabase.Adapters[0].ModuleCode() != core.ModuleCode ||
+		definition.MainDatabase.Adapters[1].ModuleCode() != "seo" {
 		t.Fatalf("database adapters = %#v", definition.MainDatabase.Adapters)
 	}
 	if len(definition.Profiles) != 1 || definition.Profiles[0].Code != "dev" {
@@ -109,9 +110,10 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		definition.Caches[0].Code() != corecache.Code {
 		t.Fatalf("cache factories = %#v", definition.Caches)
 	}
-	if len(definition.Profiles[0].Modules) != 2 ||
+	if len(definition.Profiles[0].Modules) != 3 ||
 		definition.Profiles[0].Modules[0].Module.Code() != core.ModuleCode ||
-		definition.Profiles[0].Modules[1].Module.Code() != admin.ModuleCode ||
+		definition.Profiles[0].Modules[1].Module.Code() != "seo" ||
+		definition.Profiles[0].Modules[2].Module.Code() != admin.ModuleCode ||
 		len(definition.Profiles[0].Modules[0].Caches) != 1 ||
 		definition.Profiles[0].Modules[0].Caches[0].Code != corecache.Code {
 		t.Fatalf(

@@ -11,6 +11,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w" \
     -o /out/server \
     ./cmd/app
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o /out/console \
+    ./cmd/console
 
 FROM alpine:3.23
 
@@ -24,6 +29,7 @@ RUN mkdir -p var/log var/files/public var/files/private \
     && chown -R cms:cms /app
 
 COPY --from=build /out/server /usr/local/bin/server
+COPY --from=build /out/console /usr/local/bin/console
 
 USER cms
 

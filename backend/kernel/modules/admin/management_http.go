@@ -18,6 +18,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/modules/resourceextension"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
@@ -46,6 +47,9 @@ func registerManagementRoutes(router chi.Router, management *Management) {
 	router.Get("/sites/{siteID}/resource-options", handler.resourceOptions)
 	router.Get("/sites/{siteID}/resources/{resourceID}", handler.getResource)
 	router.Patch("/sites/{siteID}/resources/{resourceID}", handler.updateResource)
+	router.Get("/sites/{siteID}/resources/{resourceID}/extensions/{extensionCode}", handler.getResourceExtension)
+	router.Patch("/sites/{siteID}/resources/{resourceID}/extensions/{extensionCode}", handler.saveResourceExtension)
+	router.Post("/sites/{siteID}/resources/{resourceID}/extensions/{extensionCode}/preview", handler.previewResourceExtension)
 	router.Post("/sites/{siteID}/resources/{resourceID}/move", handler.moveResource)
 	router.Delete("/sites/{siteID}/resources/{resourceID}", handler.deleteResource)
 	router.Post("/sites/{siteID}/resources/{resourceID}/restore", handler.restoreResource)
@@ -343,6 +347,76 @@ func (h *managementHTTP) moveResource(response http.ResponseWriter, request *htt
 	}
 	result, err := h.management.MoveResource(request.Context(), actor(request), siteID, resourceID, payload.ParentID, *payload.Position)
 	writeResult(response, http.StatusOK, result, err)
+}
+
+func (h *managementHTTP) getResourceExtension(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	siteID, resourceID, code, ok := resourceExtensionParams(response, request)
+	if !ok {
+		return
+	}
+	result, err := h.management.ResourceExtension(
+		request.Context(), actor(request), siteID, resourceID, code,
+	)
+	writeResult(response, http.StatusOK, result, err)
+}
+
+func (h *managementHTTP) saveResourceExtension(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	siteID, resourceID, code, ok := resourceExtensionParams(response, request)
+	if !ok {
+		return
+	}
+	var payload json.RawMessage
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	result, err := h.management.SaveResourceExtension(
+		request.Context(), actor(request), siteID, resourceID, code, payload,
+	)
+	writeResult(response, http.StatusOK, result, err)
+}
+
+func (h *managementHTTP) previewResourceExtension(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	siteID, resourceID, code, ok := resourceExtensionParams(response, request)
+	if !ok {
+		return
+	}
+	var payload json.RawMessage
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	result, err := h.management.PreviewResourceExtension(
+		request.Context(), actor(request), siteID, resourceID, code, payload,
+	)
+	writeResult(response, http.StatusOK, result, err)
+}
+
+func resourceExtensionParams(
+	response http.ResponseWriter,
+	request *http.Request,
+) (site.ID, resource.ID, resourceextension.Code, bool) {
+	siteID, ok := siteID(response, request)
+	if !ok {
+		return 0, 0, "", false
+	}
+	resourceID, ok := resourceID(response, request)
+	if !ok {
+		return 0, 0, "", false
+	}
+	code := resourceextension.Code(chi.URLParam(request, "extensionCode"))
+	if code == "" {
+		writeBadRequest(response, "extension code is invalid")
+		return 0, 0, "", false
+	}
+	return siteID, resourceID, code, true
 }
 
 func (h *managementHTTP) deleteResource(response http.ResponseWriter, request *http.Request) {

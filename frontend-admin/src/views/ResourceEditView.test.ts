@@ -92,6 +92,7 @@ describe('ResourceEditView schema transitions', () => {
             ],
           },
         ],
+			extensions: [],
       })
       .mockResolvedValueOnce({ items: [] })
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
@@ -103,6 +104,9 @@ describe('ResourceEditView schema transitions', () => {
       global: { renderStubDefaultSlot: true },
     })
     await flushPromises()
+		expect(wrapper.findAllComponents({ name: 'ElTabPane' }).some(
+			(tab) => String(tab.props('name')).startsWith('extension:'),
+		)).toBe(false)
 
     const selects = wrapper.findAllComponents({ name: 'ElSelect' })
     expect(selects).toHaveLength(3)
@@ -122,4 +126,45 @@ describe('ResourceEditView schema transitions', () => {
     expect(model.settings).toEqual({})
     expect(ElMessageBox.confirm).toHaveBeenCalledTimes(2)
   })
+
+	it('shows profile extensions only while they apply to the resource type', async () => {
+		requestMock.mockReset()
+		requestMock
+			.mockResolvedValueOnce({
+				resource: {
+					id: 9, site_id: 7, parent_id: null, type: 'page', template_code: 'page',
+					title: 'Page', menu_title: '', slug: '', path: '/', annotation: '',
+					content_type: 'html', content: '', external_url: null, is_public: true,
+					is_searchable: true, in_menu: true, in_sitemap: true, sort: 0,
+					published_at: null, unpublished_at: null, deleted: false, deleted_at: null,
+					settings: {},
+				},
+				permissions: { update: true, delete: true, restore: true },
+			})
+			.mockResolvedValueOnce({
+				types: [
+					{ code: 'page', label: 'Страница' },
+					{ code: 'link', label: 'Ссылка' },
+				],
+				templates: [{ code: 'page', label: 'Страница', icon: 'document', fields: [] }],
+				extensions: [{
+					code: 'seo', title: 'SEO', applies_to: ['page'], fields: [], variables: [],
+				}],
+			})
+			.mockResolvedValueOnce({ items: [] })
+		const wrapper = shallowMount(ResourceEditView, {
+			props: { accessToken: 'token', permissions: new Set<string>() },
+			global: { renderStubDefaultSlot: true },
+		})
+		await flushPromises()
+		expect(wrapper.findAllComponents({ name: 'ElTabPane' }).some(
+			(tab) => tab.props('name') === 'extension:seo',
+		)).toBe(true)
+
+		wrapper.findAllComponents({ name: 'ElSelect' })[2]?.vm.$emit('change', 'link')
+		await flushPromises()
+		expect(wrapper.findAllComponents({ name: 'ElTabPane' }).some(
+			(tab) => tab.props('name') === 'extension:seo',
+		)).toBe(false)
+	})
 })

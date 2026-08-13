@@ -25,6 +25,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { AdminAPIError, adminRequest, adminRequestVoid } from '../api/admin-api'
 import DynamicFieldsForm from '../components/fields/DynamicFieldsForm.vue'
 import RichTextEditor from '../components/RichTextEditor.vue'
+import ResourceExtensionEditor from '../components/resource-extensions/ResourceExtensionEditor.vue'
 import {
   createFieldValues,
   fieldErrorMessage,
@@ -54,7 +55,7 @@ const deleting = ref(false)
 const loadError = ref<string | null>(null)
 const submitError = ref<string | null>(null)
 const activeTab = ref('main')
-const metadata = ref<ResourceMetadata>({ types: [], templates: [] })
+const metadata = ref<ResourceMetadata>({ types: [], templates: [], extensions: [] })
 const options = ref<ResourceOption[]>([])
 const canUpdate = ref(false)
 const canDelete = ref(false)
@@ -88,6 +89,9 @@ const resourceId = computed(() => Number(route.params.resourceId))
 const siteId = computed(() => Number(route.params.siteId))
 const selectedTemplate = computed(() =>
   metadata.value.templates.find((item) => item.code === form.template_code) ?? null,
+)
+const applicableExtensions = computed(() =>
+  metadata.value.extensions.filter((extension) => extension.applies_to.includes(form.type)),
 )
 const hideInMenu = computed({
   get: () => !form.in_menu,
@@ -171,6 +175,7 @@ async function changeType(value: 'page' | 'link'): Promise<void> {
     form.template_code = ''
     form.content = ''
     form.settings = {}
+		if (activeTab.value.startsWith('extension:')) activeTab.value = 'main'
   } else {
     form.external_url = ''
     form.template_code = metadata.value.templates[0]?.code ?? ''
@@ -441,6 +446,23 @@ watch(() => [route.params.siteId, route.params.resourceId], () => void load())
             <dynamic-fields-form v-model="form.settings" :fields="selectedTemplate.fields" :errors="displayedFieldErrors" />
           </div>
         </el-tab-pane>
+
+			<el-tab-pane
+				v-for="extension in applicableExtensions"
+				:key="extension.code"
+				:label="extension.title"
+				:name="`extension:${extension.code}`"
+			>
+				<resource-extension-editor
+					:key="`${resourceId}:${extension.code}`"
+					:metadata="extension"
+					:site-id="siteId"
+					:resource-id="resourceId"
+					:access-token="accessToken"
+					:can-update="canUpdate"
+					@unauthorized="emit('unauthorized')"
+				/>
+			</el-tab-pane>
       </el-tabs>
     </el-form>
   </section>

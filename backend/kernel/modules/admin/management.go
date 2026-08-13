@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/modules/resourceextension"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -91,11 +93,18 @@ type ProfileResolver interface {
 	ProfileRuntime(kernel.ProfileCode) (*kernel.ProfileRuntime, bool)
 }
 
+type SiteCatalog interface {
+	RuntimeByID(site.ID) (*site.Runtime, bool)
+	Create(context.Context, security.Actor, site.CreateInput) (*site.Runtime, error)
+	Update(context.Context, security.Actor, site.UpdateInput) (*site.Runtime, error)
+	Delete(context.Context, security.Actor, site.ID) error
+}
+
 type Management struct {
 	profiles      []kernel.Profile
 	profileSource ProfileResolver
 	repository    site.ManagementRepository
-	sites         *site.Catalog
+	sites         SiteCatalog
 	resources     *resource.Service
 	resourceRepo  resource.ManagementRepository
 	authorizer    security.Authorizer
@@ -117,7 +126,7 @@ type ManagementDependencies struct {
 	Profiles           []kernel.Profile
 	ProfileSource      ProfileResolver
 	SiteRepository     site.ManagementRepository
-	Sites              *site.Catalog
+	Sites              SiteCatalog
 	Resources          *resource.Service
 	ResourceRepository resource.ManagementRepository
 	Authorizer         security.Authorizer
@@ -507,8 +516,9 @@ type ResourceType struct {
 }
 
 type ResourceMetadata struct {
-	Types     []ResourceType     `json:"types"`
-	Templates []ResourceTemplate `json:"templates"`
+	Types      []ResourceType               `json:"types"`
+	Templates  []ResourceTemplate           `json:"templates"`
+	Extensions []resourceextension.Metadata `json:"extensions"`
 }
 
 func (m *Management) ResourceMetadata(
@@ -541,7 +551,140 @@ func (m *Management) ResourceMetadata(
 	if len(templates) > 0 {
 		types = append([]ResourceType{{Code: resourcetype.Page, Label: "Страница"}}, types...)
 	}
-	return ResourceMetadata{Types: types, Templates: templates}, nil
+	extensions := make([]resourceextension.Metadata, 0)
+	for _, moduleRuntime := range runtime.Profile().Modules() {
+		provider, ok := moduleRuntime.(resourceextension.EditorProvider)
+		if !ok {
+			continue
+		}
+		editor := provider.ResourceEditorExtension()
+		if editor == nil {
+			return ResourceMetadata{}, errors.New(
+				"resource editor extension is nil",
+			)
+		}
+		extensions = append(extensions, editor.Metadata())
+	}
+	return ResourceMetadata{
+		Types: types, Templates: templates, Extensions: extensions,
+	}, nil
+}
+
+func (m *Management) ResourceExtension(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+	resourceID resource.ID,
+	code resourceextension.Code,
+) (any, error) {
+	editor, request, err := m.resourceEditorExtension(
+		ctx, actor, siteID, resourceID, code, ResourceReadPermission,
+	)
+	if err != nil {
+		return nil, err
+	}
+	result, err := editor.Read(ctx, request)
+	return result, resourceExtensionError(err)
+}
+
+func (m *Management) SaveResourceExtension(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+	resourceID resource.ID,
+	code resourceextension.Code,
+	payload json.RawMessage,
+) (any, error) {
+	editor, request, err := m.resourceEditorExtension(
+		ctx, actor, siteID, resourceID, code, ResourceUpdatePermission,
+	)
+	if err != nil {
+		return nil, err
+	}
+	result, err := editor.Save(ctx, request, payload)
+	return result, resourceExtensionError(err)
+}
+
+func (m *Management) PreviewResourceExtension(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+	resourceID resource.ID,
+	code resourceextension.Code,
+	payload json.RawMessage,
+) (any, error) {
+	editor, request, err := m.resourceEditorExtension(
+		ctx, actor, siteID, resourceID, code, ResourceReadPermission,
+	)
+	if err != nil {
+		return nil, err
+	}
+	result, err := editor.Preview(ctx, request, payload)
+	return result, resourceExtensionError(err)
+}
+
+func (m *Management) resourceEditorExtension(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+	resourceID resource.ID,
+	code resourceextension.Code,
+	permissionCode permission.Code,
+) (resourceextension.Editor, resourceextension.Request, error) {
+	if code == "" {
+		return nil, resourceextension.Request{}, resource.ErrNotFound
+	}
+	if err := m.requireSite(ctx, actor, siteID, permissionCode); err != nil {
+		return nil, resourceextension.Request{}, err
+	}
+	item, err := m.resourceRepo.ByID(ctx, resourceID)
+	if err != nil {
+		return nil, resourceextension.Request{}, err
+	}
+	if item.SiteID != siteID {
+		return nil, resourceextension.Request{}, resource.ErrNotFound
+	}
+	siteRuntime, exists := m.sites.RuntimeByID(siteID)
+	if !exists {
+		return nil, resourceextension.Request{}, site.ErrNotFound
+	}
+	for _, moduleRuntime := range siteRuntime.Profile().Modules() {
+		provider, ok := moduleRuntime.(resourceextension.EditorProvider)
+		if !ok {
+			continue
+		}
+		editor := provider.ResourceEditorExtension()
+		if editor == nil || editor.Metadata().Code != code {
+			continue
+		}
+		if !editor.AppliesTo(item.Type) {
+			return nil, resourceextension.Request{}, resource.ErrNotFound
+		}
+		return editor, resourceextension.Request{
+			Actor: actor, Site: siteRuntime.Site(), Resource: item,
+		}, nil
+	}
+	return nil, resourceextension.Request{}, resource.ErrNotFound
+}
+
+func resourceExtensionError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, resourceextension.ErrNotApplicable) {
+		return resource.ErrNotFound
+	}
+	var validation resourceextension.ValidationError
+	if !errors.As(err, &validation) {
+		return err
+	}
+	fields := make([]FieldValidationError, len(validation.Fields))
+	for index, field := range validation.Fields {
+		fields[index] = FieldValidationError{
+			Key: field.Key, Rule: "extension", Param: field.Message,
+		}
+	}
+	return ValidationError{Message: validation.Error(), Fields: fields}
 }
 
 type ResourceCreateInput struct {
