@@ -11,8 +11,10 @@ INFRA_SERVICES := postgres kafka rabbitmq loki grafana
 .PHONY: up env doctor config build down logs ps help
 
 up: build
-	@printf '\nStopping application services before database initialization...\n'
-	$(COMPOSE) stop admin server
+	@printf '\nRemoving application containers before database initialization...\n'
+	$(COMPOSE) rm --stop --force admin server
+	@printf '\nInstalling admin dependencies...\n'
+	$(COMPOSE) run --rm --no-deps admin npm ci
 	@printf '\nStarting infrastructure services...\n'
 	$(COMPOSE) up --detach --wait --wait-timeout $(WAIT_TIMEOUT) $(INFRA_SERVICES)
 	@printf '\nApplying database migrations...\n'
