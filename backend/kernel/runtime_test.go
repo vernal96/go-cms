@@ -48,6 +48,18 @@ func testRuntimeServices() kernel.RuntimeServices {
 	}
 }
 
+func buildProfileRuntime(
+	factory *kernel.ProfileRuntimeFactory,
+	ctx context.Context,
+	profile kernel.Profile,
+) (*kernel.ProfileRuntime, error) {
+	blueprint, err := factory.Compile(ctx, profile)
+	if err != nil {
+		return nil, err
+	}
+	return blueprint.Build(ctx, kernel.RuntimeScope{SiteID: "test"})
+}
+
 func TestProfileRuntimeListsModuleRuntimesInProfileOrder(t *testing.T) {
 	t.Parallel()
 	factory, err := kernel.NewProfileRuntimeFactory(
@@ -57,7 +69,7 @@ func TestProfileRuntimeListsModuleRuntimesInProfileOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := factory.Make(context.Background(), kernel.Profile{
+	runtime, err := buildProfileRuntime(factory, context.Background(), kernel.Profile{
 		Code: "ordered",
 		Modules: []kernel.ProfileModule{
 			{Module: registryModule{code: "first"}},
@@ -238,11 +250,19 @@ func (*markerAuthorizer) Check(
 }
 
 type fileAwareModule struct {
-	expectedFiles         corefile.Service
-	expectedMedia         coremedia.Service
-	expectedUsers         coreuser.Service
-	expectedGroups        coregroup.Service
-	expectedAuthorization security.Authorizer
+	expected kernel.ModuleRuntime
+}
+
+type undeclaredDependencyModule struct{}
+
+func (undeclaredDependencyModule) Code() kernel.ModuleCode { return "undeclared" }
+
+func (undeclaredDependencyModule) Build(
+	_ context.Context,
+	ctx kernel.ModuleContext,
+) (kernel.ModuleRuntime, error) {
+	_, err := kernel.ModuleDependencyFrom[kernel.ModuleRuntime](ctx, "dependency")
+	return registryRuntime{code: "undeclared"}, err
 }
 
 type cacheAwareModule struct{}
@@ -408,65 +428,79 @@ func (*fileAwareModule) Code() kernel.ModuleCode {
 	return "file-aware"
 }
 
+func (*fileAwareModule) Dependencies() []kernel.ModuleCode {
+	return []kernel.ModuleCode{"dependency"}
+}
+
 func (m *fileAwareModule) Build(
 	_ context.Context,
 	ctx kernel.ModuleContext,
 ) (kernel.ModuleRuntime, error) {
-	if ctx.Files() != m.expectedFiles {
-		return nil, errors.New("module did not receive configured file service")
+	dependency, err := kernel.ModuleDependencyFrom[kernel.ModuleRuntime](
+		ctx,
+		"dependency",
+	)
+	if err != nil {
+		return nil, err
 	}
-	if ctx.Media() != m.expectedMedia {
-		return nil, errors.New("module did not receive configured media service")
-	}
-	if ctx.Users() != m.expectedUsers {
-		return nil, errors.New("module did not receive configured user service")
-	}
-	if ctx.Groups() != m.expectedGroups {
-		return nil, errors.New("module did not receive configured group service")
-	}
-	if ctx.Authorization() != m.expectedAuthorization {
-		return nil, errors.New(
-			"module did not receive configured authorizer",
-		)
+	if dependency != m.expected {
+		return nil, errors.New("module did not receive declared dependency")
 	}
 	return registryRuntime{code: m.Code()}, nil
 }
 
-func TestProfileRuntimeInjectsCoreServicePorts(t *testing.T) {
-	files := &markerFileService{}
-	media := &markerMediaService{}
-	users := &markerUserService{}
-	groups := &markerGroupService{}
-	authorization := &markerAuthorizer{}
+func TestProfileRuntimeInjectsOnlyDeclaredModuleDependencies(t *testing.T) {
 	factory, err := kernel.NewProfileRuntimeFactory(
 		emptyDatabaseResolver{},
 		kernel.RuntimeServices{
-			Files:         files,
-			Media:         media,
-			Users:         users,
-			Groups:        groups,
-			Authorization: authorization,
-			EventBus:      testEventBus{},
-			Logger:        testRuntimeServices().Logger,
+			EventBus: testEventBus{},
+			Logger:   testRuntimeServices().Logger,
 		},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	module := &fileAwareModule{
-		expectedFiles:         files,
-		expectedMedia:         media,
-		expectedUsers:         users,
-		expectedGroups:        groups,
-		expectedAuthorization: authorization,
-	}
-	if _, err := factory.Make(context.Background(), kernel.Profile{
+	dependency := registryRuntime{code: "dependency"}
+	module := &fileAwareModule{expected: dependency}
+	if _, err := buildProfileRuntime(factory, context.Background(), kernel.Profile{
 		Code: "files",
 		Modules: []kernel.ProfileModule{
+			{Module: registryModule{code: "dependency"}},
 			{Module: module},
 		},
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProfileRuntimeRejectsUndeclaredAndMisorderedDependencies(t *testing.T) {
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		testRuntimeServices(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = buildProfileRuntime(factory, context.Background(), kernel.Profile{
+		Code: "undeclared",
+		Modules: []kernel.ProfileModule{
+			{Module: registryModule{code: "dependency"}},
+			{Module: undeclaredDependencyModule{}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unavailable or undeclared") {
+		t.Fatalf("undeclared dependency error = %v", err)
+	}
+
+	_, err = factory.Compile(context.Background(), kernel.Profile{
+		Code: "misordered",
+		Modules: []kernel.ProfileModule{
+			{Module: &fileAwareModule{}},
+			{Module: registryModule{code: "dependency"}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "declared earlier") {
+		t.Fatalf("misordered dependency error = %v", err)
 	}
 }
 
@@ -486,7 +520,7 @@ func TestProfileRuntimeInjectsOnlyBoundCacheAliases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := factory.Make(
+	if _, err := buildProfileRuntime(factory,
 		context.Background(),
 		kernel.Profile{
 			Code: "cached",
@@ -535,7 +569,7 @@ func TestProfileRuntimeInjectsScopedInfrastructure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := factory.Make(
+	runtime, err := buildProfileRuntime(factory,
 		context.Background(),
 		kernel.Profile{
 			Code: "infrastructure",
@@ -570,7 +604,7 @@ func TestProfileRuntimeScopesModuleLogger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := factory.Make(context.Background(), kernel.Profile{
+	if _, err := buildProfileRuntime(factory, context.Background(), kernel.Profile{
 		Code: "profile-one",
 		Modules: []kernel.ProfileModule{{
 			Module: loggerAwareModule{code: "module-one"},
@@ -701,7 +735,7 @@ func TestProfileRuntimeCollectsFieldTypesBeforeModuleBuild(t *testing.T) {
 		},
 	}
 
-	runtime, err := factory.Make(context.Background(), profile)
+	runtime, err := buildProfileRuntime(factory, context.Background(), profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,7 +773,7 @@ func TestProfileRuntimeCollectsDeclaredPermissionsBeforeBuild(
 		"widget",
 		permission.Read,
 	)
-	runtime, err := factory.Make(
+	runtime, err := buildProfileRuntime(factory,
 		context.Background(),
 		kernel.Profile{
 			Code: "permissions",
@@ -778,7 +812,7 @@ func TestProfileRuntimeCollectsOnlyProfileModuleWidgets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	current, err := factory.Make(
+	current, err := buildProfileRuntime(factory,
 		context.Background(),
 		kernel.Profile{
 			Code: "with-widgets",
@@ -812,7 +846,7 @@ func TestProfileRuntimeCollectsOnlyProfileModuleWidgets(t *testing.T) {
 		t.Fatal("profile widgets share caller memory")
 	}
 
-	empty, err := factory.Make(
+	empty, err := buildProfileRuntime(factory,
 		context.Background(),
 		kernel.Profile{Code: "without-widgets"},
 	)
@@ -900,7 +934,7 @@ func TestProfileRuntimeRejectsInvalidFieldRegistrations(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, err := factory.Make(
+			_, err := buildProfileRuntime(factory,
 				context.Background(),
 				testCase.profile,
 			)
@@ -922,7 +956,7 @@ func TestProfileRuntimeCollectsResourceTypesBeforeModuleBuild(
 		t.Fatal(err)
 	}
 
-	runtime, err := factory.Make(context.Background(), kernel.Profile{
+	runtime, err := buildProfileRuntime(factory, context.Background(), kernel.Profile{
 		Code: "custom",
 		Modules: []kernel.ProfileModule{
 			{
@@ -1005,7 +1039,7 @@ func TestProfileRuntimeRejectsInvalidResourceTypeRegistrations(
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, err := factory.Make(
+			_, err := buildProfileRuntime(factory,
 				context.Background(),
 				kernel.Profile{
 					Code: "custom",
@@ -1079,7 +1113,7 @@ func TestProfileRuntimeCompilesAndClonesTemplates(t *testing.T) {
 		}},
 	}
 
-	runtime, err := factory.Make(context.Background(), profile)
+	runtime, err := buildProfileRuntime(factory, context.Background(), profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1153,7 +1187,7 @@ func TestProfileRuntimeRejectsInvalidTemplates(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, err := factory.Make(
+			_, err := buildProfileRuntime(factory,
 				context.Background(),
 				kernel.Profile{
 					Code: "templates",

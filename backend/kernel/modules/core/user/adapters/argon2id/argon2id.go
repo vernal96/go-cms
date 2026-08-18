@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/vernal96/go-cms/kernel/modules/core/user"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -33,6 +34,14 @@ type Hasher struct {
 	config Config
 	random io.Reader
 	dummy  string
+}
+
+type Factory struct {
+	Config Config
+}
+
+func (f Factory) Open() (user.PasswordHasher, error) {
+	return NewWithRandom(f.Config, rand.Reader)
 }
 
 func New() (*Hasher, error) {
@@ -134,6 +143,8 @@ func normalizeConfig(config Config) Config {
 	}
 	return config
 }
+
+var _ user.PasswordHasherFactory = Factory{}
 
 func encode(config Config, salt, hash []byte) string {
 	base64Encoding := base64.RawStdEncoding

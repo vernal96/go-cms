@@ -34,6 +34,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/modules/core/user/adapters/argon2id"
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
@@ -566,6 +567,7 @@ func (fileRepository) DeleteFolder(
 func TestHandlerLooksUpCompiledRuntimeByRequestHost(t *testing.T) {
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
 		Logger:           loggerFactory{},
+		PasswordHasher:   argon2id.Factory{},
 		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 		EventBus:         eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
@@ -643,6 +645,7 @@ func TestHandlerHidesRuntimeWithoutGuestPermissionOrPublicFlag(
 				context.Background(),
 				appkernel.Definition{
 					Logger:           loggerFactory{},
+					PasswordHasher:   argon2id.Factory{},
 					SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 					EventBus:         eventBusFactory{},
 					MainDatabase: appkernel.DatabaseDefinition{
@@ -735,6 +738,7 @@ func TestHandlerDeliversPublicAndSignedPrivateLocalFiles(t *testing.T) {
 				context.Background(),
 				appkernel.Definition{
 					Logger:           loggerFactory{},
+					PasswordHasher:   argon2id.Factory{},
 					SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 					EventBus:         eventBusFactory{},
 					MainDatabase: appkernel.DatabaseDefinition{
@@ -771,7 +775,7 @@ func TestHandlerDeliversPublicAndSignedPrivateLocalFiles(t *testing.T) {
 
 			rawURL := "https://cms.example.test/_cms/files/1"
 			if test.visibility == filesystem.VisibilityPrivate {
-				rawURL, err = runtimeApp.TemporaryFileURL(
+				rawURL, err = runtimeApp.Files().TemporaryURL(
 					context.Background(),
 					security.System(),
 					1,
@@ -1018,6 +1022,7 @@ func newTransportTestApp(
 		context.Background(),
 		appkernel.Definition{
 			Logger:           loggerFactory{},
+			PasswordHasher:   argon2id.Factory{},
 			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus:         eventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
@@ -1429,6 +1434,7 @@ func TestResourceRootTrailingSlashAndQueryPolicy(t *testing.T) {
 func TestPlatformRuntimeMethodMismatchKeeps405AndAllow(t *testing.T) {
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
 		Logger:           loggerFactory{},
+		PasswordHasher:   argon2id.Factory{},
 		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 		EventBus:         eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
@@ -1478,6 +1484,7 @@ func TestPublicAndProtectedModuleRoutesUseJWTActor(t *testing.T) {
 	}
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
 		Logger:           loggerFactory{},
+		PasswordHasher:   argon2id.Factory{},
 		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 		EventBus:         eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
@@ -1555,6 +1562,7 @@ func TestPublicAndProtectedModuleRoutesUseJWTActor(t *testing.T) {
 func TestLoginRouteIsAvailableBeforePrivateSiteResolution(t *testing.T) {
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
 		Logger:           loggerFactory{},
+		PasswordHasher:   argon2id.Factory{},
 		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 		EventBus:         eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
@@ -1625,6 +1633,7 @@ func TestPlatformMiddlewareCannotBypassJWTAuthentication(
 ) {
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
 		Logger:           loggerFactory{},
+		PasswordHasher:   argon2id.Factory{},
 		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 		EventBus:         eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
@@ -1712,6 +1721,7 @@ func TestJWTAuthenticationActorPrecedesPrivateSiteResolution(
 				context.Background(),
 				appkernel.Definition{
 					Logger:           loggerFactory{},
+					PasswordHasher:   argon2id.Factory{},
 					SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 					EventBus:         eventBusFactory{},
 					MainDatabase: appkernel.DatabaseDefinition{
@@ -1806,6 +1816,7 @@ func TestStandardLinkResourceHandlersRedirect(t *testing.T) {
 	}
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
 		Logger:           loggerFactory{},
+		PasswordHasher:   argon2id.Factory{},
 		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 		EventBus:         eventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
@@ -1864,6 +1875,7 @@ func TestHTTPAccessLogsSafeStructuredMetadataAndLevels(t *testing.T) {
 		context.Background(),
 		appkernel.Definition{
 			Logger:           loggerFactory{writer: &logs},
+			PasswordHasher:   argon2id.Factory{},
 			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus:         eventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{

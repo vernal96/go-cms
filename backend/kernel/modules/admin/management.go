@@ -90,7 +90,7 @@ func (AllowAllSitesPolicy) Check(
 }
 
 type ProfileResolver interface {
-	ProfileRuntime(kernel.ProfileCode) (*kernel.ProfileRuntime, bool)
+	ProfileBlueprint(kernel.ProfileCode) (*kernel.ProfileBlueprint, bool)
 }
 
 type SiteCatalog interface {
@@ -435,11 +435,11 @@ func (m *Management) Profiles(
 	}
 	items := make([]SiteProfile, 0, len(m.profiles))
 	for _, profile := range m.profiles {
-		runtime, exists := m.profileSource.ProfileRuntime(profile.Code)
+		blueprint, exists := m.profileSource.ProfileBlueprint(profile.Code)
 		if !exists {
 			continue
 		}
-		fields, err := fieldDefinitions(runtime.ParamSchema().Definitions())
+		fields, err := fieldDefinitions(blueprint.ParamSchema().Definitions())
 		if err != nil {
 			return SiteProfiles{}, err
 		}

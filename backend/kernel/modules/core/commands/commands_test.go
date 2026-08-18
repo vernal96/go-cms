@@ -25,14 +25,14 @@ type usersApplication struct {
 	createErr   error
 }
 
-func (a *usersApplication) Groups(
+func (a *usersApplication) listGroups(
 	context.Context,
 	security.Actor,
 ) ([]group.Group, error) {
 	return append([]group.Group(nil), a.groups...), a.groupsErr
 }
 
-func (a *usersApplication) CreateUser(
+func (a *usersApplication) createUser(
 	_ context.Context,
 	_ security.Actor,
 	input user.CreateInput,
@@ -40,6 +40,39 @@ func (a *usersApplication) CreateUser(
 	input.GroupIDs = append([]group.ID(nil), input.GroupIDs...)
 	a.createInput = input
 	return a.created, a.createErr
+}
+
+type usersService struct {
+	user.Service
+	application *usersApplication
+}
+
+func (s usersService) Create(
+	ctx context.Context,
+	actor security.Actor,
+	input user.CreateInput,
+) (user.User, error) {
+	return s.application.createUser(ctx, actor, input)
+}
+
+type groupsService struct {
+	group.Service
+	application *usersApplication
+}
+
+func (s groupsService) List(
+	ctx context.Context,
+	actor security.Actor,
+) ([]group.Group, error) {
+	return s.application.listGroups(ctx, actor)
+}
+
+func (a *usersApplication) Users() user.Service {
+	return usersService{application: a}
+}
+
+func (a *usersApplication) Groups() group.Service {
+	return groupsService{application: a}
 }
 
 func TestPasswordIsReadOnlyFromStdin(t *testing.T) {

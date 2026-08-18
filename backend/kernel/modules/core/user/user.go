@@ -196,6 +196,10 @@ type PasswordHasher interface {
 	DummyHash() string
 }
 
+type PasswordHasherFactory interface {
+	Open() (PasswordHasher, error)
+}
+
 type MediaService interface {
 	Resolve(
 		context.Context,

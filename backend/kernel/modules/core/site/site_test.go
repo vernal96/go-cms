@@ -43,13 +43,13 @@ func (testResolver) ModuleDatabase(
 	return nil, false
 }
 
-type testProfiles map[kernel.ProfileCode]*kernel.ProfileRuntime
+type testProfiles map[kernel.ProfileCode]*kernel.ProfileBlueprint
 
-func (p testProfiles) ProfileRuntime(
+func (p testProfiles) ProfileBlueprint(
 	code kernel.ProfileCode,
-) (*kernel.ProfileRuntime, bool) {
-	runtime, exists := p[code]
-	return runtime, exists
+) (*kernel.ProfileBlueprint, bool) {
+	blueprint, exists := p[code]
+	return blueprint, exists
 }
 
 type testAccess struct {
@@ -165,7 +165,7 @@ func newCatalogForTest(
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile, err := factory.Make(
+	profile, err := factory.Compile(
 		context.Background(),
 		kernel.Profile{Code: item.ProfileCode},
 	)
@@ -298,6 +298,90 @@ func TestCreateAndDeleteAtomicallyUpdateSnapshot(t *testing.T) {
 	}
 	if _, exists := catalog.RuntimeByID(2); exists {
 		t.Fatal("deleted site remains in snapshot")
+	}
+}
+
+func TestReloadPreparesRuntimesBeforeAtomicSnapshotPublication(t *testing.T) {
+	item := Site{
+		ID:          1,
+		ProfileCode: "test",
+		Domain:      "first.example.com",
+		Locale:      "en-US",
+		IsPublic:    true,
+	}
+	repository := &memoryRepository{items: []Site{item}}
+	factory, err := kernel.NewProfileRuntimeFactory(
+		testResolver{},
+		kernel.RuntimeServices{
+			EventBus: testEventBus{},
+			Logger:   slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blueprint, err := factory.Compile(
+		context.Background(),
+		kernel.Profile{Code: item.ProfileCode},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := NewCatalog(
+		repository,
+		testProfiles{item.ProfileCode: blueprint},
+		testAccess{allow: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	prepared := make(map[ID]int)
+	if err := catalog.AddRuntimePreparer(
+		context.Background(),
+		func(_ context.Context, runtime *Runtime) error {
+			id := runtime.Site().ID
+			prepared[id]++
+			if id == 3 {
+				return errors.New("compile failed")
+			}
+			return nil
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if prepared[1] != 1 {
+		t.Fatalf("initial runtime prepare calls = %#v", prepared)
+	}
+
+	repository.items = []Site{{
+		ID:          2,
+		ProfileCode: "test",
+		Domain:      "second.example.com",
+		Locale:      "en-US",
+		IsPublic:    true,
+	}}
+	if err := catalog.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if prepared[2] != 1 {
+		t.Fatalf("replacement runtime prepare calls = %#v", prepared)
+	}
+
+	repository.items = []Site{{
+		ID:          3,
+		ProfileCode: "test",
+		Domain:      "broken.example.com",
+		Locale:      "en-US",
+		IsPublic:    true,
+	}}
+	if err := catalog.Reload(context.Background()); err == nil {
+		t.Fatal("runtime preparation failure was ignored")
+	}
+	if _, exists := catalog.RuntimeByID(2); !exists {
+		t.Fatal("failed runtime preparation replaced the previous snapshot")
 	}
 }
 

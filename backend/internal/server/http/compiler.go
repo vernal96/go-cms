@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
+	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
 
@@ -140,6 +141,16 @@ func CompileProfile(
 	})
 
 	return compiler.router, nil
+}
+
+func CompileSite(
+	ctx context.Context,
+	runtime *site.Runtime,
+) (http.Handler, error) {
+	if runtime == nil {
+		return nil, errors.New("HTTP site runtime is nil")
+	}
+	return CompileProfile(ctx, runtime.Profile())
 }
 
 func collectHTTPContributions(

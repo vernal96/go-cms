@@ -215,14 +215,14 @@ func extensionManagement(
 	if err != nil {
 		t.Fatal(err)
 	}
-	profileRuntime, err := factory.Make(context.Background(), profile)
+	blueprint, err := factory.Compile(context.Background(), profile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	siteRuntime, err := site.NewRuntime(site.Site{
+	siteRuntime, err := site.NewRuntimeFromBlueprint(context.Background(), site.Site{
 		ID: 7, ProfileCode: "test", Domain: "example.com", Locale: "ru-RU",
 		Settings: map[string]any{},
-	}, profileRuntime)
+	}, blueprint)
 	if err != nil {
 		t.Fatal(err)
 	}

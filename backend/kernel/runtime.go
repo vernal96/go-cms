@@ -11,15 +11,10 @@ import (
 	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
-	"github.com/vernal96/go-cms/kernel/modules/core/file"
-	"github.com/vernal96/go-cms/kernel/modules/core/group"
-	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
-	"github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/permission"
-	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type ModuleCode string
@@ -45,17 +40,27 @@ type Module interface {
 	Build(context.Context, ModuleContext) (ModuleRuntime, error)
 }
 
+// DependencyProvider explicitly declares module runtime dependencies. A
+// module can resolve only these dependencies from its ModuleContext.
+type DependencyProvider interface {
+	Dependencies() []ModuleCode
+}
+
 type ModuleRuntime interface {
 	ModuleCode() ModuleCode
 }
 
-type Registry interface {
-	Module(ModuleCode) (ModuleRuntime, bool)
-	Modules() []ModuleRuntime
+type DefinitionRegistry interface {
 	FieldType(field.TypeCode) (field.Type, bool)
 	ResourceType(resourcetype.Code) (resourcetype.Type, bool)
 	Permission(permission.Code) (permission.Definition, bool)
 	Permissions() []permission.Code
+}
+
+type Registry interface {
+	DefinitionRegistry
+	Module(ModuleCode) (ModuleRuntime, bool)
+	Modules() []ModuleRuntime
 }
 
 type ModuleRegistry struct {
@@ -124,6 +129,24 @@ func (r *RuntimeRegistry) Permission(
 
 func (r *RuntimeRegistry) Permissions() []permission.Code {
 	return append([]permission.Code(nil), r.permissionCodes...)
+}
+
+func (r *RuntimeRegistry) cloneDefinitions() *RuntimeRegistry {
+	result := newRuntimeRegistry()
+	for code, fieldType := range r.fieldTypes {
+		result.fieldTypes[code] = fieldType
+	}
+	for code, resourceType := range r.resourceTypes {
+		result.resourceTypes[code] = resourceType
+	}
+	for code, definition := range r.permissions {
+		result.permissions[code] = definition
+	}
+	result.permissionCodes = append(
+		[]permission.Code(nil),
+		r.permissionCodes...,
+	)
+	return result
 }
 
 func (r *RuntimeRegistry) add(runtime ModuleRuntime) error {
@@ -228,52 +251,52 @@ func isNilValue(value any) bool {
 }
 
 type ModuleContext struct {
-	resolver      DatabaseResolver
-	profile       Profile
-	registry      Registry
-	config        any
-	files         file.Service
-	media         media.Service
-	users         user.Service
-	groups        group.Service
-	authorization security.Authorizer
-	caches        cache.ModuleManager
-	filesystems   filesystem.ModuleManager
-	eventBus      eventbus.Bus
-	logger        *slog.Logger
+	resolver     DatabaseResolver
+	moduleCode   ModuleCode
+	profile      Profile
+	registry     DefinitionRegistry
+	config       any
+	dependencies map[ModuleCode]ModuleRuntime
+	caches       cache.ModuleManager
+	filesystems  filesystem.ModuleManager
+	eventBus     eventbus.Bus
+	logger       *slog.Logger
 }
 
 func newModuleContext(
 	resolver DatabaseResolver,
+	moduleCode ModuleCode,
 	profile Profile,
-	registry Registry,
+	registry DefinitionRegistry,
 	config any,
 	services RuntimeServices,
+	dependencies map[ModuleCode]ModuleRuntime,
 	caches cache.ModuleManager,
 	filesystems filesystem.ModuleManager,
 ) ModuleContext {
 	return ModuleContext{
-		resolver:      resolver,
-		profile:       cloneProfile(profile),
-		registry:      registry,
-		config:        config,
-		files:         services.Files,
-		media:         services.Media,
-		users:         services.Users,
-		groups:        services.Groups,
-		authorization: services.Authorization,
-		caches:        caches,
-		filesystems:   filesystems,
-		eventBus:      services.EventBus,
-		logger:        services.Logger,
+		resolver:     resolver,
+		moduleCode:   moduleCode,
+		profile:      cloneProfile(profile),
+		registry:     registry,
+		config:       config,
+		dependencies: dependencies,
+		caches:       caches,
+		filesystems:  filesystems,
+		eventBus:     services.EventBus,
+		logger:       services.Logger,
 	}
+}
+
+func (c ModuleContext) ModuleCode() ModuleCode {
+	return c.moduleCode
 }
 
 func (c ModuleContext) Profile() Profile {
 	return cloneProfile(c.profile)
 }
 
-func (c ModuleContext) Registry() Registry {
+func (c ModuleContext) Registry() DefinitionRegistry {
 	return c.registry
 }
 
@@ -281,28 +304,9 @@ func (c ModuleContext) Config() any {
 	return c.config
 }
 
-// Files exposes the core application file service without exposing the
-// filesystem manager or any infrastructure connector to modules.
-func (c ModuleContext) Files() file.Service {
-	return c.files
-}
-
-// Media exposes the core application media service without exposing its
-// persistence adapter or the filesystem manager to modules.
-func (c ModuleContext) Media() media.Service {
-	return c.media
-}
-
-func (c ModuleContext) Users() user.Service {
-	return c.users
-}
-
-func (c ModuleContext) Groups() group.Service {
-	return c.groups
-}
-
-func (c ModuleContext) Authorization() security.Authorizer {
-	return c.authorization
+func (c ModuleContext) Dependency(code ModuleCode) (ModuleRuntime, bool) {
+	runtime, exists := c.dependencies[code]
+	return runtime, exists
 }
 
 // Caches exposes only aliases explicitly bound to this module.
@@ -393,31 +397,74 @@ func ModuleDatabaseFrom[T ModuleDatabase](
 }
 
 type ProfileRuntime struct {
-	profile     Profile
-	registry    Registry
-	paramSchema *field.Schema
-	templates   *template.Catalog
-	widgets     *widget.Catalog
+	blueprint *ProfileBlueprint
+	registry  Registry
+	widgets   *widget.Catalog
 }
 
-func newProfileRuntime(
-	profile Profile,
-	registry Registry,
-	paramSchema *field.Schema,
-	templates *template.Catalog,
-	widgets *widget.Catalog,
-) *ProfileRuntime {
-	return &ProfileRuntime{
-		profile:     cloneProfile(profile),
-		registry:    registry,
-		paramSchema: paramSchema,
-		templates:   templates,
-		widgets:     widgets,
+// ProfileBlueprint is the immutable, reusable part of a compiled profile.
+// Final registries and module runtime instances are built from it per site.
+type ProfileBlueprint struct {
+	profile     Profile
+	registry    *RuntimeRegistry
+	paramSchema *field.Schema
+	templates   *template.Catalog
+	factory     *ProfileRuntimeFactory
+}
+
+type RuntimeScope struct {
+	SiteID string
+}
+
+func (b *ProfileBlueprint) Profile() Profile {
+	if b == nil {
+		return Profile{}
 	}
+	return cloneProfile(b.profile)
+}
+
+func (b *ProfileBlueprint) Registry() DefinitionRegistry {
+	if b == nil {
+		return nil
+	}
+	return b.registry
+}
+
+func (b *ProfileBlueprint) ParamSchema() *field.Schema {
+	if b == nil {
+		return nil
+	}
+	return b.paramSchema
+}
+
+func (b *ProfileBlueprint) Template(
+	code template.Code,
+) (*template.Runtime, bool) {
+	if b == nil || b.templates == nil {
+		return nil, false
+	}
+	return b.templates.Template(code)
+}
+
+func (b *ProfileBlueprint) Templates() []template.Definition {
+	if b == nil || b.templates == nil {
+		return nil
+	}
+	return b.templates.Definitions()
 }
 
 func (r *ProfileRuntime) Profile() Profile {
-	return cloneProfile(r.profile)
+	if r == nil || r.blueprint == nil {
+		return Profile{}
+	}
+	return r.blueprint.Profile()
+}
+
+func (r *ProfileRuntime) Blueprint() *ProfileBlueprint {
+	if r == nil {
+		return nil
+	}
+	return r.blueprint
 }
 
 func (r *ProfileRuntime) Registry() Registry {
@@ -432,25 +479,26 @@ func (r *ProfileRuntime) Modules() []ModuleRuntime {
 }
 
 func (r *ProfileRuntime) ParamSchema() *field.Schema {
-	return r.paramSchema
+	if r == nil || r.blueprint == nil {
+		return nil
+	}
+	return r.blueprint.ParamSchema()
 }
 
 func (r *ProfileRuntime) Template(
 	code template.Code,
 ) (*template.Runtime, bool) {
-	if r == nil || r.templates == nil {
+	if r == nil || r.blueprint == nil {
 		return nil, false
 	}
-
-	return r.templates.Template(code)
+	return r.blueprint.Template(code)
 }
 
 func (r *ProfileRuntime) Templates() []template.Definition {
-	if r == nil || r.templates == nil {
+	if r == nil || r.blueprint == nil {
 		return nil
 	}
-
-	return r.templates.Definitions()
+	return r.blueprint.Templates()
 }
 
 func (r *ProfileRuntime) Widget(
@@ -477,15 +525,35 @@ type ProfileRuntimeFactory struct {
 }
 
 type RuntimeServices struct {
-	Files         file.Service
-	Media         media.Service
-	Users         user.Service
-	Groups        group.Service
-	Authorization security.Authorizer
-	Caches        cache.Resolver
-	Filesystems   filesystem.Resolver
-	EventBus      eventbus.Bus
-	Logger        *slog.Logger
+	Caches      cache.Resolver
+	Filesystems filesystem.Resolver
+	EventBus    eventbus.Bus
+	Logger      *slog.Logger
+}
+
+func ModuleDependencyFrom[T ModuleRuntime](
+	ctx ModuleContext,
+	moduleCode ModuleCode,
+) (T, error) {
+	var zero T
+	runtime, exists := ctx.Dependency(moduleCode)
+	if !exists {
+		return zero, fmt.Errorf(
+			"module %q dependency %q is unavailable or undeclared",
+			ctx.ModuleCode(),
+			moduleCode,
+		)
+	}
+	dependency, ok := runtime.(T)
+	if !ok {
+		return zero, fmt.Errorf(
+			"module %q dependency %q has invalid runtime type %T",
+			ctx.ModuleCode(),
+			moduleCode,
+			runtime,
+		)
+	}
+	return dependency, nil
 }
 
 func NewProfileRuntimeFactory(
@@ -508,12 +576,12 @@ func NewProfileRuntimeFactory(
 	}, nil
 }
 
-func (f *ProfileRuntimeFactory) Make(
+func (f *ProfileRuntimeFactory) Compile(
 	ctx context.Context,
 	profile Profile,
-) (*ProfileRuntime, error) {
+) (*ProfileBlueprint, error) {
 	if ctx == nil {
-		return nil, errors.New("profile runtime context is nil")
+		return nil, errors.New("profile compile context is nil")
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -558,6 +626,9 @@ func (f *ProfileRuntimeFactory) Make(
 		}
 
 		moduleCodes[moduleCode] = struct{}{}
+	}
+	if err := validateModuleDependencyOrder(profile); err != nil {
+		return nil, err
 	}
 
 	registry := newRuntimeRegistry()
@@ -633,13 +704,53 @@ func (f *ProfileRuntimeFactory) Make(
 		)
 	}
 
+	return &ProfileBlueprint{
+		profile:     profile,
+		registry:    registry,
+		paramSchema: paramSchema,
+		templates:   templates,
+		factory:     f,
+	}, nil
+}
+
+func (b *ProfileBlueprint) Build(
+	ctx context.Context,
+	scope RuntimeScope,
+) (*ProfileRuntime, error) {
+	if b == nil || b.factory == nil {
+		return nil, errors.New("profile blueprint is unavailable")
+	}
+	if ctx == nil {
+		return nil, errors.New("profile runtime context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if scope.SiteID == "" {
+		return nil, errors.New("profile runtime site scope is empty")
+	}
+
+	profile := b.profile
+	registry := b.registry.cloneDefinitions()
 	widgetSources := make([]widget.Source, 0, len(profile.Modules))
 	for _, profileModule := range profile.Modules {
 		module := profileModule.Module
+		dependencies, err := resolveModuleDependencies(module, registry)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"resolve dependencies for module %q in profile %q: %w",
+				module.Code(),
+				profile.Code,
+				err,
+			)
+		}
 
-		moduleCaches, err := cache.NewModuleManager(
-			f.services.Caches,
-			string(profile.Code),
+		moduleCaches, err := cache.NewRuntimeModuleManager(
+			b.factory.services.Caches,
+			cache.RuntimeScope{
+				Profile: string(profile.Code),
+				Site:    scope.SiteID,
+			},
 			string(module.Code()),
 			profileModule.Caches,
 		)
@@ -653,7 +764,7 @@ func (f *ProfileRuntimeFactory) Make(
 		}
 
 		moduleFilesystems, err := filesystem.NewModuleManager(
-			f.services.Filesystems,
+			b.factory.services.Filesystems,
 			profileModule.Filesystems,
 		)
 		if err != nil {
@@ -665,25 +776,26 @@ func (f *ProfileRuntimeFactory) Make(
 			)
 		}
 
+		logger := b.factory.services.Logger.With(
+			slog.String("profile.code", string(profile.Code)),
+			slog.String("module.code", string(module.Code())),
+		)
+		if scope.SiteID != "" {
+			logger = logger.With(slog.String("site.id", scope.SiteID))
+		}
 		moduleContext := newModuleContext(
-			f.resolver,
+			b.factory.resolver,
+			module.Code(),
 			profile,
 			registry,
 			profileModule.Config,
 			RuntimeServices{
-				Files:         f.services.Files,
-				Media:         f.services.Media,
-				Users:         f.services.Users,
-				Groups:        f.services.Groups,
-				Authorization: f.services.Authorization,
-				Caches:        f.services.Caches,
-				Filesystems:   f.services.Filesystems,
-				EventBus:      f.services.EventBus,
-				Logger: f.services.Logger.With(
-					slog.String("profile.code", string(profile.Code)),
-					slog.String("module.code", string(module.Code())),
-				),
+				Caches:      b.factory.services.Caches,
+				Filesystems: b.factory.services.Filesystems,
+				EventBus:    b.factory.services.EventBus,
+				Logger:      logger,
 			},
+			dependencies,
 			moduleCaches,
 			moduleFilesystems,
 		)
@@ -697,14 +809,9 @@ func (f *ProfileRuntimeFactory) Make(
 				err,
 			)
 		}
-
 		if runtime == nil || isNilValue(runtime) {
-			return nil, fmt.Errorf(
-				"module %q returned nil runtime",
-				module.Code(),
-			)
+			return nil, fmt.Errorf("module %q returned nil runtime", module.Code())
 		}
-
 		if runtime.ModuleCode() != module.Code() {
 			return nil, fmt.Errorf(
 				"module %q returned runtime for module %q",
@@ -712,11 +819,9 @@ func (f *ProfileRuntimeFactory) Make(
 				runtime.ModuleCode(),
 			)
 		}
-
 		if err := registry.add(runtime); err != nil {
 			return nil, err
 		}
-
 		if provider, ok := runtime.(widget.Provider); ok {
 			widgetSources = append(widgetSources, widget.Source{
 				Module:  string(module.Code()),
@@ -733,14 +838,89 @@ func (f *ProfileRuntimeFactory) Make(
 			err,
 		)
 	}
+	return &ProfileRuntime{
+		blueprint: b,
+		registry:  registry,
+		widgets:   widgets,
+	}, nil
+}
 
-	return newProfileRuntime(
-		profile,
-		registry,
-		paramSchema,
-		templates,
-		widgets,
-	), nil
+func validateModuleDependencyOrder(profile Profile) error {
+	available := make(map[ModuleCode]struct{}, len(profile.Modules))
+	for _, profileModule := range profile.Modules {
+		module := profileModule.Module
+		provider, ok := module.(DependencyProvider)
+		if ok {
+			declared := make(map[ModuleCode]struct{})
+			for index, dependency := range provider.Dependencies() {
+				if dependency == "" {
+					return fmt.Errorf(
+						"profile %q module %q dependency at index %d has empty code",
+						profile.Code,
+						module.Code(),
+						index,
+					)
+				}
+				if dependency == module.Code() {
+					return fmt.Errorf(
+						"profile %q module %q declares itself as dependency",
+						profile.Code,
+						module.Code(),
+					)
+				}
+				if _, exists := declared[dependency]; exists {
+					return fmt.Errorf(
+						"profile %q module %q declares dependency %q more than once",
+						profile.Code,
+						module.Code(),
+						dependency,
+					)
+				}
+				if _, exists := available[dependency]; !exists {
+					return fmt.Errorf(
+						"profile %q module %q dependency %q is unavailable; dependencies must be declared earlier in the profile",
+						profile.Code,
+						module.Code(),
+						dependency,
+					)
+				}
+				declared[dependency] = struct{}{}
+			}
+		}
+		available[module.Code()] = struct{}{}
+	}
+	return nil
+}
+
+func resolveModuleDependencies(
+	module Module,
+	registry Registry,
+) (map[ModuleCode]ModuleRuntime, error) {
+	provider, ok := module.(DependencyProvider)
+	if !ok {
+		return nil, nil
+	}
+	result := make(map[ModuleCode]ModuleRuntime)
+	for index, code := range provider.Dependencies() {
+		if code == "" {
+			return nil, fmt.Errorf("dependency at index %d has empty code", index)
+		}
+		if code == module.Code() {
+			return nil, fmt.Errorf("module declares itself as dependency")
+		}
+		if _, exists := result[code]; exists {
+			return nil, fmt.Errorf("dependency %q is declared more than once", code)
+		}
+		runtime, exists := registry.Module(code)
+		if !exists {
+			return nil, fmt.Errorf(
+				"dependency %q is unavailable; dependencies must be declared earlier in the profile",
+				code,
+			)
+		}
+		result[code] = runtime
+	}
+	return result, nil
 }
 
 func cloneProfile(profile Profile) Profile {

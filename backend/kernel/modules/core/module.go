@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -51,7 +52,23 @@ type Database interface {
 	Access() access.Repository
 }
 
-type Module struct{}
+type Module struct {
+	services *Services
+}
+
+// BindServices returns the core module declaration bound to the
+// application-scoped core services assembled by the composition root.
+func BindServices(module kernel.Module, services *Services) (kernel.Module, error) {
+	coreModule, ok := module.(Module)
+	if !ok {
+		return nil, fmt.Errorf("core module has invalid type %T", module)
+	}
+	if services == nil {
+		return nil, errors.New("core services are nil")
+	}
+	coreModule.services = services
+	return coreModule, nil
+}
 
 func (Module) Code() kernel.ModuleCode {
 	return ModuleCode
@@ -72,7 +89,7 @@ func (Module) Registry() kernel.ModuleRegistry {
 	}
 }
 
-func (Module) Build(
+func (m Module) Build(
 	_ context.Context,
 	ctx kernel.ModuleContext,
 ) (kernel.ModuleRuntime, error) {
@@ -106,8 +123,11 @@ func (Module) Build(
 	if database.Access() == nil {
 		return nil, errors.New("core access repository is nil")
 	}
-	if ctx.Authorization() == nil {
-		return nil, errors.New("core authorization service is nil")
+	if ModuleCode != ctx.ModuleCode() {
+		return nil, errors.New("core module context has invalid code")
+	}
+	if m.services == nil {
+		return nil, errors.New("core services are not bound")
 	}
 
 	config, err := kernel.ModuleConfigFrom[Config](ctx)
@@ -147,7 +167,8 @@ func (Module) Build(
 	return &Runtime{
 		database:        database,
 		repositoryCache: descriptor,
-		authorization:   ctx.Authorization(),
+		services:        m.services,
+		authorization:   m.services.Authorization,
 		resourcePreview: config.ResourcePreview,
 		logger:          ctx.Logger(),
 	}, nil
@@ -156,6 +177,7 @@ func (Module) Build(
 type Runtime struct {
 	database        Database
 	repositoryCache *RepositoryCacheDescriptor
+	services        *Services
 	authorization   security.Authorizer
 	resourcePreview resource.PreviewPolicy
 	logger          *slog.Logger
@@ -167,6 +189,20 @@ func (r *Runtime) ModuleCode() kernel.ModuleCode {
 
 func (r *Runtime) Database() Database {
 	return r.database
+}
+
+func (r *Runtime) Users() user.Service {
+	if r == nil || r.services == nil {
+		return nil
+	}
+	return r.services.Users
+}
+
+func (r *Runtime) Authorization() security.Authorizer {
+	if r == nil || r.services == nil {
+		return nil
+	}
+	return r.services.Authorization
 }
 
 func (r *Runtime) RepositoryCache() (

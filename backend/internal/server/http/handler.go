@@ -24,9 +24,8 @@ import (
 )
 
 type Handler struct {
-	app      *app.App
-	root     http.Handler
-	profiles map[kernel.ProfileCode]http.Handler
+	app  *app.App
+	root http.Handler
 }
 
 type Option func(*handlerOptions) error
@@ -98,28 +97,15 @@ func NewHandler(
 		return nil, errors.New("HTTP access token service is required")
 	}
 
-	handler := &Handler{
-		app: application,
-		profiles: make(
-			map[kernel.ProfileCode]http.Handler,
-		),
+	handler := &Handler{app: application}
+	if application.Sites() == nil {
+		return nil, errors.New("site runtime catalog is unavailable; app must be booted")
 	}
-	for _, profile := range application.Definition().Profiles {
-		runtime, exists := application.ProfileRuntime(profile.Code)
-		if !exists {
-			return nil, errors.New(
-				"profile runtime " + strconv.Quote(string(profile.Code)) +
-					" is unavailable; app must be booted",
-			)
-		}
-		compiled, err := CompileProfile(
-			context.Background(),
-			runtime,
-		)
-		if err != nil {
-			return nil, err
-		}
-		handler.profiles[profile.Code] = compiled
+	if err := application.Sites().AddRuntimePreparer(
+		context.Background(),
+		handler.prepareRuntime,
+	); err != nil {
+		return nil, err
 	}
 
 	root := chi.NewRouter()
@@ -135,7 +121,7 @@ func NewHandler(
 	}
 	root.Use(optionalAuthentication(config.accessTokens))
 	root.Use(requestActorLogAttributes)
-	login, err := newLoginHandler(application, config.accessTokens)
+	login, err := newLoginHandler(application.Users(), config.accessTokens)
 	if err != nil {
 		return nil, err
 	}
@@ -157,6 +143,17 @@ func NewHandler(
 	return handler, nil
 }
 
+func (h *Handler) prepareRuntime(
+	ctx context.Context,
+	runtime *site.Runtime,
+) error {
+	compiled, err := CompileSite(ctx, runtime)
+	if err != nil {
+		return err
+	}
+	return runtime.BindHTTPHandler(compiled)
+}
+
 func newAdminHandler(
 	application *app.App,
 ) (http.Handler, error) {
@@ -164,24 +161,14 @@ func newAdminHandler(
 	if err != nil {
 		return nil, err
 	}
-	for _, profile := range application.Definition().Profiles {
-		runtime, exists := application.ProfileRuntime(profile.Code)
-		if !exists {
-			return nil, errors.New(
-				"admin profile runtime is unavailable",
-			)
-		}
-		moduleRuntime, exists := runtime.Registry().Module(admin.ModuleCode)
-		if !exists {
-			return nil, errors.New("admin module runtime is unavailable")
-		}
-		adminRuntime, valid := moduleRuntime.(*admin.Runtime)
-		if !valid {
-			return nil, errors.New("admin module runtime has invalid type")
-		}
-		return adminRuntime.AdminHandler(management)
+	adminRuntime, err := admin.NewRuntime(
+		application.Users(),
+		application.Authorization(),
+	)
+	if err != nil {
+		return nil, err
 	}
-	return nil, errors.New("admin profile is unavailable")
+	return adminRuntime.AdminHandler(management)
 }
 
 func (h *Handler) ServeHTTP(
@@ -291,17 +278,16 @@ func (h *Handler) dispatchProfile(
 		return
 	}
 
-	profileCode := runtime.Profile().Profile().Code
-	profileHandler, exists := h.profiles[profileCode]
+	siteHandler, exists := runtime.HTTPHandler()
 	if !exists {
 		http.Error(
 			response,
-			"profile HTTP handler is unavailable",
+			"site HTTP handler is unavailable",
 			http.StatusInternalServerError,
 		)
 		return
 	}
-	profileHandler.ServeHTTP(
+	siteHandler.ServeHTTP(
 		response,
 		request.WithContext(
 			httptransport.WithSiteRuntime(
@@ -343,7 +329,7 @@ func (h *Handler) serveFile(
 		expiresAt = time.Unix(expires, 0)
 	}
 
-	opened, err := h.app.OpenFileDelivery(
+	opened, err := h.app.Files().OpenDelivery(
 		request.Context(),
 		corefile.ID(id),
 		corefile.DeliveryAuthorization{

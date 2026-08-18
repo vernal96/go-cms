@@ -133,10 +133,17 @@ func makeCompilerProfile(
 			Module: modules[index],
 		}
 	}
-	runtime, err := factory.Make(context.Background(), kernel.Profile{
+	blueprint, err := factory.Compile(context.Background(), kernel.Profile{
 		Code:    code,
 		Modules: profileModules,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := blueprint.Build(
+		context.Background(),
+		kernel.RuntimeScope{SiteID: "compiler-test"},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

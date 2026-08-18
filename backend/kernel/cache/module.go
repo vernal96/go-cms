@@ -13,9 +13,28 @@ type scopedManager struct {
 	bindings map[Alias]Binding
 }
 
+type RuntimeScope struct {
+	Profile string
+	Site    string
+}
+
 func NewModuleManager(
 	resolver Resolver,
 	profileCode string,
+	moduleCode string,
+	bindings []Binding,
+) (ModuleManager, error) {
+	return NewRuntimeModuleManager(
+		resolver,
+		RuntimeScope{Profile: profileCode},
+		moduleCode,
+		bindings,
+	)
+}
+
+func NewRuntimeModuleManager(
+	resolver Resolver,
+	scope RuntimeScope,
 	moduleCode string,
 	bindings []Binding,
 ) (ModuleManager, error) {
@@ -63,12 +82,22 @@ func NewModuleManager(
 
 		namespace := strings.TrimSpace(binding.Namespace)
 		if namespace == "" {
-			namespace = fmt.Sprintf(
-				"profiles/%s/modules/%s/caches/%s",
-				profileCode,
-				moduleCode,
-				binding.Alias,
-			)
+			if scope.Site == "" {
+				namespace = fmt.Sprintf(
+					"profiles/%s/modules/%s/caches/%s",
+					scope.Profile,
+					moduleCode,
+					binding.Alias,
+				)
+			} else {
+				namespace = fmt.Sprintf(
+					"sites/%s/profiles/%s/modules/%s/caches/%s",
+					scope.Site,
+					scope.Profile,
+					moduleCode,
+					binding.Alias,
+				)
+			}
 		}
 		if err := validateNamespace(namespace); err != nil {
 			return nil, fmt.Errorf(

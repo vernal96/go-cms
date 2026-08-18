@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -138,68 +140,90 @@ type Runtime struct {
 	site           Site
 	profileRuntime *kernel.ProfileRuntime
 	fileReferences []field.FileReference
+	handlerMu      sync.RWMutex
+	handler        http.Handler
 }
 
-func NewRuntime(
+func NewRuntimeFromBlueprint(
+	ctx context.Context,
 	item Site,
-	profileRuntime *kernel.ProfileRuntime,
+	blueprint *kernel.ProfileBlueprint,
 ) (*Runtime, error) {
-	if item.ID <= 0 {
-		return nil, errors.New("invalid site id")
+	if ctx == nil {
+		return nil, errors.New("site runtime context is nil")
 	}
-
-	if item.ProfileCode == "" {
-		return nil, errors.New("site profile code is empty")
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-
-	domain, err := NormalizeDomain(item.Domain)
+	if blueprint == nil {
+		return nil, errors.New("profile blueprint is nil")
+	}
+	item, fileReferences, err := normalizeRuntimeSite(
+		item,
+		blueprint.Profile().Code,
+		blueprint.ParamSchema(),
+	)
 	if err != nil {
 		return nil, err
 	}
-
-	item.Domain = domain
-
-	item.Locale = strings.TrimSpace(item.Locale)
-	if item.Locale == "" {
-		return nil, errors.New("site locale is empty")
-	}
-	if _, err := language.Parse(item.Locale); err != nil {
-		return nil, fmt.Errorf("site locale %q is invalid: %w", item.Locale, err)
-	}
-
-	if profileRuntime == nil {
-		return nil, errors.New("profile runtime is nil")
-	}
-
-	if item.ProfileCode != profileRuntime.Profile().Code {
-		return nil, fmt.Errorf(
-			"site profile %q does not match runtime profile %q",
-			item.ProfileCode,
-			profileRuntime.Profile().Code,
-		)
-	}
-
-	paramSchema := profileRuntime.ParamSchema()
-	if paramSchema == nil {
-		return nil, errors.New("profile param schema is nil")
-	}
-
-	settings, err := paramSchema.Validate(item.Settings)
+	profileRuntime, err := blueprint.Build(
+		ctx,
+		kernel.RuntimeScope{SiteID: fmt.Sprint(item.ID)},
+	)
 	if err != nil {
-		return nil, fmt.Errorf("validate site settings: %w", err)
+		return nil, err
 	}
-	item.Settings = cloneSettings(settings)
-	fileReferences, err := paramSchema.FileReferences(settings)
-	if err != nil {
-		return nil, fmt.Errorf("collect site file references: %w", err)
-	}
-	item.FileReferences = fileReferenceMap(fileReferences)
-
 	return &Runtime{
 		site:           item,
 		profileRuntime: profileRuntime,
 		fileReferences: fileReferences,
 	}, nil
+}
+
+func normalizeRuntimeSite(
+	item Site,
+	profileCode kernel.ProfileCode,
+	paramSchema *field.Schema,
+) (Site, []field.FileReference, error) {
+	if item.ID <= 0 {
+		return Site{}, nil, errors.New("invalid site id")
+	}
+	if item.ProfileCode == "" {
+		return Site{}, nil, errors.New("site profile code is empty")
+	}
+	if item.ProfileCode != profileCode {
+		return Site{}, nil, fmt.Errorf(
+			"site profile %q does not match blueprint profile %q",
+			item.ProfileCode,
+			profileCode,
+		)
+	}
+	domain, err := NormalizeDomain(item.Domain)
+	if err != nil {
+		return Site{}, nil, err
+	}
+	item.Domain = domain
+	item.Locale = strings.TrimSpace(item.Locale)
+	if item.Locale == "" {
+		return Site{}, nil, errors.New("site locale is empty")
+	}
+	if _, err := language.Parse(item.Locale); err != nil {
+		return Site{}, nil, fmt.Errorf("site locale %q is invalid: %w", item.Locale, err)
+	}
+	if paramSchema == nil {
+		return Site{}, nil, errors.New("profile param schema is nil")
+	}
+	settings, err := paramSchema.Validate(item.Settings)
+	if err != nil {
+		return Site{}, nil, fmt.Errorf("validate site settings: %w", err)
+	}
+	item.Settings = cloneSettings(settings)
+	fileReferences, err := paramSchema.FileReferences(settings)
+	if err != nil {
+		return Site{}, nil, fmt.Errorf("collect site file references: %w", err)
+	}
+	item.FileReferences = fileReferenceMap(fileReferences)
+	return item, fileReferences, nil
 }
 
 func (r *Runtime) Site() Site {
@@ -215,10 +239,35 @@ func (r *Runtime) Profile() *kernel.ProfileRuntime {
 	return r.profileRuntime
 }
 
+func (r *Runtime) BindHTTPHandler(handler http.Handler) error {
+	if r == nil {
+		return errors.New("site runtime is nil")
+	}
+	if handler == nil {
+		return errors.New("site HTTP handler is nil")
+	}
+	r.handlerMu.Lock()
+	defer r.handlerMu.Unlock()
+	if r.handler != nil {
+		return errors.New("site HTTP handler is already bound")
+	}
+	r.handler = handler
+	return nil
+}
+
+func (r *Runtime) HTTPHandler() (http.Handler, bool) {
+	if r == nil {
+		return nil, false
+	}
+	r.handlerMu.RLock()
+	defer r.handlerMu.RUnlock()
+	return r.handler, r.handler != nil
+}
+
 type ProfileResolver interface {
-	ProfileRuntime(
+	ProfileBlueprint(
 		kernel.ProfileCode,
-	) (*kernel.ProfileRuntime, bool)
+	) (*kernel.ProfileBlueprint, bool)
 }
 
 type runtimeSnapshot struct {
@@ -226,14 +275,59 @@ type runtimeSnapshot struct {
 	byID     map[ID]*Runtime
 }
 
+type RuntimePreparer func(context.Context, *Runtime) error
+
 type Catalog struct {
 	repository Repository
 	profiles   ProfileResolver
 	access     Access
 	files      file.Service
+	preparers  []RuntimePreparer
 
 	snapshot   atomic.Pointer[runtimeSnapshot]
 	mutationMu sync.Mutex
+}
+
+// AddRuntimePreparer prepares the currently published runtimes and every
+// runtime built by later reload/create/update operations before publication.
+func (c *Catalog) AddRuntimePreparer(
+	ctx context.Context,
+	preparer RuntimePreparer,
+) error {
+	if c == nil {
+		return errors.New("site catalog is nil")
+	}
+	if ctx == nil {
+		return errors.New("site runtime prepare context is nil")
+	}
+	if preparer == nil {
+		return errors.New("site runtime preparer is nil")
+	}
+	c.mutationMu.Lock()
+	defer c.mutationMu.Unlock()
+	snapshot := c.snapshot.Load()
+	if snapshot == nil {
+		return errors.New("site runtime snapshot is nil")
+	}
+	for _, runtime := range snapshot.byID {
+		if err := preparer(ctx, runtime); err != nil {
+			return fmt.Errorf("prepare site runtime %d: %w", runtime.site.ID, err)
+		}
+	}
+	c.preparers = append(c.preparers, preparer)
+	return nil
+}
+
+func (c *Catalog) prepareRuntime(
+	ctx context.Context,
+	runtime *Runtime,
+) error {
+	for _, preparer := range c.preparers {
+		if err := preparer(ctx, runtime); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func NewCatalog(
@@ -303,6 +397,26 @@ func (c *Catalog) RuntimeByID(
 	return runtime, exists
 }
 
+func (c *Catalog) Runtimes() []*Runtime {
+	if c == nil {
+		return nil
+	}
+	snapshot := c.snapshot.Load()
+	if snapshot == nil {
+		return nil
+	}
+	ids := make([]ID, 0, len(snapshot.byID))
+	for id := range snapshot.byID {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	result := make([]*Runtime, 0, len(ids))
+	for _, id := range ids {
+		result = append(result, snapshot.byID[id])
+	}
+	return result
+}
+
 func (c *Catalog) ResolveByDomain(
 	ctx context.Context,
 	actor security.Actor,
@@ -354,7 +468,7 @@ func (c *Catalog) Reload(ctx context.Context) error {
 	}
 
 	for index, item := range sites {
-		profileRuntime, exists := c.profiles.ProfileRuntime(
+		blueprint, exists := c.profiles.ProfileBlueprint(
 			item.ProfileCode,
 		)
 		if !exists {
@@ -365,7 +479,7 @@ func (c *Catalog) Reload(ctx context.Context) error {
 			)
 		}
 
-		runtime, err := NewRuntime(item, profileRuntime)
+		runtime, err := NewRuntimeFromBlueprint(ctx, item, blueprint)
 		if err != nil {
 			return fmt.Errorf(
 				"build site runtime at index %d with id %d: %w",
@@ -376,6 +490,14 @@ func (c *Catalog) Reload(ctx context.Context) error {
 		}
 		if err := c.validateFileReferences(ctx, security.System(), runtime.fileReferences, nil); err != nil {
 			return fmt.Errorf("validate site file references at index %d: %w", index, err)
+		}
+		if err := c.prepareRuntime(ctx, runtime); err != nil {
+			return fmt.Errorf(
+				"prepare site runtime at index %d with id %d: %w",
+				index,
+				item.ID,
+				err,
+			)
 		}
 
 		domain := runtime.site.Domain
@@ -415,7 +537,7 @@ func (c *Catalog) Create(
 	if err := c.access.Check(ctx, actor, createPermission); err != nil {
 		return nil, err
 	}
-	profileRuntime, exists := c.profiles.ProfileRuntime(input.ProfileCode)
+	blueprint, exists := c.profiles.ProfileBlueprint(input.ProfileCode)
 	if !exists {
 		return nil, fmt.Errorf("%w: profile %q is unknown", ErrInvalid, input.ProfileCode)
 	}
@@ -427,28 +549,27 @@ func (c *Catalog) Create(
 		return nil, errors.New("site runtime snapshot is nil")
 	}
 
-	nextRuntime, err := NewRuntime(Site{
+	candidate, fileReferences, err := normalizeRuntimeSite(Site{
 		ID:          1,
 		ProfileCode: input.ProfileCode,
 		Domain:      input.Domain,
 		Locale:      input.Locale,
 		Settings:    cloneSettings(input.Settings),
 		IsPublic:    input.IsPublic,
-	}, profileRuntime)
+	}, blueprint.Profile().Code, blueprint.ParamSchema())
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	if err := c.validateFileReferences(ctx, actor, nextRuntime.fileReferences, nil); err != nil {
+	if err := c.validateFileReferences(ctx, actor, fileReferences, nil); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	if _, exists := currentSnapshot.byDomain[nextRuntime.site.Domain]; exists {
+	if _, exists := currentSnapshot.byDomain[candidate.Domain]; exists {
 		return nil, ErrConflict
 	}
 	management, ok := c.repository.(ManagementRepository)
 	if !ok {
 		return nil, errors.New("site management repository is unavailable")
 	}
-	candidate := nextRuntime.Site()
 	candidate.ID = 0
 	stored, err := management.Create(
 		ctx,
@@ -458,9 +579,12 @@ func (c *Catalog) Create(
 	if err != nil {
 		return nil, fmt.Errorf("create site: %w", err)
 	}
-	nextRuntime, err = NewRuntime(stored, profileRuntime)
+	nextRuntime, err := NewRuntimeFromBlueprint(ctx, stored, blueprint)
 	if err != nil {
 		return nil, fmt.Errorf("build created site runtime: %w", err)
+	}
+	if err := c.prepareRuntime(ctx, nextRuntime); err != nil {
+		return nil, fmt.Errorf("prepare created site runtime: %w", err)
 	}
 	nextSnapshot := cloneSnapshot(currentSnapshot, 1)
 	nextSnapshot.byDomain[nextRuntime.site.Domain] = nextRuntime
@@ -500,7 +624,7 @@ func (c *Catalog) Update(
 		return nil, ErrNotFound
 	}
 
-	profileRuntime, exists := c.profiles.ProfileRuntime(input.ProfileCode)
+	blueprint, exists := c.profiles.ProfileBlueprint(input.ProfileCode)
 	if !exists {
 		return nil, fmt.Errorf("%w: profile %q is unknown", ErrInvalid, input.ProfileCode)
 	}
@@ -511,7 +635,7 @@ func (c *Catalog) Update(
 	item.Settings = cloneSettings(input.Settings)
 	item.IsPublic = input.IsPublic
 
-	nextRuntime, err := NewRuntime(item, profileRuntime)
+	nextRuntime, err := NewRuntimeFromBlueprint(ctx, item, blueprint)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
@@ -520,6 +644,9 @@ func (c *Catalog) Update(
 	}
 	if existing, exists := currentSnapshot.byDomain[nextRuntime.site.Domain]; exists && existing.site.ID != input.ID {
 		return nil, ErrConflict
+	}
+	if err := c.prepareRuntime(ctx, nextRuntime); err != nil {
+		return nil, fmt.Errorf("prepare updated site runtime: %w", err)
 	}
 
 	stored, err := c.repository.Update(

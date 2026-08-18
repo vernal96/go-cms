@@ -250,6 +250,42 @@ func TestModuleManagerScopesAliasesAndAllowsSharedNamespace(t *testing.T) {
 	}
 }
 
+func TestRuntimeModuleManagerIsolatesDefaultNamespaceBySite(t *testing.T) {
+	global := &testStore{code: "global", values: make(map[string][]byte)}
+	manager := &Manager{stores: map[Code]Store{"global": global}}
+	first, err := NewRuntimeModuleManager(
+		manager,
+		RuntimeScope{Profile: "shared", Site: "1"},
+		"module",
+		[]Binding{{Alias: "runtime", Code: "global"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewRuntimeModuleManager(
+		manager,
+		RuntimeScope{Profile: "shared", Site: "2"},
+		"module",
+		[]Binding{{Alias: "runtime", Code: "global"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstStore, _ := first.Store("runtime")
+	secondStore, _ := second.Store("runtime")
+	if err := firstStore.Set(
+		context.Background(),
+		"key",
+		[]byte("site-one"),
+		SetOptions{TTL: time.Minute},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secondStore.Get(context.Background(), "key"); !errors.Is(err, ErrMiss) {
+		t.Fatalf("site-scoped cache namespace leaked: %v", err)
+	}
+}
+
 func TestModuleManagerRejectsUnknownStoreAndDuplicateAlias(t *testing.T) {
 	manager := &Manager{stores: map[Code]Store{}}
 	if _, err := NewModuleManager(

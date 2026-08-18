@@ -35,6 +35,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/modules/core/user/adapters/argon2id"
 	"github.com/vernal96/go-cms/kernel/security"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
@@ -1051,6 +1052,7 @@ func TestAppRequiresHealthyLoggerBeforeInfrastructure(t *testing.T) {
 		context.Background(),
 		appkernel.Definition{
 			Logger:           fakeLoggerFactory{connector: loggerConnector},
+			PasswordHasher:   argon2id.Factory{},
 			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus:         fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
@@ -1088,6 +1090,16 @@ func TestAppRequiresHealthyLoggerBeforeInfrastructure(t *testing.T) {
 	) {
 		t.Fatalf("nil event bus error = %v", err)
 	}
+	if _, err := appkernel.New(
+		context.Background(),
+		appkernel.Definition{
+			Logger:           fakeLoggerFactory{},
+			EventBus:         fakeEventBusFactory{},
+			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		},
+	); err == nil || !strings.Contains(err.Error(), "password hasher factory is nil") {
+		t.Fatalf("nil password hasher factory error = %v", err)
+	}
 }
 
 func TestAppRequiresHealthyEventBusBeforeOtherInfrastructure(t *testing.T) {
@@ -1103,6 +1115,7 @@ func TestAppRequiresHealthyEventBusBeforeOtherInfrastructure(t *testing.T) {
 		context.Background(),
 		appkernel.Definition{
 			Logger:           fakeLoggerFactory{},
+			PasswordHasher:   argon2id.Factory{},
 			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus: fakeEventBusFactory{
 				connector: eventBusConnector,
@@ -1132,6 +1145,7 @@ func TestAppRequiresHealthyEventBusBeforeOtherInfrastructure(t *testing.T) {
 		context.Background(),
 		appkernel.Definition{
 			Logger:           fakeLoggerFactory{},
+			PasswordHasher:   argon2id.Factory{},
 			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus: fakeEventBusFactory{
 				connector: &fakeEventBusConnector{
@@ -1183,6 +1197,7 @@ func TestAppOpensLoggerThenEventBusAndClosesLoggerLast(t *testing.T) {
 				connector: loggerConnector,
 				onOpen:    record("logger.open"),
 			},
+			PasswordHasher:   argon2id.Factory{},
 			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus: fakeEventBusFactory{
 				connector: eventBusConnector,
@@ -1246,6 +1261,7 @@ func TestAppCloseStopsActiveEventBusConsumerBeforeDatabase(t *testing.T) {
 		context.Background(),
 		appkernel.Definition{
 			Logger:           fakeLoggerFactory{},
+			PasswordHasher:   argon2id.Factory{},
 			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus: fakeEventBusFactory{
 				connector: eventBusConnector,
@@ -1329,6 +1345,7 @@ func TestAppCloseJoinsEventBusDatabaseAndLoggerErrors(t *testing.T) {
 					closeErr: loggerCloseErr,
 				},
 			},
+			PasswordHasher:   argon2id.Factory{},
 			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus: fakeEventBusFactory{
 				connector: &fakeEventBusConnector{
@@ -1384,6 +1401,7 @@ func TestAppLogsBootAndCloseFailures(t *testing.T) {
 		context.Background(),
 		appkernel.Definition{
 			Logger:           fakeLoggerFactory{connector: loggerConnector},
+			PasswordHasher:   argon2id.Factory{},
 			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus:         fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
@@ -1462,6 +1480,7 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 
 	application, err := appkernel.New(ctx, appkernel.Definition{
 		Logger:           fakeLoggerFactory{},
+		PasswordHasher:   argon2id.Factory{},
 		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 		EventBus:         fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
@@ -1525,11 +1544,8 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	if repository.callCount() != 0 {
 		t.Fatalf("New called site repository %d times", repository.callCount())
 	}
-	if _, err := application.PermissionCodes(); !errors.Is(
-		err,
-		appkernel.ErrNotBooted,
-	) {
-		t.Fatalf("PermissionCodes before Boot = %v", err)
+	if application.Authorization() != nil {
+		t.Fatal("Authorization before Boot is available")
 	}
 	if _, err := application.RuntimeByDomain(
 		ctx,
@@ -1541,19 +1557,11 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	if err := application.ReloadSites(ctx); !errors.Is(err, appkernel.ErrNotBooted) {
 		t.Fatalf("ReloadSites before Boot = %v", err)
 	}
-	if _, err := application.UpdateSite(
-		ctx,
-		security.System(),
-		site.UpdateInput{ID: 1},
-	); !errors.Is(err, appkernel.ErrNotBooted) {
-		t.Fatalf("UpdateSite before Boot = %v", err)
+	if application.Sites() != nil {
+		t.Fatal("Sites before Boot is available")
 	}
-	if _, err := application.Media(
-		ctx,
-		security.System(),
-		1,
-	); !errors.Is(err, appkernel.ErrNotBooted) {
-		t.Fatalf("Media before Boot = %v", err)
+	if application.Media() != nil {
+		t.Fatal("Media before Boot is available")
 	}
 	if _, exists := mainConnector.version(migrations.DefaultHistoryTable); exists {
 		t.Fatal("New applied migrations")
@@ -1617,12 +1625,11 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	if err := application.Boot(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if moduleBuilds.Load() != 1 {
+	if moduleBuilds.Load() != 2 {
 		t.Fatalf("module Build calls = %d", moduleBuilds.Load())
 	}
-	if codes, err := application.PermissionCodes(); err != nil ||
-		len(codes) != 28 {
-		t.Fatalf("permission catalog = %#v, %v", codes, err)
+	if codes := application.Authorization().Codes(); len(codes) != 28 {
+		t.Fatalf("permission catalog = %#v", codes)
 	}
 	if selected != logsFeature {
 		t.Fatalf("selected database = %#v", selected)
@@ -1658,8 +1665,16 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	if err != nil || other == first {
 		t.Fatal("different site did not get a distinct runtime")
 	}
-	if first.Profile() != other.Profile() {
-		t.Fatal("sites of one profile do not share profile runtime")
+	if first.Profile() == other.Profile() {
+		t.Fatal("sites of one profile share final profile runtime")
+	}
+	if first.Profile().Blueprint() != other.Profile().Blueprint() {
+		t.Fatal("sites of one profile do not share immutable blueprint")
+	}
+	firstCore, _ := first.Profile().Registry().Module(core.ModuleCode)
+	otherCore, _ := other.Profile().Registry().Module(core.ModuleCode)
+	if firstCore == nil || otherCore == nil || firstCore == otherCore {
+		t.Fatal("sites of one profile share core module runtime")
 	}
 	firstCopy := first.Site()
 	firstCopy.Settings["roles"].([]string)[0] = "mutated"
@@ -1667,7 +1682,7 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 		t.Fatal("site runtime exposed mutable settings slice")
 	}
 
-	_, err = application.UpdateSite(
+	_, err = application.Sites().Update(
 		ctx,
 		security.System(),
 		site.UpdateInput{
@@ -1695,7 +1710,7 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 		t.Fatal("validation failure called site repository")
 	}
 
-	updated, err := application.UpdateSite(
+	updated, err := application.Sites().Update(
 		ctx,
 		security.System(),
 		site.UpdateInput{
@@ -1735,7 +1750,7 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	}
 
 	repository.setUpdateError(errors.New("update unavailable"))
-	_, err = application.UpdateSite(
+	_, err = application.Sites().Update(
 		ctx,
 		security.System(),
 		site.UpdateInput{
@@ -1760,7 +1775,7 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	}
 	repository.setUpdateError(nil)
 
-	if _, err := application.UpdateSite(
+	if _, err := application.Sites().Update(
 		ctx,
 		security.System(),
 		site.UpdateInput{
@@ -1843,18 +1858,11 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	if err := application.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := application.Media(
-		ctx,
-		security.System(),
-		1,
-	); !errors.Is(err, appkernel.ErrClosed) {
-		t.Fatalf("Media after Close = %v", err)
+	if application.Media() != nil {
+		t.Fatal("Media after Close is available")
 	}
-	if _, err := application.PermissionCodes(); !errors.Is(
-		err,
-		appkernel.ErrClosed,
-	) {
-		t.Fatalf("PermissionCodes after Close = %v", err)
+	if application.Authorization() != nil {
+		t.Fatal("Authorization after Close is available")
 	}
 	if mainConnector.closes.Load() != 1 || logsConnector.closes.Load() != 1 {
 		t.Fatalf(
@@ -1865,7 +1873,7 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	}
 }
 
-func TestAppResourceFacades(t *testing.T) {
+func TestAppResourceServices(t *testing.T) {
 	ctx := context.Background()
 	connector := newFakeConnector("main")
 	resourceRepository := newAppResourceRepository()
@@ -1884,6 +1892,7 @@ func TestAppResourceFacades(t *testing.T) {
 
 	application, err := appkernel.New(ctx, appkernel.Definition{
 		Logger:           fakeLoggerFactory{},
+		PasswordHasher:   argon2id.Factory{},
 		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 		EventBus:         fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
@@ -1912,18 +1921,14 @@ func TestAppResourceFacades(t *testing.T) {
 	}
 	defer func() { _ = application.Close() }()
 
-	if _, err := application.CreateResource(
-		ctx,
-		security.System(),
-		resource.CreateInput{},
-	); !errors.Is(err, appkernel.ErrNotBooted) {
-		t.Fatalf("create before boot error = %v", err)
+	if application.Resources() != nil {
+		t.Fatal("resources before boot are available")
 	}
 	if err := application.Boot(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	created, err := application.CreateResource(
+	created, err := application.Resources().Create(
 		ctx,
 		security.System(),
 		resource.CreateInput{
@@ -1941,21 +1946,21 @@ func TestAppResourceFacades(t *testing.T) {
 		t.Fatalf("created resource = %#v", created)
 	}
 
-	byID, err := application.Resource(ctx, security.System(), created.ID)
+	byID, err := application.Resources().Get(ctx, security.System(), created.ID)
 	if err != nil || byID.ID != created.ID {
 		t.Fatalf("resource by id = %#v, %v", byID, err)
 	}
-	byPath, err := application.ResourceByPath(ctx, security.System(), 1, "/")
+	byPath, err := application.Resources().GetByPath(ctx, security.System(), 1, "/")
 	if err != nil || byPath.ID != created.ID {
 		t.Fatalf("resource by path = %#v, %v", byPath, err)
 	}
-	tree, err := application.ResourceTree(ctx, security.System(), 1)
+	tree, err := application.Resources().Tree(ctx, security.System(), 1)
 	if err != nil || len(tree) != 1 ||
 		tree[0].Resource.ID != created.ID {
 		t.Fatalf("resource tree = %#v, %v", tree, err)
 	}
 
-	updated, err := application.UpdateResource(
+	updated, err := application.Resources().Update(
 		ctx,
 		security.System(),
 		resource.UpdateInput{
@@ -1976,10 +1981,10 @@ func TestAppResourceFacades(t *testing.T) {
 		t.Fatalf("updated resource = %#v", updated)
 	}
 
-	if err := application.DeleteResource(ctx, security.System(), created.ID); err != nil {
+	if err := application.Resources().Delete(ctx, security.System(), created.ID); err != nil {
 		t.Fatal(err)
 	}
-	deleted, err := application.Resource(
+	deleted, err := application.Resources().Get(
 		ctx,
 		security.System(),
 		created.ID,
@@ -1989,7 +1994,7 @@ func TestAppResourceFacades(t *testing.T) {
 	}
 }
 
-func TestAppBootRequiresCoreAndAdminModules(t *testing.T) {
+func TestAppNewRequiresCoreAndAdminModules(t *testing.T) {
 	tests := []struct {
 		name    string
 		modules []kernel.ProfileModule
@@ -2013,10 +2018,11 @@ func TestAppBootRequiresCoreAndAdminModules(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			application, err := appkernel.New(
+			_, err := appkernel.New(
 				context.Background(),
 				appkernel.Definition{
 					Logger:           fakeLoggerFactory{},
+					PasswordHasher:   argon2id.Factory{},
 					SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 					EventBus:         fakeEventBusFactory{},
 					MainDatabase: appkernel.DatabaseDefinition{
@@ -2038,24 +2044,18 @@ func TestAppBootRequiresCoreAndAdminModules(t *testing.T) {
 					}},
 				},
 			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = application.Close() }()
-
-			err = application.Boot(context.Background())
 			if err == nil ||
 				!strings.Contains(
 					err.Error(),
 					`required module "`+string(test.missing)+`"`,
 				) {
-				t.Fatalf("Boot error = %v", err)
+				t.Fatalf("New error = %v", err)
 			}
 		})
 	}
 }
 
-func TestAppMediaFacades(t *testing.T) {
+func TestAppMediaServices(t *testing.T) {
 	ctx := context.Background()
 	connector := newFakeConnector("main")
 	mediaRepository := newAppMediaRepository()
@@ -2081,6 +2081,7 @@ func TestAppMediaFacades(t *testing.T) {
 
 	application, err := appkernel.New(ctx, appkernel.Definition{
 		Logger:           fakeLoggerFactory{},
+		PasswordHasher:   argon2id.Factory{},
 		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 		EventBus:         fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
@@ -2104,19 +2105,15 @@ func TestAppMediaFacades(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := application.CreateMedia(
-		ctx,
-		security.System(),
-		coremedia.CreateInput{FileID: 1},
-	); !errors.Is(err, appkernel.ErrNotBooted) {
-		t.Fatalf("create media before boot error = %v", err)
+	if application.Media() != nil {
+		t.Fatal("media before boot is available")
 	}
 	if err := application.Boot(ctx); err != nil {
 		t.Fatal(err)
 	}
 
 	title := " Hero "
-	created, err := application.CreateMedia(
+	created, err := application.Media().Create(
 		ctx,
 		security.System(),
 		coremedia.CreateInput{
@@ -2132,7 +2129,7 @@ func TestAppMediaFacades(t *testing.T) {
 		t.Fatalf("created media = %#v", created)
 	}
 
-	loaded, err := application.Media(ctx, security.System(), created.ID)
+	loaded, err := application.Media().Get(ctx, security.System(), created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2141,7 +2138,7 @@ func TestAppMediaFacades(t *testing.T) {
 	}
 
 	updatedTitle := "Updated"
-	updated, err := application.UpdateMedia(
+	updated, err := application.Media().Update(
 		ctx,
 		security.System(),
 		coremedia.UpdateInput{
@@ -2158,10 +2155,10 @@ func TestAppMediaFacades(t *testing.T) {
 		t.Fatalf("updated media = %#v", updated)
 	}
 
-	if err := application.DeleteMedia(ctx, security.System(), created.ID); err != nil {
+	if err := application.Media().Delete(ctx, security.System(), created.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := application.Media(
+	if _, err := application.Media().Get(
 		ctx,
 		security.System(),
 		created.ID,
@@ -2172,12 +2169,8 @@ func TestAppMediaFacades(t *testing.T) {
 	if err := application.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := application.DeleteMedia(
-		ctx,
-		security.System(),
-		created.ID,
-	); !errors.Is(err, appkernel.ErrClosed) {
-		t.Fatalf("delete media after close error = %v", err)
+	if application.Media() != nil {
+		t.Fatal("media after close is available")
 	}
 }
 
@@ -2187,6 +2180,7 @@ func TestNewClosesPreviouslyOpenedConnectorOnFactoryError(t *testing.T) {
 
 	_, err := appkernel.New(context.Background(), appkernel.Definition{
 		Logger:           fakeLoggerFactory{},
+		PasswordHasher:   argon2id.Factory{},
 		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 		EventBus:         fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
@@ -2230,6 +2224,7 @@ func TestAppNewRequiresCachePingAndClosesFailedStore(t *testing.T) {
 		context.Background(),
 		appkernel.Definition{
 			Logger:           fakeLoggerFactory{},
+			PasswordHasher:   argon2id.Factory{},
 			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus:         fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
@@ -2262,7 +2257,7 @@ func TestAppNewRequiresCachePingAndClosesFailedStore(t *testing.T) {
 	}
 }
 
-func TestAppBootRejectsDifferentCoreRepositoryCachesAcrossProfiles(
+func TestAppBootAllowsDifferentCoreRepositoryCachesAcrossProfiles(
 	t *testing.T,
 ) {
 	cacheStore := &fakeCacheStore{code: "shared"}
@@ -2270,6 +2265,7 @@ func TestAppBootRejectsDifferentCoreRepositoryCachesAcrossProfiles(
 		context.Background(),
 		appkernel.Definition{
 			Logger:           fakeLoggerFactory{},
+			PasswordHasher:   argon2id.Factory{},
 			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus:         fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
@@ -2331,12 +2327,18 @@ func TestAppBootRejectsDifferentCoreRepositoryCachesAcrossProfiles(
 	}
 	defer func() { _ = application.Close() }()
 
-	err = application.Boot(context.Background())
-	if err == nil || !strings.Contains(
-		err.Error(),
-		"all profiles must use the same core repository cache",
-	) {
+	if err := application.Boot(context.Background()); err != nil {
 		t.Fatalf("Boot error = %v", err)
+	}
+	for _, profileCode := range []kernel.ProfileCode{"first", "second"} {
+		blueprint, exists := application.ProfileBlueprint(profileCode)
+		if !exists {
+			t.Fatalf("profile blueprint %q is unavailable", profileCode)
+		}
+		binding := blueprint.Profile().Modules[0].Caches[0]
+		if binding.Namespace != "core/"+string(profileCode) {
+			t.Fatalf("core cache %q = %#v", profileCode, binding)
+		}
 	}
 }
 
@@ -2378,6 +2380,7 @@ func TestAppCollectsSeedSourcesAcrossConnectionsAndClonesTags(t *testing.T) {
 		context.Background(),
 		appkernel.Definition{
 			Logger:           fakeLoggerFactory{},
+			PasswordHasher:   argon2id.Factory{},
 			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus:         fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
@@ -2411,6 +2414,7 @@ func TestAppCollectsSeedSourcesAcrossConnectionsAndClonesTags(t *testing.T) {
 					Code: "dev",
 					Modules: []kernel.ProfileModule{
 						{Module: core.Module{}},
+						{Module: admin.Module{}},
 					},
 				},
 			},
@@ -2465,6 +2469,7 @@ func TestAppRejectsSeedHistoryCollision(t *testing.T) {
 		context.Background(),
 		appkernel.Definition{
 			Logger:           fakeLoggerFactory{},
+			PasswordHasher:   argon2id.Factory{},
 			SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 			EventBus:         fakeEventBusFactory{},
 			MainDatabase: appkernel.DatabaseDefinition{
@@ -2498,6 +2503,7 @@ func TestBootFailureIsRememberedAndNotRetried(t *testing.T) {
 
 	application, err := appkernel.New(context.Background(), appkernel.Definition{
 		Logger:           fakeLoggerFactory{},
+		PasswordHasher:   argon2id.Factory{},
 		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
 		EventBus:         fakeEventBusFactory{},
 		MainDatabase: appkernel.DatabaseDefinition{
@@ -2539,8 +2545,8 @@ func TestBootFailureIsRememberedAndNotRetried(t *testing.T) {
 	if repository.callCount() != 1 {
 		t.Fatalf("failed Boot was retried: repository calls = %d", repository.callCount())
 	}
-	if _, exists := application.ProfileRuntime("dev"); exists {
-		t.Fatal("failed Boot published profile runtime")
+	if _, exists := application.ProfileBlueprint("dev"); exists {
+		t.Fatal("failed Boot published profile blueprint")
 	}
 }
 

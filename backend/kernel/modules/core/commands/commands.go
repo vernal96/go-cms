@@ -24,112 +24,9 @@ import (
 )
 
 type Application interface {
-	CreateUser(
-		context.Context,
-		security.Actor,
-		user.CreateInput,
-	) (user.User, error)
-	User(
-		context.Context,
-		security.Actor,
-		user.ID,
-	) (user.User, error)
-	Users(
-		context.Context,
-		security.Actor,
-	) ([]user.User, error)
-	UpdateUser(
-		context.Context,
-		security.Actor,
-		user.UpdateInput,
-	) (user.User, error)
-	ChangeUserPassword(
-		context.Context,
-		security.Actor,
-		user.ID,
-		string,
-	) (user.User, error)
-	BlockUser(
-		context.Context,
-		security.Actor,
-		user.ID,
-	) (user.User, error)
-	UnblockUser(
-		context.Context,
-		security.Actor,
-		user.ID,
-	) (user.User, error)
-
-	CreateGroup(
-		context.Context,
-		security.Actor,
-		group.CreateInput,
-	) (group.Group, error)
-	Group(
-		context.Context,
-		security.Actor,
-		group.ID,
-	) (group.Group, error)
-	Groups(
-		context.Context,
-		security.Actor,
-	) ([]group.Group, error)
-	UpdateGroup(
-		context.Context,
-		security.Actor,
-		group.UpdateInput,
-	) (group.Group, error)
-	DeleteGroup(context.Context, security.Actor, group.ID) error
-	AddUserToGroup(
-		context.Context,
-		security.Actor,
-		group.ID,
-		security.UserID,
-	) (group.Membership, error)
-	RemoveUserFromGroup(
-		context.Context,
-		security.Actor,
-		group.ID,
-		security.UserID,
-	) error
-	GroupMembers(
-		context.Context,
-		security.Actor,
-		group.ID,
-	) ([]group.Membership, error)
-	GrantGroupPermission(
-		context.Context,
-		security.Actor,
-		group.ID,
-		permission.Code,
-	) (group.PermissionGrant, error)
-	RevokeGroupPermission(
-		context.Context,
-		security.Actor,
-		group.ID,
-		permission.Code,
-	) error
-	GroupPermissions(
-		context.Context,
-		security.Actor,
-		group.ID,
-	) ([]group.PermissionGrant, error)
-
-	PermissionCodes() ([]permission.Code, error)
-	GrantGuestPermission(
-		context.Context,
-		security.Actor,
-		permission.Code,
-	) (access.Grant, error)
-	RevokeGuestPermission(
-		context.Context,
-		security.Actor,
-		permission.Code,
-	) error
-	GuestPermissions(
-		context.Context,
-		security.Actor,
-	) ([]access.Grant, error)
+	Users() user.Service
+	Groups() group.Service
+	Authorization() access.Service
 }
 
 type Provider struct {
@@ -188,20 +85,20 @@ func (c *usersCommand) Run(
 		}
 		switch args[0] {
 		case "get":
-			item, err := c.application.User(ctx, security.System(), id)
+			item, err := c.application.Users().Get(ctx, security.System(), id)
 			return writeResult(streams.Out, item, err)
 		case "block":
-			item, err := c.application.BlockUser(ctx, security.System(), id)
+			item, err := c.application.Users().Block(ctx, security.System(), id)
 			return writeResult(streams.Out, item, err)
 		case "unblock":
-			item, err := c.application.UnblockUser(ctx, security.System(), id)
+			item, err := c.application.Users().Unblock(ctx, security.System(), id)
 			return writeResult(streams.Out, item, err)
 		default:
 			password, err := readPassword(streams.In)
 			if err != nil {
 				return err
 			}
-			item, err := c.application.ChangeUserPassword(
+			item, err := c.application.Users().ChangePassword(
 				ctx,
 				security.System(),
 				id,
@@ -214,7 +111,7 @@ func (c *usersCommand) Run(
 		if len(args) != 1 {
 			return errors.New("users list does not accept arguments")
 		}
-		items, err := c.application.Users(ctx, security.System())
+		items, err := c.application.Users().List(ctx, security.System())
 		return writeResult(streams.Out, items, err)
 
 	case "update":
@@ -278,7 +175,7 @@ func (c *usersCommand) create(
 	if err != nil {
 		return err
 	}
-	available, err := c.application.Groups(ctx, security.System())
+	available, err := c.application.Groups().List(ctx, security.System())
 	if err != nil {
 		return fmt.Errorf("list groups: %w", err)
 	}
@@ -299,7 +196,7 @@ func (c *usersCommand) create(
 		return err
 	}
 
-	created, err := c.application.CreateUser(
+	created, err := c.application.Users().Create(
 		ctx,
 		security.System(),
 		user.CreateInput{
@@ -350,7 +247,7 @@ func (c *usersCommand) update(
 	if err != nil {
 		return err
 	}
-	current, err := c.application.User(ctx, security.System(), id)
+	current, err := c.application.Users().Get(ctx, security.System(), id)
 	if err != nil {
 		return err
 	}
@@ -389,7 +286,7 @@ func (c *usersCommand) update(
 		}
 		input.UpdateAvatar = true
 	}
-	updated, err := c.application.UpdateUser(
+	updated, err := c.application.Users().Update(
 		ctx,
 		security.System(),
 		input,
@@ -426,7 +323,7 @@ func (c *groupsCommand) Run(
 		if err := parseFlags(flags, args[1:]); err != nil {
 			return err
 		}
-		item, err := c.application.CreateGroup(
+		item, err := c.application.Groups().Create(
 			ctx,
 			security.System(),
 			group.CreateInput{
@@ -440,7 +337,7 @@ func (c *groupsCommand) Run(
 		if len(args) != 1 {
 			return errors.New("groups list does not accept arguments")
 		}
-		items, err := c.application.Groups(ctx, security.System())
+		items, err := c.application.Groups().List(ctx, security.System())
 		return writeResult(streams.Out, items, err)
 	case "get", "delete", "members", "permissions":
 		flags := newFlagSet("groups "+args[0], streams)
@@ -454,14 +351,14 @@ func (c *groupsCommand) Run(
 		}
 		switch args[0] {
 		case "get":
-			item, err := c.application.Group(
+			item, err := c.application.Groups().Get(
 				ctx,
 				security.System(),
 				groupID,
 			)
 			return writeResult(streams.Out, item, err)
 		case "delete":
-			if err := c.application.DeleteGroup(
+			if err := c.application.Groups().Delete(
 				ctx,
 				security.System(),
 				groupID,
@@ -473,14 +370,14 @@ func (c *groupsCommand) Run(
 				"group_id": groupID,
 			}, nil)
 		case "members":
-			items, err := c.application.GroupMembers(
+			items, err := c.application.Groups().Members(
 				ctx,
 				security.System(),
 				groupID,
 			)
 			return writeResult(streams.Out, items, err)
 		default:
-			items, err := c.application.GroupPermissions(
+			items, err := c.application.Groups().Permissions(
 				ctx,
 				security.System(),
 				groupID,
@@ -514,7 +411,7 @@ func (c *groupsCommand) update(
 	if err != nil {
 		return err
 	}
-	current, err := c.application.Group(ctx, security.System(), id)
+	current, err := c.application.Groups().Get(ctx, security.System(), id)
 	if err != nil {
 		return err
 	}
@@ -529,7 +426,7 @@ func (c *groupsCommand) update(
 	if wasSet(flags, "super") {
 		input.IsSuper = *isSuper
 	}
-	updated, err := c.application.UpdateGroup(
+	updated, err := c.application.Groups().Update(
 		ctx,
 		security.System(),
 		input,
@@ -558,7 +455,7 @@ func (c *groupsCommand) membership(
 		return err
 	}
 	if action == "add-user" {
-		item, err := c.application.AddUserToGroup(
+		item, err := c.application.Groups().AddUser(
 			ctx,
 			security.System(),
 			groupID,
@@ -566,7 +463,7 @@ func (c *groupsCommand) membership(
 		)
 		return writeResult(streams.Out, item, err)
 	}
-	if err := c.application.RemoveUserFromGroup(
+	if err := c.application.Groups().RemoveUser(
 		ctx,
 		security.System(),
 		groupID,
@@ -602,7 +499,7 @@ func (c *groupsCommand) permission(
 		return errors.New("permission code is empty")
 	}
 	if action == "grant" {
-		item, err := c.application.GrantGroupPermission(
+		item, err := c.application.Groups().GrantPermission(
 			ctx,
 			security.System(),
 			groupID,
@@ -610,7 +507,7 @@ func (c *groupsCommand) permission(
 		)
 		return writeResult(streams.Out, item, err)
 	}
-	if err := c.application.RevokeGroupPermission(
+	if err := c.application.Groups().RevokePermission(
 		ctx,
 		security.System(),
 		groupID,
@@ -650,11 +547,11 @@ func (c *permissionsCommand) Run(
 		if len(args) != 1 {
 			return errors.New("permissions list does not accept arguments")
 		}
-		codes, err := c.application.PermissionCodes()
+		codes := c.application.Authorization().Codes()
 		return writeResult(
 			streams.Out,
 			codes,
-			err,
+			nil,
 		)
 	case "guest-list":
 		if len(args) != 1 {
@@ -662,7 +559,7 @@ func (c *permissionsCommand) Run(
 				"permissions guest-list does not accept arguments",
 			)
 		}
-		items, err := c.application.GuestPermissions(
+		items, err := c.application.Authorization().GuestPermissions(
 			ctx,
 			security.System(),
 		)
@@ -678,14 +575,14 @@ func (c *permissionsCommand) Run(
 			return errors.New("permission code is empty")
 		}
 		if args[0] == "guest-grant" {
-			item, err := c.application.GrantGuestPermission(
+			item, err := c.application.Authorization().GrantGuest(
 				ctx,
 				security.System(),
 				code,
 			)
 			return writeResult(streams.Out, item, err)
 		}
-		if err := c.application.RevokeGuestPermission(
+		if err := c.application.Authorization().RevokeGuest(
 			ctx,
 			security.System(),
 			code,

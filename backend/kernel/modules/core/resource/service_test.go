@@ -583,7 +583,7 @@ func newTestService(
 	if err != nil {
 		t.Fatal(err)
 	}
-	profileRuntime, err := factory.Make(
+	blueprint, err := factory.Compile(
 		context.Background(),
 		kernel.Profile{
 			Code: "test",
@@ -615,13 +615,13 @@ func newTestService(
 
 	sites := make(testSites)
 	for _, siteID := range []site.ID{1, 2} {
-		runtime, err := site.NewRuntime(site.Site{
+		runtime, err := site.NewRuntimeFromBlueprint(context.Background(), site.Site{
 			ID:          siteID,
 			ProfileCode: "test",
 			Domain:      fmt.Sprintf("site-%d.example.com", siteID),
 			Locale:      "en-US",
 			Settings:    map[string]any{},
-		}, profileRuntime)
+		}, blueprint)
 		if err != nil {
 			t.Fatal(err)
 		}
