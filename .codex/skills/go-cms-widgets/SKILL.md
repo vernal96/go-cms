@@ -1,6 +1,6 @@
 ---
 name: go-cms-widgets
-description: Use for GO CMS widget architecture and implementation work involving widget definitions, module widget providers, template widget layouts, resource widget bindings, widget rendering, body/sidebar areas, widget views, admin widget editing, drag-and-drop ordering, or public widget API composition. Preserves site-scoped runtimes and declarative project widget customization.
+description: Use for GO CMS widget architecture and implementation work involving widget definitions and references, module widget providers, template widget layouts, resource widget bindings, widget rendering, body/sidebar areas, widget views, admin widget editing, drag-and-drop ordering, or public widget API composition. Preserves site-scoped runtimes and typed declarative project composition.
 ---
 
 # GO CMS Widgets
@@ -15,30 +15,105 @@ The widget system must remain:
 
 - module-owned;
 - site/profile-scoped at runtime;
-- declarative in `backend/internal/`;
+- declarative and strongly typed in `backend/internal/`;
 - independent from concrete infrastructure technologies;
 - composable from template widgets and resource widgets;
-- explicit about presentation settings versus widget business parameters.
+- explicit about presentation settings versus widget business parameters;
+- free from manually written runtime/DB identity strings in project-facing Go declarations.
 
 ## 1. Inspect Before Editing
 
 Before changing widget code, inspect the current implementation of:
 
 - `backend/kernel/modules/core/widget/`;
+- `backend/kernel/modules/core/widgets/`;
 - `backend/kernel/modules/core/template/`;
 - `backend/kernel/modules/core/resource/`;
 - profile/runtime assembly in `backend/kernel/runtime.go`;
-- the owning module runtime and its `widget.Provider` implementation;
+- owning module runtimes and `widget.Provider` implementations;
 - resource persistence and migrations;
-- admin resource metadata/update APIs;
-- `frontend-admin/src/views/ResourceEditView.vue` and reusable dynamic-field components;
-- the public resource/page response renderer.
+- admin resource metadata/widget APIs;
+- `frontend-admin/src/views/ResourceEditView.vue` and resource-widget components;
+- the public resource/page renderer.
 
 Do not redesign from memory when the repository already contains part of the widget pipeline.
+Preserve correct persistence, admin, rendering, and runtime behavior when refining declaration APIs.
 
-Preserve correct existing behavior unless the task explicitly replaces it.
+## 2. Core Rule: Typed Project Declarations, Codes Inside the Framework
 
-## 2. Widget Ownership and Lifetime
+Project/profile/template Go declarations should express objects and relationships, not framework discriminators or compiled identity strings.
+
+Bad project-facing declaration:
+
+```go
+LayoutItem{
+    Kind:         template.ItemWidget,
+    Key:          "content",
+    Widget:       "core_content",
+    Presentation: widget.DefaultPresentation(),
+}
+```
+
+Preferred direction:
+
+```go
+template.Widget{
+    Widget: corewidgets.Content,
+}
+```
+
+With a custom view and params:
+
+```go
+template.Widget{
+    Widget: projectwidgets.Gallery,
+    View:   widgetviews.GallerySlider,
+    Params: map[string]any{
+        "limit": 12,
+    },
+}
+```
+
+Codes are still valid and necessary inside:
+
+- widget/module registries;
+- compiled runtime catalogs;
+- persistence;
+- HTTP APIs;
+- logs/errors;
+- metadata sent to frontend clients.
+
+But `backend/internal/` should not manually reproduce globally-qualified codes such as `core_content` when it can reference a typed exported widget object.
+
+The framework/compiler is responsible for translating a widget reference into its compiled/global code.
+
+## 3. Widget Reference vs Widget Runtime
+
+Do not place a site-scoped runtime widget instance directly into a reusable profile/template declaration.
+
+Separate:
+
+```text
+Widget reference/descriptor
+    reusable, immutable, safe for profile/template declarations
+
+Widget runtime implementation
+    assembled through ModuleRuntime for a concrete site runtime
+    may capture cache/storage/logger/repositories/services
+```
+
+A module/package should export stable widget references for project declarations, for example conceptually:
+
+```go
+corewidgets.Content
+projectwidgets.Gallery
+```
+
+The exact type name (`Ref`, `Reference`, `Descriptor`, etc.) may follow repository style, but it must be a typed immutable value/object rather than a raw global-code string.
+
+The actual module widget implementation must be associated with the same reference during widget catalog compilation. Avoid duplicating identity in several unrelated declarations when a single reference can be the source of truth.
+
+## 4. Widget Ownership and Lifetime
 
 A widget implementation belongs to a module.
 
@@ -46,191 +121,296 @@ A module runtime may expose widgets through the widget provider contract. The fi
 
 Therefore:
 
-- an installed package does not automatically make its widgets available to every site;
+- installed packages do not automatically make widgets available to every site;
 - only widgets from modules enabled by the site's profile are available;
 - widget implementations may capture module-runtime dependencies;
-- widget rendering is request-scoped, but widget definitions/implementations belong to the assembled site/module runtime;
-- never use a mutable global widget registry or global active-site state.
+- widget rendering is request-scoped;
+- final widget runtime availability is site/profile scoped;
+- never use a mutable global widget registry or active-site singleton.
 
-## 3. Widget Definition, Binding, and Rendered Output Are Different Concepts
+## 5. Definition, Reference, Binding, Placement and Rendered Output Are Different
 
 Keep these concepts separate.
 
-### Definition
+### Widget definition
 
 Describes a widget type:
 
-- code;
+- typed identity/reference;
 - owning module;
 - human label;
 - description;
 - configurable fields;
-- optional editor tab metadata;
-- optional summary-field metadata.
+- optional editor tabs;
+- optional summary fields.
 
-The definition is not a concrete widget placed on a resource.
+### Widget reference
 
-### Binding
+An immutable Go value used by templates/profiles/project code to refer to the widget without manually writing its global runtime code.
 
-Describes one concrete resource widget placement:
+### Resource binding
+
+A persisted concrete resource widget instance:
 
 - stable binding ID;
-- widget code;
+- compiled widget code for persistence/runtime lookup;
 - area;
 - position;
-- presentation settings;
-- widget params.
+- presentation;
+- params.
 
-The same widget code may be added multiple times to the same resource. Therefore widget code cannot be used as the identity of a resource widget binding.
+The same widget type may be added multiple times to one resource, so widget code is not binding identity.
+
+### Placement
+
+The composed result of static template widgets and resource widget bindings before rendering.
 
 ### Rendered widget
 
-Represents final API output after template composition, resource insertion, widget instantiation, and rendering.
+The public API result after resolving the site/profile widget runtime and calling the widget implementation.
 
-Do not collapse definition, binding, and rendered output into one struct.
+Do not collapse these concepts into one struct.
 
-## 4. Widget Areas
+## 6. Widget Areas
 
-The MVP has two widget areas:
+The MVP has exactly two areas:
 
 ```text
 body
 sidebar
 ```
 
-Model them as area codes, not as two widget types.
+They are layout areas, not widget types.
 
-A widget remains the same widget when moved from body to sidebar. Moving it changes placement, not widget identity or implementation.
+A widget remains the same widget when moved from body to sidebar.
 
-Use a backend-neutral concept such as:
+Use backend-neutral area codes internally/persistently, but project template declarations should normally express area through the typed `Layout.Body` and `Layout.Sidebar` collections rather than manually adding `Area: "body"` to every static item.
+
+## 7. Template Items Must Be Typed, Not `Kind`-Driven
+
+Do not require project code to set a discriminator such as:
 
 ```go
-type AreaCode string
-
-const (
-    AreaBody    AreaCode = "body"
-    AreaSidebar AreaCode = "sidebar"
-)
+Kind: template.ItemWidget
+Kind: template.ItemResourceSlot
 ```
 
-Do not create separate `BodyWidget` and `SidebarWidget` abstractions.
+This is internal compiler information and should be represented by Go types/interfaces.
 
-## 5. Template Composition
+Preferred conceptual model:
+
+```go
+type Item interface {
+    isTemplateItem()
+}
+
+type Widget struct {
+    Widget widget.Ref
+    View   widget.ViewRef
+    Params map[string]any
+    // optional presentation overrides
+}
+
+type ResourceWidgets struct{}
+```
+
+Then a template can read naturally:
+
+```go
+Layout: template.Layout{
+    Body: []template.Item{
+        template.Widget{Widget: corewidgets.Content},
+        template.ResourceWidgets{},
+    },
+    Sidebar: []template.Item{
+        template.ResourceWidgets{},
+    },
+}
+```
+
+The exact implementation may use interfaces, sealed marker methods, or another type-safe Go pattern, but callers must not need a `Kind` field.
+
+## 8. Static Template Keys Are Framework Concerns by Default
+
+Do not require every static template widget declaration to manually provide a technical `Key` solely for rendering identity.
+
+The template compiler can generate a deterministic identity from stable template structure, for example conceptually:
+
+```text
+template:<template-code>:<area>:<index>
+```
+
+A user-defined key may be added later only if there is a real semantic use case for addressable static template items.
+
+Do not force boilerplate before that use case exists.
+
+## 9. Template Composition
 
 A template may contain:
 
-- static widgets defined by the template;
-- an explicit resource-widget insertion slot;
+- static typed widget declarations;
+- an explicit typed resource-widget insertion slot;
 - more static widgets after the slot.
 
-Example conceptually:
+Example:
 
 ```text
-Template body:
-    static content widget
+Body:
+    core content widget
     RESOURCE_WIDGETS_SLOT
-    static gallery widget
+    gallery widget
 
-Template sidebar:
-    static navigation widget
+Sidebar:
+    navigation widget
     RESOURCE_WIDGETS_SLOT
 ```
 
-During final composition, the resource-widget slot is replaced with the resource widget bindings assigned to that area.
+During composition, the resource slot is replaced by resource widget bindings assigned to that area.
 
-The result preserves template order.
+Preserve order. Do not blindly append resource widgets after template widgets.
 
-Do not append all resource widgets blindly after all template widgets.
+For MVP, allow at most one resource-widget slot per area.
 
-For MVP, keep at most one resource-widget slot per area unless the architecture is explicitly extended to support named multiple slots. If multiple slots are introduced later, bindings will need an explicit slot identity.
+## 10. Resource Widget Tab Availability
 
-## 6. Resource Widget Tab Availability
+Show the admin `Widgets` tab only when the selected template contains at least one resource-widget slot.
 
-The admin resource editor must show the `Widgets` tab only when the selected resource template contains at least one resource-widget slot.
-
-The backend metadata API must provide enough template metadata for the frontend to determine:
+Backend metadata must expose:
 
 - whether resource widgets are supported;
 - which areas accept resource widgets.
 
-Do not infer this in the frontend from hard-coded template names.
+Do not hard-code this in the frontend by template name.
 
-## 7. Presentation Is Not Widget Params
+## 11. Views Are Typed Profile Declarations
 
-Widget-specific business configuration belongs to `params` and is validated against widget fields.
+A custom visual view is a real project/profile declaration and should be referenceable as a Go object.
 
-Common visual/layout settings do not belong to widget params.
+Bad:
 
-Keep presentation data separate, including at minimum:
+```go
+WidgetViews: []widget.ViewDeclaration{
+    {Widget: "core_content", Code: "article", Label: "Статья"},
+}
+```
+
+Preferred direction:
+
+```go
+var ContentArticle = widget.NewView(
+    corewidgets.Content,
+    "article",
+    "Статья",
+)
+```
+
+Profile:
+
+```go
+WidgetViews: []widget.View{
+    widgetviews.ContentArticle,
+}
+```
+
+Template:
+
+```go
+template.Widget{
+    Widget: corewidgets.Content,
+    View:   widgetviews.ContentArticle,
+}
+```
+
+Exact constructors/type names may differ, but the important rules are:
+
+- a custom view object carries/knows which widget it belongs to;
+- templates reference the view object directly;
+- the compiler validates that the view belongs to the selected widget;
+- profile declarations contain view objects, not repeated widget-code/view-code string joins;
+- runtime/DB/API may still serialize the compiled view code.
+
+Use a sibling package such as `internal/profiles/<profile>/widgetviews` when needed to avoid Go import cycles between `profile.go` and template packages.
+
+## 12. Default View Is Fully Implicit
+
+Every widget always has a built-in default visual view.
+
+`default` must not be explicitly declared in:
+
+- module definitions;
+- profile views;
+- template declarations;
+- project declarations.
+
+A template using the default view should simply omit `View`:
+
+```go
+template.Widget{
+    Widget: corewidgets.Content,
+}
+```
+
+The admin UI adds `Default` automatically.
+
+The public API normalizes the default view to:
+
+```json
+"view": "default"
+```
+
+No project code should need `widget.DefaultPresentation()` merely to get default values.
+
+## 13. Presentation Is Not Widget Params
+
+Widget-specific business configuration belongs to `Params` and is validated through widget fields.
+
+Common visual/layout settings are separate.
+
+Resource widget presentation supports at least:
 
 - view;
 - columns;
 - margin top;
 - margin bottom;
-- enabled state.
+- enabled.
 
-Use backend-neutral names.
-
-Prefer:
+Use backend-neutral names and ranges:
 
 ```text
-columns = 1..12
-margin_top = 0..3
-margin_bottom = 0..3
+columns: 1..12
+margin_top: 0..3
+margin_bottom: 0..3
 ```
 
-Do not name backend fields after Bootstrap/Tailwind classes such as `bootstrap_width`, `col-12`, `mt-2`, or `mb-3`.
+Do not use Bootstrap/Tailwind-specific backend names.
 
-Frontend technology may change independently from backend storage/API contracts.
+## 14. Static Template Presentation Must Not Require Default Boilerplate
 
-## 8. Default Widget View Is Implicit
+A static template widget should not need:
 
-Every widget always has a built-in default visual view.
+```go
+Presentation: widget.DefaultPresentation()
+```
 
-`default` must not need to be declared by a module, project, profile, or site.
+The template/compiler layer must normalize omitted presentation values.
 
-Rules:
-
-- project/profile declarations contain only additional custom views;
-- the admin UI always presents `Default` automatically;
-- an empty/internal default view value may be stored as empty string or null according to repository conventions;
-- the public API should normalize the default view to the string `default` so frontend consumers do not need backend-specific fallback rules;
-- project-defined views must be validated against the widget they belong to.
-
-Do not require declarations such as a manually registered `default` view.
-
-## 9. Project-Level Widget Views
-
-`backend/internal/` may declaratively add visual view codes for widgets.
-
-A view declaration is only backend metadata telling the frontend which visual template/variant to use. The backend does not render the frontend template.
-
-A view declaration should contain only unique project information such as:
-
-- widget code;
-- view code;
-- human label where useful.
-
-Reusable widget/profile machinery must own:
-
-- collection;
-- validation;
-- merging;
-- duplicate detection;
-- runtime lookup;
-- metadata exposure.
-
-Follow extension precedence when overrides are supported:
+Conceptually, omission means:
 
 ```text
-core < package < project < site
+view = default
+columns = 12
+margin top = 0
+margin bottom = 0
+enabled = true
 ```
 
-Do not put generic registration loops into `backend/internal/`.
+If Go zero values make a field ambiguous (especially `bool`), use a template-specific override type, pointers/options, or another clear representation rather than forcing callers to fill all defaults manually.
 
-## 10. Widget Module Context and Dependencies
+Do not over-generalize resource-binding persistence structs as project template declaration structs when their zero-value semantics differ.
 
-Widgets may need module infrastructure and services such as:
+## 15. Widget Module Context and Dependencies
+
+Widgets may need module infrastructure/services such as:
 
 - semantic cache stores;
 - filesystems/storage;
@@ -239,7 +419,7 @@ Widgets may need module infrastructure and services such as:
 - repositories;
 - module services.
 
-These dependencies should be resolved while building the module runtime and captured by the widget implementation through constructors/composition.
+Resolve those dependencies while building the module runtime and capture only the dependencies needed by each widget implementation.
 
 Conceptually:
 
@@ -250,88 +430,53 @@ ModuleContext
             cache / filesystem / logger / repositories / services
 ```
 
-Do not pass the complete kernel `ModuleContext` into every `Render` call as a service locator.
+Do not pass the entire kernel `ModuleContext` into each `Render()` call as an unrestricted service locator.
 
-The module build step already knows the module dependencies. Capture only the dependencies the widget needs.
+## 16. Render Context
 
-This keeps dependencies explicit and prevents unrestricted runtime service lookup.
+`Render()` receives request/resource context, not infrastructure wiring.
 
-## 11. Render Context
+Use `context.Context` plus neutral snapshots for the current site and resource.
 
-Widget render input should contain request/resource context, not infrastructure wiring.
+Do not expose persistence implementation structs directly.
+Extend snapshots only when widgets actually need additional resource/site data.
 
-At minimum widgets may need neutral snapshots for:
+## 17. Widget Codes and Module Ownership
 
-- current site;
-- current resource.
+Codes remain internal identity primitives.
 
-These snapshots must live in a package that does not create dependency cycles and must not expose persistence implementation structs directly.
+Module-local widget identity is compiled/qualified by reusable widget catalog machinery.
 
-The resource snapshot should be extended only with data actually needed by widgets.
+The compiled definition/catalog must retain explicit owning-module metadata.
+Do not recover ownership by parsing the global widget code.
 
-Do not pass repository models directly just because they are convenient.
+Project templates should use exported typed widget references; persistence/API may use compiled codes.
 
-Use `context.Context` for request cancellation/deadlines and request-scoped context propagation.
+## 18. Module Human Metadata
 
-## 12. Widget Codes and Module Ownership
+Admin widget picker grouping requires human-readable module metadata.
 
-Widget declaration codes are module-local before compilation and profile catalog codes are qualified globally according to the existing catalog convention.
+Prefer a small optional descriptor/provider contract if the minimal module interface does not already expose it.
 
-The compiled widget definition/catalog must retain explicit owning-module metadata.
+Do not make project code repeat module labels on every widget.
 
-Do not recover the owner later by parsing the qualified widget code string.
+## 19. Widget Fields, Editor Tabs and Summary Metadata
 
-The admin API needs explicit module ownership to group available widgets by module.
+`field.Definition` remains the source of truth for widget params.
 
-## 13. Module Human Metadata
+Editor tabs reference field codes and are editor-layout metadata only.
+Validate:
 
-The widget picker should group widgets by human-readable module names.
-
-Do not overload the minimal required `kernel.Module` interface solely for admin presentation if module metadata is optional.
-
-Prefer a small optional descriptor/provider contract for module label/description if the repository does not already provide equivalent metadata.
-
-Widget-producing modules should expose enough metadata for a useful admin picker.
-
-## 14. Widget Field Schema and Editor Tabs
-
-`field.Definition` remains the source of truth for widget parameter type, validation, defaults, and options.
-
-Editor tabs are presentation metadata only.
-
-A widget may optionally declare editor tabs containing references to field codes. For example:
-
-```text
-Content
-Design
-Filters
-```
-
-Do not duplicate field definitions inside tabs.
-
-Validation rules should catch:
-
-- duplicate tab codes;
+- duplicate tabs;
 - unknown field references;
-- the same field assigned inconsistently when duplicates are not intended.
+- invalid duplicate assignments.
 
-If no custom editor tabs are declared, all widget-specific fields may be displayed in one default widget-settings tab.
+Summary fields tell widget cards which params to show in collapsed form.
+Do not make the frontend guess from map iteration.
 
-## 15. Widget Summary Metadata
+## 20. Resource Widget Persistence
 
-Widget cards in the resource editor may show selected short parameter values.
-
-The widget definition may declare `summary fields` as field codes.
-
-The widget author controls which params are meaningful in the collapsed card.
-
-Do not let the frontend guess arbitrary fields from map iteration order.
-
-## 16. Resource Widget Persistence
-
-A resource widget binding needs a stable database identity independent from its position.
-
-Persistence must support at least:
+Persist stable resource widget bindings with at least:
 
 ```text
 id
@@ -349,132 +494,76 @@ params
 
 Recommended invariants:
 
-- stable primary key `id`;
+- stable primary key ID;
 - resource FK with cascade delete;
 - valid area;
-- non-negative position;
-- columns in 1..12;
-- margins in 0..3;
+- position >= 0;
+- columns 1..12;
+- margins 0..3;
 - params is a JSON object;
-- deterministic ordering within each area;
-- unique `(resource_id, area, position)` or an equivalent repository-level invariant.
+- deterministic independent ordering per area;
+- unique `(resource_id, area, position)` or equivalent repository invariant.
 
-Do not use `(resource_id, position)` as the only identity because moving/reordering widgets would change their identity and positions are independent between body/sidebar.
+Reordering/moving widgets must be transactional.
 
-Reordering multiple widgets must be transactional.
+## 21. Admin Mutations and Permissions
 
-## 17. Resource Widget Mutations
+Use stable binding IDs for add/edit/delete/reorder operations.
 
-Prefer widget-specific resource endpoints instead of repeatedly replacing the entire resource document for every drag/edit operation.
+Prefer dedicated resource-widget mutation endpoints rather than rewriting the whole resource during drag operations.
 
-Conceptually:
+Reuse the existing resource-update permission model unless a separate permission model is explicitly requested.
 
-```text
-POST   /resources/{resource}/widgets
-PATCH  /resources/{resource}/widgets/{widgetID}
-DELETE /resources/{resource}/widgets/{widgetID}
-PUT    /resources/{resource}/widgets/order
-```
+Validate against the final site/profile runtime:
 
-Exact route placement should follow the existing admin API conventions.
+- widget availability;
+- selected template resource slots/areas;
+- params;
+- view belongs to widget and is available in the profile;
+- presentation ranges.
 
-For MVP, reuse the existing resource update/edit permission for widget mutations unless a task explicitly introduces finer permissions.
+## 22. Admin Metadata
 
-Every mutation must still validate:
+Expose enough metadata for the editor to render widgets without hard-coded module/widget knowledge:
 
-- site/resource scope;
-- widget availability in the current profile runtime;
-- template resource-widget slot availability;
-- area allowed by the selected template;
-- widget params;
-- presentation ranges;
-- selected custom view.
+For templates:
 
-## 18. Widget Reordering
+- resource-widget support;
+- supported areas.
 
-The admin UI must support:
+For widgets:
 
-- ordering widgets inside body;
-- ordering widgets inside sidebar;
-- moving a widget from body to sidebar and back.
+- compiled public code;
+- module code/label/description;
+- label/description;
+- fields;
+- editor tabs;
+- summary fields;
+- available custom views.
 
-A reorder request should send stable widget IDs plus final area/position rather than relying on widget codes.
+Only expose widgets available in the current site/profile runtime.
 
-Example conceptual payload:
+## 23. Admin UI
 
-```json
-[
-  {"id": 41, "area": "body", "position": 0},
-  {"id": 17, "area": "body", "position": 1},
-  {"id": 22, "area": "sidebar", "position": 0}
-]
-```
+The resource widget editor should be extracted from the main resource view into dedicated components.
 
-Backend applies and validates the final ordering transactionally.
+The Widgets tab contains body/sidebar sections with add buttons and draggable cards.
 
-## 19. Admin Widget Editor
+Support:
 
-The resource editor widget tab should be implemented as reusable widget-specific components rather than adding all logic directly to the already-large resource edit view.
+- reorder within area;
+- move between body/sidebar;
+- add/edit/delete;
+- search/group picker by module;
+- dynamic widget fields;
+- common presentation settings;
+- implicit `Default` view option.
 
-Use Element Plus for UI controls and the existing dynamic-field system for widget fields where possible.
+Use Element Plus for UI controls. Do not introduce another UI framework.
 
-The widget tab contains two sections:
+## 24. Public API
 
-```text
-Body
-    + Add widget
-    draggable widget cards
-
-Sidebar
-    + Add widget
-    draggable widget cards
-```
-
-### Widget picker
-
-The add-widget dialog should:
-
-- show only widgets available in the current profile/site runtime;
-- group widgets by module;
-- hide modules that expose no available widgets;
-- provide search;
-- show widget label and description;
-- allow selection before opening settings.
-
-### Widget settings
-
-Keep common settings separate from widget-specific params.
-
-Common settings include:
-
-- view select (`Default` always implicit plus project/profile views);
-- width/columns 1..12;
-- margin top 0..3;
-- margin bottom 0..3;
-- enabled state.
-
-Use Element Plus ready controls. A 1..12 slider with stops is suitable for columns. For the small discrete margin range, use an appropriate discrete Element Plus control rather than encoding CSS classes.
-
-Widget-specific fields use the current dynamic field components and optional editor-tab metadata.
-
-### Widget card
-
-Collapsed cards should show:
-
-- widget label;
-- description where useful;
-- selected summary params;
-- current presentation summary where useful;
-- edit/delete/expand controls;
-- drag handle.
-
-Do not use widget code as the only user-facing title.
-
-## 20. Public API Shape
-
-The public API must return body and sidebar widgets separately.
-
-Conceptually:
+Return body and sidebar separately:
 
 ```json
 {
@@ -485,136 +574,124 @@ Conceptually:
 }
 ```
 
-Do not return a single mixed array that requires frontend filtering by area.
+Rendered items should include frontend-useful identity/presentation metadata such as:
 
-Each rendered widget should contain enough presentation metadata for the frontend, including:
-
-- code;
-- view, normalized to `default` when no custom view is selected;
+- key;
+- compiled widget code;
+- normalized view;
 - columns;
 - margins;
-- rendered data;
-- stable frontend key/identity where needed.
+- data/error.
 
-Resource binding IDs may be used for dynamic resource widget identity. Static template widgets need their own deterministic template item key if duplicate widget codes can occur.
+Resource binding IDs may contribute to public keys.
+Static template widget keys should be generated deterministically by the compiler/composer unless semantic custom keys become a real requirement.
 
-Do not assume widget code is unique within a rendered page.
+Do not leak raw widget params into public output unless the widget explicitly renders them as data.
 
-## 21. Rendering and Error Isolation
+## 25. Rendering Pipeline
 
-Final rendering pipeline is conceptually:
+Preserve this shape:
 
 ```text
-selected template
-    + resource widget bindings
-    -> compose body/sidebar placements
-    -> resolve widget runtime from current SiteRuntime/ProfileRuntime catalog
-    -> validate params / create instance
-    -> render with site/resource request context
-    -> public body/sidebar response
+resolve SiteRuntime
+    -> resolve resource/template
+    -> compose typed template items + resource bindings
+    -> body/sidebar placements
+    -> resolve widget runtime from site/profile catalog
+    -> validate/normalize params and presentation
+    -> instantiate widget
+    -> Render(ctx, SiteSnapshot + ResourceSnapshot)
+    -> body/sidebar public API
 ```
 
-Preserve per-widget error isolation where already supported.
+Preserve per-widget failure isolation where currently implemented.
+A broken widget should not unnecessarily fail the entire page.
 
-One broken widget should not automatically make the whole page unavailable unless the task explicitly requires strict failure behavior.
+Disabled resource widgets stay persisted/editable but are omitted from public rendering.
 
-Errors must be logged with useful widget/resource/site context without exposing internal details in the public API.
+## 26. Core Content Widget
 
-Disabled resource widgets remain stored/editable in admin but are omitted from public rendering.
-
-## 22. Core Content Widget
-
-The core module should provide a minimal content widget used as the simplest reference implementation.
+The core module's content widget is the canonical minimal widget.
 
 Requirements:
 
-- local widget code: `content` unless current conventions require another local code;
-- final catalog code follows existing module qualification rules;
-- human label and description are required;
-- no configurable fields;
-- no params are required;
-- no custom view declaration is required because default is implicit;
-- render result exposes the current resource content;
-- it obtains resource data from render input rather than querying persistence again;
-- it must be provided by the core module runtime through the normal widget provider mechanism;
-- it must work both as a static template widget and, if allowed by product rules, as a resource-added widget without special-case rendering code.
+- module-local identity is `content`;
+- project declarations access it through an exported typed reference such as `corewidgets.Content`;
+- no widget-specific fields;
+- no required params;
+- no explicit default view declaration;
+- no repository lookup during render;
+- output comes from `RenderInput.Resource.Content`;
+- it is provided by the normal core module runtime/provider path;
+- it works as a static template widget without special HTTP handling.
 
-This widget is the canonical smoke-test for the widget pipeline.
+Do not create a duplicate content widget.
 
-## 23. Template Validation Timing
+## 27. Declarative Internal Rule
 
-Current widget implementations are contributed by assembled module runtimes, while template declarations may exist earlier as profile blueprint data.
+`backend/internal/` may declare:
 
-Do not introduce an invalid dependency or global catalog merely to validate template widgets too early.
+- templates;
+- typed widget references;
+- project-owned widgets;
+- custom view objects;
+- widget params/presentation overrides;
+- profile view lists.
 
-If static template widget references cannot be fully validated during profile blueprint compilation, perform final widget-reference validation when the site/profile runtime widget catalog is available.
+It must not manually:
 
-Keep syntactic template validation earlier where possible and runtime-resolution validation at the correct assembly stage.
-
-## 24. Declarative Project Rule for Widgets
-
-Project-level widget customization under `backend/internal/` should contain only declarations unique to the project, such as:
-
-- template widget placements;
-- resource-widget slots;
-- additional view codes/labels;
-- project-owned widget implementations when genuinely project-specific.
-
-Project code must not manually:
-
-- collect all module widgets;
-- qualify codes;
-- build field schemas for every widget;
-- merge profile catalogs;
-- validate generic widget ordering;
+- build widget catalogs;
+- qualify global widget codes;
+- set framework item discriminators;
+- generate technical placement keys;
+- register implicit default views;
+- collect module widget providers;
 - render widgets;
-- mount generic widget admin routes;
-- duplicate the same registration lifecycle for every widget/view.
+- merge template/resource widgets;
+- duplicate generic validation/registration loops.
 
-Reusable widget/runtime/admin machinery owns those mechanics.
+If adding the next widget/template/view requires copying framework mechanics, improve the reusable declaration/compiler API instead.
 
-## 25. Avoid Premature Features
+## 28. Do Not Overengineer
 
-Do not add without a concrete requirement:
+Do not introduce unless explicitly requested:
 
-- arbitrary nested widget trees;
-- recursive containers/page-builder blocks;
-- multiple named resource slots per area;
-- global cross-site widget registry;
+- recursive/nested widget trees;
+- arbitrary page-builder containers;
+- multiple named resource slots;
+- global widget registries;
 - server-side frontend template rendering;
-- generic DI/service locator access from widget render;
-- widget output caching at framework level;
-- widget-specific permission system separate from resource editing;
-- compatibility layers for abandoned widget shapes.
+- DI containers;
+- unrestricted render-time ModuleContext access;
+- generic rendered-widget caching;
+- separate widget permissions;
+- legacy compatibility wrappers for superseded project declaration APIs.
 
-Keep the MVP focused on body/sidebar composition and predictable extension points.
+Implement the intended API directly.
 
-## 26. Tests
+## 29. Tests
 
-For widget changes, add focused tests for the affected contracts.
+Cover at least:
 
-Important cases include:
+- exported widget reference resolves to the correct module/runtime widget;
+- project templates compile without manually specified global widget code;
+- typed template widget/resource-slot items compose correctly;
+- no caller-supplied `Kind` is required;
+- generated static placement keys are deterministic;
+- default view is implicit;
+- custom view objects are registered by profile and validated against their widget;
+- template referencing a view belonging to another widget is rejected;
+- static presentation omission normalizes to defaults;
+- zero-field content widget accepts empty params and renders resource content;
+- profile runtime exposes widgets only from enabled modules;
+- body/sidebar composition and resource slots work independently;
+- duplicate resource slots are rejected;
+- stable resource binding identity survives reorder/move;
+- disabled resource widget omission;
+- per-widget render failure isolation;
+- persistence/admin/public API behavior remains correct.
 
-- widget catalog includes only current profile modules;
-- global widget codes are deterministic and duplicate-safe;
-- compiled definition retains owning module metadata;
-- params validation works;
-- zero-field widget accepts empty params;
-- module-runtime dependencies remain available to widget implementation;
-- template composition inserts resource widgets exactly at the slot;
-- body/sidebar ordering is independent;
-- cross-area moves produce correct final ordering;
-- disabled widgets are not publicly rendered;
-- default view is implicit and public API normalizes it to `default`;
-- invalid custom view is rejected;
-- invalid area/presentation values are rejected;
-- resource widget binding identity survives reorder/move;
-- one failed widget does not break unrelated rendered widgets where error isolation is expected;
-- core content widget returns resource content.
-
-Add repository/integration tests for persistence and admin mutation behavior when those layers change.
-
-## 27. Validation
+## 30. Validation
 
 For Go changes, run from `backend/` when practical:
 
@@ -625,46 +702,22 @@ go vet ./...
 go build ./...
 ```
 
-For admin frontend changes, use the repository's existing package manager/scripts and run the relevant typecheck/lint/build commands that are actually configured in `frontend-admin/package.json`.
+For frontend changes, inspect `frontend-admin/package.json` and run the configured typecheck/lint/test/build commands that apply.
 
-Do not claim successful validation unless the commands were actually run successfully.
+Never claim a command succeeded unless it actually ran successfully.
 
-## 28. Final Review Checklist
+## 31. Final Review Checklist
 
-Before finishing widget work, verify:
+Before finishing, verify:
 
-### Runtime
-
-- Are widgets still site/profile-scoped?
-- Are only enabled profile modules contributing widgets?
-- Did any mutable global registry appear?
-- Are module infrastructure dependencies captured during module runtime build rather than fetched through a render-time service locator?
-
-### Model
-
-- Are Definition, Binding, and RenderedWidget separate?
-- Does every resource binding have a stable ID?
-- Are body/sidebar areas explicit?
-- Are presentation settings separate from params?
-- Is default view implicit?
-
-### Template composition
-
-- Are resource widgets inserted at the explicit template slot rather than appended blindly?
-- Does final body/sidebar ordering remain deterministic?
-- Is the Widgets admin tab driven by template slot metadata?
-
-### Admin/API
-
-- Does the picker show only current profile widgets and group them by owning module?
-- Are human labels used instead of raw codes where appropriate?
-- Can cards reorder inside and across body/sidebar?
-- Are public body/sidebar arrays separate?
-- Is `default` normalized for frontend output?
-
-### Architecture
-
-- Is project/internal still declarative?
-- Did kernel avoid concrete cache/storage/database technology knowledge?
-- Did widget rendering avoid persistence model coupling?
-- Did implementation avoid unrelated refactors and compatibility code?
+- Are project template declarations free from raw global widget-code strings?
+- Are template items represented by types rather than manually assigned `Kind` values?
+- Are technical static keys generated by reusable machinery?
+- Can a template reference an exported widget object directly?
+- Can it reference a profile-declared custom view object directly?
+- Is `default` still implicit everywhere?
+- Are runtime/DB/API codes still available where identity/serialization requires them?
+- Are widget runtime dependencies still resolved through the owning ModuleRuntime?
+- Is site/profile-scoped widget availability preserved?
+- Did the change preserve existing admin/persistence/rendering functionality?
+- Did project/internal become simpler rather than more framework-aware?
