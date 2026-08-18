@@ -57,7 +57,10 @@ func buildProfileRuntime(
 	if err != nil {
 		return nil, err
 	}
-	return blueprint.Build(ctx, kernel.RuntimeScope{SiteID: "test"})
+	return blueprint.Build(
+		ctx,
+		kernel.NewRuntimeScope("test", "", "", nil),
+	)
 }
 
 func TestProfileRuntimeListsModuleRuntimesInProfileOrder(t *testing.T) {
@@ -87,6 +90,72 @@ func TestProfileRuntimeListsModuleRuntimesInProfileOrder(t *testing.T) {
 	modules[0] = nil
 	if runtime.Modules()[0] == nil {
 		t.Fatal("module runtime slice shares caller memory")
+	}
+}
+
+func TestProfileRuntimePassesImmutableSiteScopeToEveryModuleBuild(t *testing.T) {
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		testRuntimeServices(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := &scopeAwareModule{}
+	blueprint, err := factory.Compile(context.Background(), kernel.Profile{
+		Code:    "scoped",
+		Modules: []kernel.ProfileModule{{Module: module}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSettings := map[string]any{
+		"theme": "light",
+		"roles": []string{"author", "editor"},
+	}
+	firstScope := kernel.NewRuntimeScope(
+		"1",
+		"first.example.com",
+		"en-US",
+		firstSettings,
+	)
+	firstSettings["theme"] = "changed by caller"
+	firstSettings["roles"].([]string)[0] = "changed by caller"
+	if _, err := blueprint.Build(context.Background(), firstScope); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blueprint.Build(
+		context.Background(),
+		kernel.NewRuntimeScope(
+			"2",
+			"second.example.com",
+			"ru-RU",
+			map[string]any{
+				"theme": "dark",
+				"roles": []string{"admin"},
+			},
+		),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(module.scopes) != 2 {
+		t.Fatalf("module scope count = %d", len(module.scopes))
+	}
+	first := module.scopes[0]
+	second := module.scopes[1]
+	if first.SiteID() != "1" || first.Domain() != "first.example.com" ||
+		first.Locale() != "en-US" || second.SiteID() != "2" ||
+		second.Domain() != "second.example.com" || second.Locale() != "ru-RU" {
+		t.Fatalf("module scopes = %#v, %#v", first, second)
+	}
+	if first.Settings()["theme"] != "light" ||
+		first.Settings()["roles"].([]string)[0] != "author" ||
+		second.Settings()["theme"] != "dark" {
+		t.Fatalf(
+			"module scope settings = %#v, %#v",
+			first.Settings(),
+			second.Settings(),
+		)
 	}
 }
 
@@ -265,6 +334,24 @@ func (undeclaredDependencyModule) Build(
 	return registryRuntime{code: "undeclared"}, err
 }
 
+type dependencyValidationModule struct {
+	code         kernel.ModuleCode
+	dependencies []kernel.ModuleCode
+}
+
+func (m dependencyValidationModule) Code() kernel.ModuleCode { return m.code }
+
+func (m dependencyValidationModule) Dependencies() []kernel.ModuleCode {
+	return append([]kernel.ModuleCode(nil), m.dependencies...)
+}
+
+func (m dependencyValidationModule) Build(
+	context.Context,
+	kernel.ModuleContext,
+) (kernel.ModuleRuntime, error) {
+	return registryRuntime{code: m.code}, nil
+}
+
 type cacheAwareModule struct{}
 
 type infrastructureAwareModule struct {
@@ -274,6 +361,29 @@ type infrastructureAwareModule struct {
 
 type loggerAwareModule struct {
 	code kernel.ModuleCode
+}
+
+type scopeAwareModule struct {
+	scopes []kernel.RuntimeScope
+}
+
+func (*scopeAwareModule) Code() kernel.ModuleCode { return "scope-aware" }
+
+func (m *scopeAwareModule) Build(
+	_ context.Context,
+	ctx kernel.ModuleContext,
+) (kernel.ModuleRuntime, error) {
+	scope := ctx.Scope()
+	settings := scope.Settings()
+	settings["theme"] = "mutated"
+	if roles, ok := settings["roles"].([]string); ok && len(roles) > 0 {
+		roles[0] = "mutated"
+	}
+	if current := ctx.Scope().Settings(); current["theme"] == "mutated" {
+		return nil, errors.New("module scope settings share mutable state")
+	}
+	m.scopes = append(m.scopes, ctx.Scope())
+	return registryRuntime{code: m.Code()}, nil
 }
 
 func (*infrastructureAwareModule) Code() kernel.ModuleCode {
@@ -501,6 +611,32 @@ func TestProfileRuntimeRejectsUndeclaredAndMisorderedDependencies(t *testing.T) 
 	})
 	if err == nil || !strings.Contains(err.Error(), "declared earlier") {
 		t.Fatalf("misordered dependency error = %v", err)
+	}
+
+	_, err = factory.Compile(context.Background(), kernel.Profile{
+		Code: "self-dependent",
+		Modules: []kernel.ProfileModule{{Module: dependencyValidationModule{
+			code: "self", dependencies: []kernel.ModuleCode{"self"},
+		}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "declares itself") {
+		t.Fatalf("self dependency error = %v", err)
+	}
+
+	_, err = factory.Compile(context.Background(), kernel.Profile{
+		Code: "duplicate-dependency",
+		Modules: []kernel.ProfileModule{
+			{Module: registryModule{code: "dependency"}},
+			{Module: dependencyValidationModule{
+				code: "consumer",
+				dependencies: []kernel.ModuleCode{
+					"dependency", "dependency",
+				},
+			}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "more than once") {
+		t.Fatalf("duplicate dependency error = %v", err)
 	}
 }
 

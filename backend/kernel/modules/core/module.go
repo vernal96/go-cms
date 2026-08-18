@@ -151,16 +151,18 @@ func (m Module) Build(
 					"core repository cache binding is unavailable",
 				)
 			}
-			database = newCachedDatabase(
-				database,
-				store,
-				config.RepositoryCacheTTL,
-			)
 			descriptor = &RepositoryCacheDescriptor{
 				Code:      binding.Code,
 				Namespace: binding.Namespace,
 				TTL:       config.RepositoryCacheTTL,
 			}
+			m.services.cachePolicy.register(*descriptor, store)
+			database = newCachedDatabase(
+				database,
+				store,
+				config.RepositoryCacheTTL,
+				m.services.cachePolicy,
+			)
 		}
 	}
 

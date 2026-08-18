@@ -32,18 +32,21 @@ func newCachedDatabase(
 	database Database,
 	store cache.Store,
 	ttl time.Duration,
+	policy *repositoryCachePolicy,
 ) Database {
 	return &cachedDatabase{
 		Database: database,
 		sites: &cachedSiteRepository{
-			base:  database.Sites(),
-			store: store,
-			ttl:   ttl,
+			base:   database.Sites(),
+			store:  store,
+			ttl:    ttl,
+			policy: policy,
 		},
 		resources: &cachedResourceRepository{
-			base:  database.Resources(),
-			store: store,
-			ttl:   ttl,
+			base:   database.Resources(),
+			store:  store,
+			ttl:    ttl,
+			policy: policy,
 		},
 	}
 }
@@ -57,35 +60,38 @@ func (d *cachedDatabase) Resources() resource.Repository {
 }
 
 type cachedSiteRepository struct {
-	base  site.Repository
-	store cache.Store
-	ttl   time.Duration
+	base   site.Repository
+	store  cache.Store
+	ttl    time.Duration
+	policy *repositoryCachePolicy
 }
 
 func (r *cachedSiteRepository) List(
 	ctx context.Context,
 ) ([]site.Site, error) {
-	if result, ok := cacheRead[[]site.Site](
-		ctx,
-		r.store,
-		sitesListCacheKey,
-	); ok {
-		return result, nil
-	}
+	return withRepositoryCacheRead(r.policy, func() ([]site.Site, error) {
+		if result, ok := cacheRead[[]site.Site](
+			ctx,
+			r.store,
+			sitesListCacheKey,
+		); ok {
+			return result, nil
+		}
 
-	result, err := r.base.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	cacheWrite(
-		ctx,
-		r.store,
-		sitesListCacheKey,
-		result,
-		r.ttl,
-		[]cache.Tag{sitesTag},
-	)
-	return result, nil
+		result, err := r.base.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		cacheWrite(
+			ctx,
+			r.store,
+			sitesListCacheKey,
+			result,
+			r.ttl,
+			[]cache.Tag{sitesTag},
+		)
+		return result, nil
+	})
 }
 
 func (r *cachedSiteRepository) FindByID(
@@ -145,7 +151,6 @@ func (r *cachedSiteRepository) Create(
 	if err != nil {
 		return site.Site{}, err
 	}
-	invalidateTags(ctx, r.store, sitesTag, siteTag(result.ID))
 	return result, nil
 }
 
@@ -158,12 +163,6 @@ func (r *cachedSiteRepository) Update(
 	if err != nil {
 		return site.Site{}, err
 	}
-	invalidateTags(
-		ctx,
-		r.store,
-		sitesTag,
-		siteTag(result.ID),
-	)
 	return result, nil
 }
 
@@ -178,14 +177,14 @@ func (r *cachedSiteRepository) Delete(
 	if err := management.Delete(ctx, id); err != nil {
 		return err
 	}
-	invalidateTags(ctx, r.store, sitesTag, siteTag(id))
 	return nil
 }
 
 type cachedResourceRepository struct {
-	base  resource.Repository
-	store cache.Store
-	ttl   time.Duration
+	base   resource.Repository
+	store  cache.Store
+	ttl    time.Duration
+	policy *repositoryCachePolicy
 }
 
 func (r *cachedResourceRepository) Create(
@@ -198,12 +197,6 @@ func (r *cachedResourceRepository) Create(
 	if err != nil {
 		return resource.Resource{}, err
 	}
-	invalidateTags(
-		ctx,
-		r.store,
-		siteTag(result.SiteID),
-		resourceTag(result.ID),
-	)
 	return result, nil
 }
 
@@ -211,27 +204,29 @@ func (r *cachedResourceRepository) ByID(
 	ctx context.Context,
 	id resource.ID,
 ) (resource.Resource, error) {
-	key := fmt.Sprintf("core:resource:id:v2:%d", id)
-	if result, ok := cacheRead[resource.Resource](
-		ctx,
-		r.store,
-		key,
-	); ok {
+	return withRepositoryCacheRead(r.policy, func() (resource.Resource, error) {
+		key := fmt.Sprintf("core:resource:id:v2:%d", id)
+		if result, ok := cacheRead[resource.Resource](
+			ctx,
+			r.store,
+			key,
+		); ok {
+			return result, nil
+		}
+		result, err := r.base.ByID(ctx, id)
+		if err != nil {
+			return resource.Resource{}, err
+		}
+		cacheWrite(
+			ctx,
+			r.store,
+			key,
+			result,
+			r.ttl,
+			resourceTags(result),
+		)
 		return result, nil
-	}
-	result, err := r.base.ByID(ctx, id)
-	if err != nil {
-		return resource.Resource{}, err
-	}
-	cacheWrite(
-		ctx,
-		r.store,
-		key,
-		result,
-		r.ttl,
-		resourceTags(result),
-	)
-	return result, nil
+	})
 }
 
 func (r *cachedResourceRepository) ByPath(
@@ -239,59 +234,63 @@ func (r *cachedResourceRepository) ByPath(
 	siteID site.ID,
 	pathValue string,
 ) (resource.Resource, error) {
-	sum := sha256.Sum256([]byte(pathValue))
-	key := fmt.Sprintf(
-		"core:resource:path:v2:%d:%s",
-		siteID,
-		hex.EncodeToString(sum[:]),
-	)
-	if result, ok := cacheRead[resource.Resource](
-		ctx,
-		r.store,
-		key,
-	); ok {
+	return withRepositoryCacheRead(r.policy, func() (resource.Resource, error) {
+		sum := sha256.Sum256([]byte(pathValue))
+		key := fmt.Sprintf(
+			"core:resource:path:v2:%d:%s",
+			siteID,
+			hex.EncodeToString(sum[:]),
+		)
+		if result, ok := cacheRead[resource.Resource](
+			ctx,
+			r.store,
+			key,
+		); ok {
+			return result, nil
+		}
+		result, err := r.base.ByPath(ctx, siteID, pathValue)
+		if err != nil {
+			return resource.Resource{}, err
+		}
+		cacheWrite(
+			ctx,
+			r.store,
+			key,
+			result,
+			r.ttl,
+			resourceTags(result),
+		)
 		return result, nil
-	}
-	result, err := r.base.ByPath(ctx, siteID, pathValue)
-	if err != nil {
-		return resource.Resource{}, err
-	}
-	cacheWrite(
-		ctx,
-		r.store,
-		key,
-		result,
-		r.ttl,
-		resourceTags(result),
-	)
-	return result, nil
+	})
 }
 
 func (r *cachedResourceRepository) ListBySite(
 	ctx context.Context,
 	siteID site.ID,
 ) ([]resource.Resource, error) {
-	key := fmt.Sprintf("core:resource:list:v2:%d", siteID)
-	if result, ok := cacheRead[[]resource.Resource](
-		ctx,
-		r.store,
-		key,
-	); ok {
+	return withRepositoryCacheRead(r.policy, func() ([]resource.Resource, error) {
+		key := fmt.Sprintf("core:resource:list:v2:%d", siteID)
+		if result, ok := cacheRead[[]resource.Resource](
+			ctx,
+			r.store,
+			key,
+		); ok {
+			return result, nil
+		}
+		result, err := r.base.ListBySite(ctx, siteID)
+		if err != nil {
+			return nil, err
+		}
+		cacheWrite(
+			ctx,
+			r.store,
+			key,
+			result,
+			r.ttl,
+			[]cache.Tag{siteTag(siteID)},
+		)
 		return result, nil
-	}
-	result, err := r.base.ListBySite(ctx, siteID)
-	if err != nil {
-		return nil, err
-	}
-	cacheWrite(
-		ctx,
-		r.store,
-		key,
-		result,
-		r.ttl,
-		[]cache.Tag{siteTag(siteID)},
-	)
-	return result, nil
+	})
 }
 
 func (r *cachedResourceRepository) ExistsInSite(
@@ -346,14 +345,6 @@ func (r *cachedResourceRepository) Update(
 	if err != nil {
 		return resource.Resource{}, err
 	}
-	invalidateTags(
-		ctx,
-		r.store,
-		siteTag(current.SiteID),
-		siteTag(result.SiteID),
-		resourceTag(current.ID),
-		resourceTag(result.ID),
-	)
 	return result, nil
 }
 
@@ -361,19 +352,9 @@ func (r *cachedResourceRepository) Delete(
 	ctx context.Context,
 	id resource.ID,
 ) error {
-	current, err := r.base.ByID(ctx, id)
-	if err != nil {
-		return err
-	}
 	if err := r.base.Delete(ctx, id); err != nil {
 		return err
 	}
-	invalidateTags(
-		ctx,
-		r.store,
-		siteTag(current.SiteID),
-		resourceTag(current.ID),
-	)
 	return nil
 }
 
@@ -382,10 +363,6 @@ func (r *cachedResourceRepository) SoftDelete(
 	actorID *security.UserID,
 	id resource.ID,
 ) error {
-	current, err := r.base.ByID(ctx, id)
-	if err != nil {
-		return err
-	}
 	lifecycle, ok := r.base.(resource.LifecycleRepository)
 	if !ok {
 		return errors.New("resource lifecycle repository is unavailable")
@@ -393,7 +370,6 @@ func (r *cachedResourceRepository) SoftDelete(
 	if err := lifecycle.SoftDelete(ctx, actorID, id); err != nil {
 		return err
 	}
-	invalidateTags(ctx, r.store, siteTag(current.SiteID), resourceTag(id))
 	return nil
 }
 
@@ -403,10 +379,6 @@ func (r *cachedResourceRepository) Restore(
 	id resource.ID,
 	withDescendants bool,
 ) error {
-	current, err := r.base.ByID(ctx, id)
-	if err != nil {
-		return err
-	}
 	lifecycle, ok := r.base.(resource.LifecycleRepository)
 	if !ok {
 		return errors.New("resource lifecycle repository is unavailable")
@@ -414,7 +386,6 @@ func (r *cachedResourceRepository) Restore(
 	if err := lifecycle.Restore(ctx, actorID, id, withDescendants); err != nil {
 		return err
 	}
-	invalidateTags(ctx, r.store, siteTag(current.SiteID), resourceTag(id))
 	return nil
 }
 

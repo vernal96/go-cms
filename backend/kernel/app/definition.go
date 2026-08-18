@@ -164,41 +164,8 @@ func validateDefinition(definition Definition) error {
 		}
 		profileCodes[profile.Code] = struct{}{}
 
-		moduleCodes := make(map[kernel.ModuleCode]struct{}, len(profile.Modules))
-		for moduleIndex, profileModule := range profile.Modules {
-			if profileModule.Module == nil {
-				return fmt.Errorf(
-					"profile %q module at index %d is nil",
-					profile.Code,
-					moduleIndex,
-				)
-			}
-
-			moduleCode := profileModule.Module.Code()
-			if moduleCode == "" {
-				return fmt.Errorf(
-					"profile %q module at index %d has empty code",
-					profile.Code,
-					moduleIndex,
-				)
-			}
-			if _, exists := moduleCodes[moduleCode]; exists {
-				return fmt.Errorf(
-					"profile %q contains duplicate module %q",
-					profile.Code,
-					moduleCode,
-				)
-			}
-			moduleCodes[moduleCode] = struct{}{}
-		}
-		for _, required := range requiredModuleCodes {
-			if _, exists := moduleCodes[required]; !exists {
-				return fmt.Errorf(
-					"profile %q does not contain required module %q",
-					profile.Code,
-					required,
-				)
-			}
+		if err := validateApplicationProfile(profile); err != nil {
+			return err
 		}
 	}
 

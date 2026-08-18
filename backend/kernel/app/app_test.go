@@ -234,6 +234,118 @@ type fakeCacheStore struct {
 	closes  atomic.Int32
 }
 
+type taggedCacheStore struct {
+	code cache.Code
+
+	mu        sync.Mutex
+	values    map[string][]byte
+	entryTags map[string][]cache.Tag
+	tagged    map[cache.Tag]map[string]struct{}
+}
+
+func newTaggedCacheStore(code cache.Code) *taggedCacheStore {
+	return &taggedCacheStore{
+		code:      code,
+		values:    make(map[string][]byte),
+		entryTags: make(map[string][]cache.Tag),
+		tagged:    make(map[cache.Tag]map[string]struct{}),
+	}
+}
+
+func (s *taggedCacheStore) Code() cache.Code { return s.code }
+
+func (*taggedCacheStore) Ping(context.Context) error { return nil }
+
+func (s *taggedCacheStore) Get(
+	_ context.Context,
+	key string,
+) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, exists := s.values[key]
+	if !exists {
+		return nil, cache.ErrMiss
+	}
+	return append([]byte(nil), value...), nil
+}
+
+func (s *taggedCacheStore) Set(
+	_ context.Context,
+	key string,
+	value []byte,
+	options cache.SetOptions,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteLocked(key)
+	s.values[key] = append([]byte(nil), value...)
+	s.entryTags[key] = append([]cache.Tag(nil), options.Tags...)
+	for _, tag := range options.Tags {
+		keys := s.tagged[tag]
+		if keys == nil {
+			keys = make(map[string]struct{})
+			s.tagged[tag] = keys
+		}
+		keys[key] = struct{}{}
+	}
+	return nil
+}
+
+func (s *taggedCacheStore) Exists(
+	_ context.Context,
+	key string,
+) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, exists := s.values[key]
+	return exists, nil
+}
+
+func (s *taggedCacheStore) Delete(
+	_ context.Context,
+	key string,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteLocked(key)
+	return nil
+}
+
+func (s *taggedCacheStore) InvalidateTag(
+	_ context.Context,
+	tag cache.Tag,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keys := make([]string, 0, len(s.tagged[tag]))
+	for key := range s.tagged[tag] {
+		keys = append(keys, key)
+	}
+	for _, key := range keys {
+		s.deleteLocked(key)
+	}
+	return nil
+}
+
+func (*taggedCacheStore) Close() error { return nil }
+
+func (s *taggedCacheStore) entryCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.values)
+}
+
+func (s *taggedCacheStore) deleteLocked(key string) {
+	delete(s.values, key)
+	for _, tag := range s.entryTags[key] {
+		delete(s.tagged[tag], key)
+		if len(s.tagged[tag]) == 0 {
+			delete(s.tagged, tag)
+		}
+	}
+	delete(s.entryTags, key)
+}
+
 func (s *fakeCacheStore) Code() cache.Code {
 	return s.code
 }
@@ -1994,6 +2106,171 @@ func TestAppResourceServices(t *testing.T) {
 	}
 }
 
+func TestAppResourceWriteInvalidatesSiteRuntimeRepositoryCache(t *testing.T) {
+	ctx := context.Background()
+	cacheStore := newTaggedCacheStore("repository")
+	resourceRepository := newAppResourceRepository()
+	coreDatabase := &fakeCoreDatabase{
+		repository: &fakeSiteRepository{sites: []site.Site{{
+			ID:          1,
+			ProfileCode: "dev",
+			Domain:      "example.com",
+			Locale:      "en-US",
+		}, {
+			ID:          2,
+			ProfileCode: "dev",
+			Domain:      "second.example.com",
+			Locale:      "en-US",
+		}},
+		},
+		resourceRepository: resourceRepository,
+	}
+	templateCode := template.Code("article")
+
+	application, err := appkernel.New(ctx, appkernel.Definition{
+		Logger:           fakeLoggerFactory{},
+		PasswordHasher:   argon2id.Factory{},
+		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		EventBus:         fakeEventBusFactory{},
+		MainDatabase: appkernel.DatabaseDefinition{
+			Connector: &fakeConnectorFactory{connector: newFakeConnector("main")},
+			Adapters: []kernel.ModuleDatabaseFactory{&fakeDatabaseFactory{
+				code: core.ModuleCode, database: coreDatabase,
+			}},
+		},
+		Caches: []cache.Factory{fakeCacheFactory{store: cacheStore}},
+		Profiles: []kernel.Profile{{
+			Code: "dev",
+			Modules: []kernel.ProfileModule{
+				{
+					Module: core.Module{},
+					Caches: []cache.Binding{{
+						Alias: core.RepositoryCacheAlias,
+						Code:  cacheStore.Code(),
+					}},
+				},
+				{Module: admin.Module{}},
+			},
+			Templates: []template.Definition{{Code: templateCode, Label: "Article"}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = application.Close() }()
+	if err := application.Boot(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := application.Resources().Create(
+		ctx,
+		security.System(),
+		resource.CreateInput{SiteID: 1, Template: &templateCode, Title: "Before"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondResource, err := application.Resources().Create(
+		ctx,
+		security.System(),
+		resource.CreateInput{SiteID: 2, Template: &templateCode, Title: "Second"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeDatabase := func(id site.ID) core.Database {
+		t.Helper()
+		siteRuntime, exists := application.Sites().RuntimeByID(id)
+		if !exists {
+			t.Fatalf("site runtime %d is unavailable", id)
+		}
+		moduleRuntime, exists := siteRuntime.Profile().Registry().Module(core.ModuleCode)
+		if !exists {
+			t.Fatalf("core runtime for site %d is unavailable", id)
+		}
+		coreRuntime, ok := moduleRuntime.(*core.Runtime)
+		if !ok {
+			t.Fatalf("core runtime type = %T", moduleRuntime)
+		}
+		return coreRuntime.Database()
+	}
+	firstDatabase := runtimeDatabase(1)
+	secondDatabase := runtimeDatabase(2)
+	for _, database := range []core.Database{firstDatabase, secondDatabase} {
+		cached, err := database.Resources().ByID(ctx, created.ID)
+		if err != nil || cached.Title != "Before" {
+			t.Fatalf("initial runtime read = %#v, %v", cached, err)
+		}
+	}
+	if _, err := secondDatabase.Resources().ByID(ctx, secondResource.ID); err != nil {
+		t.Fatal(err)
+	}
+	if count := cacheStore.entryCount(); count != 3 {
+		t.Fatalf("populated runtime cache entries = %d", count)
+	}
+	updated, err := application.Resources().Update(
+		ctx,
+		security.System(),
+		resource.UpdateInput{
+			ID:       created.ID,
+			Type:     created.Type,
+			Template: created.Template,
+			Title:    "After",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "After" {
+		t.Fatalf("application update = %#v", updated)
+	}
+	if count := cacheStore.entryCount(); count != 1 {
+		t.Fatalf("resource update invalidated unrelated site cache: %d entries", count)
+	}
+	for _, database := range []core.Database{firstDatabase, secondDatabase} {
+		fresh, err := database.Resources().ByID(ctx, created.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fresh.Title != "After" {
+			t.Fatalf("runtime cached read remained stale: %#v", fresh)
+		}
+		if _, err := database.Sites().List(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if count := cacheStore.entryCount(); count != 5 {
+		t.Fatalf("resource and site cache entries = %d", count)
+	}
+	updatedSite, err := application.Sites().Update(
+		ctx,
+		security.System(),
+		site.UpdateInput{
+			ID:          1,
+			ProfileCode: "dev",
+			Domain:      "renamed.example.com",
+			Locale:      "en-US",
+			Settings:    map[string]any{},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := cacheStore.entryCount(); count != 1 {
+		t.Fatalf("site update invalidation left stale entries: %d", count)
+	}
+	refreshedSites, err := runtimeDatabase(updatedSite.Site().ID).Sites().List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refreshedSites) != 2 || refreshedSites[0].Domain != "renamed.example.com" {
+		t.Fatalf("fresh runtime site list = %#v", refreshedSites)
+	}
+	if second, err := secondDatabase.Resources().ByID(ctx, secondResource.ID); err != nil || second.Title != "Second" {
+		t.Fatalf("unrelated site cache = %#v, %v", second, err)
+	}
+}
+
 func TestAppNewRequiresCoreAndAdminModules(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -2050,6 +2327,77 @@ func TestAppNewRequiresCoreAndAdminModules(t *testing.T) {
 					`required module "`+string(test.missing)+`"`,
 				) {
 				t.Fatalf("New error = %v", err)
+			}
+		})
+	}
+}
+
+func TestAppNewValidatesCoreFirstDuplicatesAndValidOrder(t *testing.T) {
+	tests := []struct {
+		name    string
+		modules []kernel.ProfileModule
+		wantErr string
+	}{
+		{
+			name: "core not first",
+			modules: []kernel.ProfileModule{
+				{Module: admin.Module{}},
+				{Module: core.Module{}},
+			},
+			wantErr: `must declare module "core" first`,
+		},
+		{
+			name: "duplicate module",
+			modules: []kernel.ProfileModule{
+				{Module: core.Module{}},
+				{Module: admin.Module{}},
+				{Module: admin.Module{}},
+			},
+			wantErr: `duplicate module "admin"`,
+		},
+		{
+			name: "valid ordered profile",
+			modules: []kernel.ProfileModule{
+				{Module: core.Module{}},
+				{Module: admin.Module{}},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			application, err := appkernel.New(
+				context.Background(),
+				appkernel.Definition{
+					Logger:           fakeLoggerFactory{},
+					PasswordHasher:   argon2id.Factory{},
+					SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+					EventBus:         fakeEventBusFactory{},
+					MainDatabase: appkernel.DatabaseDefinition{
+						Connector: &fakeConnectorFactory{
+							connector: newFakeConnector("main"),
+						},
+						Adapters: []kernel.ModuleDatabaseFactory{&fakeDatabaseFactory{
+							code: core.ModuleCode,
+							database: &fakeCoreDatabase{
+								repository: &fakeSiteRepository{},
+							},
+						}},
+					},
+					Profiles: []kernel.Profile{{Code: "dev", Modules: test.modules}},
+				},
+			)
+			if application != nil {
+				defer func() { _ = application.Close() }()
+			}
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("New error = %v, want %q", err, test.wantErr)
 			}
 		})
 	}

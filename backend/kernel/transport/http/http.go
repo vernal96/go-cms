@@ -4,13 +4,11 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/vernal96/go-cms/kernel/modules/core/resource"
-	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
-	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type MiddlewareCode string
+type ResourceHandlerCode string
 type Middleware func(http.Handler) http.Handler
 
 type MiddlewareScope uint8
@@ -57,13 +55,13 @@ type Registrar interface {
 }
 
 type ResourceHandler struct {
-	Type       resourcetype.Code
+	Type       ResourceHandlerCode
 	Handler    http.Handler
 	Middleware []MiddlewareCode
 }
 
 type ResourceHandlers interface {
-	Handler(resourcetype.Code) (http.Handler, bool)
+	Handler(ResourceHandlerCode) (http.Handler, bool)
 }
 
 type TerminalResourceHandler struct {
@@ -99,8 +97,6 @@ type requestContextKey uint8
 
 const (
 	actorContextKey requestContextKey = iota + 1
-	siteRuntimeContextKey
-	resourceContextKey
 	previewContextKey
 )
 
@@ -114,43 +110,6 @@ func ActorFromContext(ctx context.Context) (security.Actor, bool) {
 	}
 	actor, exists := ctx.Value(actorContextKey).(security.Actor)
 	return actor, exists
-}
-
-func WithSiteRuntime(
-	ctx context.Context,
-	runtime *site.Runtime,
-) context.Context {
-	return context.WithValue(ctx, siteRuntimeContextKey, runtime)
-}
-
-func SiteRuntimeFromContext(ctx context.Context) (*site.Runtime, bool) {
-	if ctx == nil {
-		return nil, false
-	}
-	runtime, exists := ctx.Value(siteRuntimeContextKey).(*site.Runtime)
-	return runtime, exists && runtime != nil
-}
-
-func WithResource(
-	ctx context.Context,
-	item resource.Resource,
-) context.Context {
-	return context.WithValue(
-		ctx,
-		resourceContextKey,
-		resource.Clone(item),
-	)
-}
-
-func ResourceFromContext(ctx context.Context) (resource.Resource, bool) {
-	if ctx == nil {
-		return resource.Resource{}, false
-	}
-	item, exists := ctx.Value(resourceContextKey).(resource.Resource)
-	if !exists {
-		return resource.Resource{}, false
-	}
-	return resource.Clone(item), true
 }
 
 func WithPreview(ctx context.Context, preview bool) context.Context {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -17,6 +18,7 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/app"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
+	"github.com/vernal96/go-cms/kernel/modules/core"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/security"
@@ -24,8 +26,19 @@ import (
 )
 
 type Handler struct {
-	app  *app.App
-	root http.Handler
+	app          *app.App
+	root         http.Handler
+	siteHandlers atomic.Pointer[siteHandlerSnapshot]
+}
+
+type siteHandlerSnapshot struct {
+	byDomain  map[string]compiledSiteRuntime
+	byRuntime map[*site.Runtime]http.Handler
+}
+
+type compiledSiteRuntime struct {
+	runtime *site.Runtime
+	handler http.Handler
 }
 
 type Option func(*handlerOptions) error
@@ -98,14 +111,12 @@ func NewHandler(
 	}
 
 	handler := &Handler{app: application}
+	handler.siteHandlers.Store(&siteHandlerSnapshot{
+		byDomain:  make(map[string]compiledSiteRuntime),
+		byRuntime: make(map[*site.Runtime]http.Handler),
+	})
 	if application.Sites() == nil {
 		return nil, errors.New("site runtime catalog is unavailable; app must be booted")
-	}
-	if err := application.Sites().AddRuntimePreparer(
-		context.Background(),
-		handler.prepareRuntime,
-	); err != nil {
-		return nil, err
 	}
 
 	root := chi.NewRouter()
@@ -140,18 +151,56 @@ func NewHandler(
 
 	root.NotFound(http.HandlerFunc(handler.dispatchProfile))
 	handler.root = root
+	if err := application.Sites().AddRuntimePreparer(
+		context.Background(),
+		handler.prepareRuntimes,
+	); err != nil {
+		return nil, err
+	}
 	return handler, nil
 }
 
-func (h *Handler) prepareRuntime(
+func (h *Handler) prepareRuntimes(
 	ctx context.Context,
-	runtime *site.Runtime,
-) error {
-	compiled, err := CompileSite(ctx, runtime)
-	if err != nil {
-		return err
+	plan site.RuntimePlan,
+) (site.RuntimePreparation, error) {
+	current := h.siteHandlers.Load()
+	if current == nil {
+		return site.RuntimePreparation{}, errors.New(
+			"site HTTP handler snapshot is unavailable",
+		)
 	}
-	return runtime.BindHTTPHandler(compiled)
+	nextHandlers := make(
+		map[*site.Runtime]http.Handler,
+		len(plan.Next()),
+	)
+	nextDomains := make(
+		map[string]compiledSiteRuntime,
+		len(plan.Next()),
+	)
+	for _, runtime := range plan.Next() {
+		compiled, exists := current.byRuntime[runtime]
+		if !exists {
+			var err error
+			compiled, err = CompileSite(ctx, runtime)
+			if err != nil {
+				return site.RuntimePreparation{}, err
+			}
+		}
+		nextHandlers[runtime] = compiled
+		item := runtime.Site()
+		nextDomains[item.Domain] = compiledSiteRuntime{
+			runtime: runtime,
+			handler: compiled,
+		}
+	}
+	next := &siteHandlerSnapshot{
+		byDomain:  nextDomains,
+		byRuntime: nextHandlers,
+	}
+	return site.RuntimePreparation{
+		Publish: func() { h.siteHandlers.Store(next) },
+	}, nil
 }
 
 func newAdminHandler(
@@ -256,12 +305,16 @@ func (h *Handler) dispatchProfile(
 		)
 		return
 	}
-	runtime, err := h.app.RuntimeByDomain(
+	compiled, exists := h.compiledSiteByDomain(request.Host)
+	if !exists {
+		http.NotFound(response, request)
+		return
+	}
+	if err := h.app.Sites().CheckReadAccess(
 		request.Context(),
 		actor,
-		request.Host,
-	)
-	if err != nil {
+		compiled.runtime,
+	); err != nil {
 		switch {
 		case errors.Is(err, site.ErrNotFound):
 			http.NotFound(response, request)
@@ -277,25 +330,33 @@ func (h *Handler) dispatchProfile(
 		}
 		return
 	}
-
-	siteHandler, exists := runtime.HTTPHandler()
-	if !exists {
-		http.Error(
-			response,
-			"site HTTP handler is unavailable",
-			http.StatusInternalServerError,
-		)
-		return
-	}
-	siteHandler.ServeHTTP(
+	compiled.handler.ServeHTTP(
 		response,
 		request.WithContext(
-			httptransport.WithSiteRuntime(
+			core.WithSiteRuntime(
 				request.Context(),
-				runtime,
+				compiled.runtime,
 			),
 		),
 	)
+}
+
+func (h *Handler) compiledSiteByDomain(
+	domain string,
+) (compiledSiteRuntime, bool) {
+	if h == nil {
+		return compiledSiteRuntime{}, false
+	}
+	domain, err := site.NormalizeDomain(domain)
+	if err != nil {
+		return compiledSiteRuntime{}, false
+	}
+	snapshot := h.siteHandlers.Load()
+	if snapshot == nil {
+		return compiledSiteRuntime{}, false
+	}
+	compiled, exists := snapshot.byDomain[domain]
+	return compiled, exists
 }
 
 func (h *Handler) serveFile(

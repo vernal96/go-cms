@@ -50,6 +50,72 @@ type ModuleRuntime interface {
 	ModuleCode() ModuleCode
 }
 
+// RuntimeScope is the immutable site snapshot available while modules build
+// their final site-scoped runtime state. Request-specific values do not belong
+// here.
+type RuntimeScope struct {
+	siteID   string
+	domain   string
+	locale   string
+	settings map[string]any
+}
+
+func NewRuntimeScope(
+	siteID string,
+	domain string,
+	locale string,
+	settings map[string]any,
+) RuntimeScope {
+	return RuntimeScope{
+		siteID:   siteID,
+		domain:   domain,
+		locale:   locale,
+		settings: cloneRuntimeSettings(settings),
+	}
+}
+
+func (s RuntimeScope) SiteID() string { return s.siteID }
+
+func (s RuntimeScope) Domain() string { return s.domain }
+
+func (s RuntimeScope) Locale() string { return s.locale }
+
+func (s RuntimeScope) Settings() map[string]any {
+	return cloneRuntimeSettings(s.settings)
+}
+
+func (s RuntimeScope) clone() RuntimeScope {
+	return NewRuntimeScope(s.siteID, s.domain, s.locale, s.settings)
+}
+
+func cloneRuntimeSettings(source map[string]any) map[string]any {
+	if source == nil {
+		return map[string]any{}
+	}
+	result := make(map[string]any, len(source))
+	for key, value := range source {
+		result[key] = cloneRuntimeSettingValue(value)
+	}
+	return result
+}
+
+func cloneRuntimeSettingValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneRuntimeSettings(typed)
+	case []any:
+		result := make([]any, len(typed))
+		for index, item := range typed {
+			result[index] = cloneRuntimeSettingValue(item)
+		}
+		return result
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return typed
+	}
+}
+
 type DefinitionRegistry interface {
 	FieldType(field.TypeCode) (field.Type, bool)
 	ResourceType(resourcetype.Code) (resourcetype.Type, bool)
@@ -256,6 +322,7 @@ type ModuleContext struct {
 	profile      Profile
 	registry     DefinitionRegistry
 	config       any
+	scope        RuntimeScope
 	dependencies map[ModuleCode]ModuleRuntime
 	caches       cache.ModuleManager
 	filesystems  filesystem.ModuleManager
@@ -269,6 +336,7 @@ func newModuleContext(
 	profile Profile,
 	registry DefinitionRegistry,
 	config any,
+	scope RuntimeScope,
 	services RuntimeServices,
 	dependencies map[ModuleCode]ModuleRuntime,
 	caches cache.ModuleManager,
@@ -280,6 +348,7 @@ func newModuleContext(
 		profile:      cloneProfile(profile),
 		registry:     registry,
 		config:       config,
+		scope:        scope.clone(),
 		dependencies: dependencies,
 		caches:       caches,
 		filesystems:  filesystems,
@@ -302,6 +371,10 @@ func (c ModuleContext) Registry() DefinitionRegistry {
 
 func (c ModuleContext) Config() any {
 	return c.config
+}
+
+func (c ModuleContext) Scope() RuntimeScope {
+	return c.scope.clone()
 }
 
 func (c ModuleContext) Dependency(code ModuleCode) (ModuleRuntime, bool) {
@@ -410,10 +483,6 @@ type ProfileBlueprint struct {
 	paramSchema *field.Schema
 	templates   *template.Catalog
 	factory     *ProfileRuntimeFactory
-}
-
-type RuntimeScope struct {
-	SiteID string
 }
 
 func (b *ProfileBlueprint) Profile() Profile {
@@ -726,7 +795,7 @@ func (b *ProfileBlueprint) Build(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if scope.SiteID == "" {
+	if scope.SiteID() == "" {
 		return nil, errors.New("profile runtime site scope is empty")
 	}
 
@@ -749,7 +818,7 @@ func (b *ProfileBlueprint) Build(
 			b.factory.services.Caches,
 			cache.RuntimeScope{
 				Profile: string(profile.Code),
-				Site:    scope.SiteID,
+				Site:    scope.SiteID(),
 			},
 			string(module.Code()),
 			profileModule.Caches,
@@ -780,8 +849,8 @@ func (b *ProfileBlueprint) Build(
 			slog.String("profile.code", string(profile.Code)),
 			slog.String("module.code", string(module.Code())),
 		)
-		if scope.SiteID != "" {
-			logger = logger.With(slog.String("site.id", scope.SiteID))
+		if scope.SiteID() != "" {
+			logger = logger.With(slog.String("site.id", scope.SiteID()))
 		}
 		moduleContext := newModuleContext(
 			b.factory.resolver,
@@ -789,6 +858,7 @@ func (b *ProfileBlueprint) Build(
 			profile,
 			registry,
 			profileModule.Config,
+			scope,
 			RuntimeServices{
 				Caches:      b.factory.services.Caches,
 				Filesystems: b.factory.services.Filesystems,

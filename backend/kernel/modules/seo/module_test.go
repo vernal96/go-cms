@@ -73,7 +73,7 @@ func TestModuleBuildsProfileScopedRuntime(t *testing.T) {
 	}
 	profileRuntime, err := blueprint.Build(
 		context.Background(),
-		kernel.RuntimeScope{SiteID: "seo-test"},
+		kernel.NewRuntimeScope("seo-test", "", "", nil),
 	)
 	if err != nil {
 		t.Fatal(err)

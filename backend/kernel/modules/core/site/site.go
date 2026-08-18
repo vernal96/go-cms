@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -140,8 +139,6 @@ type Runtime struct {
 	site           Site
 	profileRuntime *kernel.ProfileRuntime
 	fileReferences []field.FileReference
-	handlerMu      sync.RWMutex
-	handler        http.Handler
 }
 
 func NewRuntimeFromBlueprint(
@@ -168,7 +165,12 @@ func NewRuntimeFromBlueprint(
 	}
 	profileRuntime, err := blueprint.Build(
 		ctx,
-		kernel.RuntimeScope{SiteID: fmt.Sprint(item.ID)},
+		kernel.NewRuntimeScope(
+			fmt.Sprint(item.ID),
+			item.Domain,
+			item.Locale,
+			item.Settings,
+		),
 	)
 	if err != nil {
 		return nil, err
@@ -239,31 +241,6 @@ func (r *Runtime) Profile() *kernel.ProfileRuntime {
 	return r.profileRuntime
 }
 
-func (r *Runtime) BindHTTPHandler(handler http.Handler) error {
-	if r == nil {
-		return errors.New("site runtime is nil")
-	}
-	if handler == nil {
-		return errors.New("site HTTP handler is nil")
-	}
-	r.handlerMu.Lock()
-	defer r.handlerMu.Unlock()
-	if r.handler != nil {
-		return errors.New("site HTTP handler is already bound")
-	}
-	r.handler = handler
-	return nil
-}
-
-func (r *Runtime) HTTPHandler() (http.Handler, bool) {
-	if r == nil {
-		return nil, false
-	}
-	r.handlerMu.RLock()
-	defer r.handlerMu.RUnlock()
-	return r.handler, r.handler != nil
-}
-
 type ProfileResolver interface {
 	ProfileBlueprint(
 		kernel.ProfileCode,
@@ -275,7 +252,30 @@ type runtimeSnapshot struct {
 	byID     map[ID]*Runtime
 }
 
-type RuntimePreparer func(context.Context, *Runtime) error
+type RuntimePlan struct {
+	current []*Runtime
+	next    []*Runtime
+}
+
+func (p RuntimePlan) Current() []*Runtime {
+	return append([]*Runtime(nil), p.current...)
+}
+
+func (p RuntimePlan) Next() []*Runtime {
+	return append([]*Runtime(nil), p.next...)
+}
+
+type RuntimePreparation struct {
+	Publish func()
+}
+
+// RuntimePreparer validates and builds detached transport state for a complete
+// catalog transition. It must defer visible state changes to RuntimePreparation
+// so a later preparer failure cannot partially publish the candidate runtimes.
+type RuntimePreparer func(
+	context.Context,
+	RuntimePlan,
+) (RuntimePreparation, error)
 
 type Catalog struct {
 	repository Repository
@@ -309,25 +309,53 @@ func (c *Catalog) AddRuntimePreparer(
 	if snapshot == nil {
 		return errors.New("site runtime snapshot is nil")
 	}
-	for _, runtime := range snapshot.byID {
-		if err := preparer(ctx, runtime); err != nil {
-			return fmt.Errorf("prepare site runtime %d: %w", runtime.site.ID, err)
-		}
+	runtimes := snapshotRuntimes(snapshot)
+	preparation, err := preparer(ctx, RuntimePlan{
+		current: runtimes,
+		next:    runtimes,
+	})
+	if err != nil {
+		return fmt.Errorf("prepare current site runtimes: %w", err)
 	}
+	applyRuntimePreparations([]RuntimePreparation{preparation})
 	c.preparers = append(c.preparers, preparer)
 	return nil
 }
 
-func (c *Catalog) prepareRuntime(
+func (c *Catalog) prepareRuntimePlan(
 	ctx context.Context,
-	runtime *Runtime,
-) error {
+	current *runtimeSnapshot,
+	next *runtimeSnapshot,
+) ([]RuntimePreparation, error) {
+	plan := RuntimePlan{
+		current: snapshotRuntimes(current),
+		next:    snapshotRuntimes(next),
+	}
+	result := make([]RuntimePreparation, 0, len(c.preparers))
 	for _, preparer := range c.preparers {
-		if err := preparer(ctx, runtime); err != nil {
-			return err
+		preparation, err := preparer(ctx, plan)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, preparation)
+	}
+	return result, nil
+}
+
+func (c *Catalog) publishRuntimeSnapshot(
+	next *runtimeSnapshot,
+	preparations []RuntimePreparation,
+) {
+	c.snapshot.Store(next)
+	applyRuntimePreparations(preparations)
+}
+
+func applyRuntimePreparations(preparations []RuntimePreparation) {
+	for _, preparation := range preparations {
+		if preparation.Publish != nil {
+			preparation.Publish()
 		}
 	}
-	return nil
 }
 
 func NewCatalog(
@@ -405,6 +433,13 @@ func (c *Catalog) Runtimes() []*Runtime {
 	if snapshot == nil {
 		return nil
 	}
+	return snapshotRuntimes(snapshot)
+}
+
+func snapshotRuntimes(snapshot *runtimeSnapshot) []*Runtime {
+	if snapshot == nil {
+		return nil
+	}
 	ids := make([]ID, 0, len(snapshot.byID))
 	for id := range snapshot.byID {
 		ids = append(ids, id)
@@ -432,17 +467,39 @@ func (c *Catalog) ResolveByDomain(
 	if !exists {
 		return nil, ErrNotFound
 	}
-	if err := c.access.Check(ctx, actor, readPermission); err != nil {
+	if err := c.CheckReadAccess(ctx, actor, runtime); err != nil {
 		return nil, err
+	}
+	return runtime, nil
+}
+
+// CheckReadAccess applies catalog-owned site visibility rules to a runtime
+// obtained from a prepared catalog plan, such as an HTTP transport snapshot.
+func (c *Catalog) CheckReadAccess(
+	ctx context.Context,
+	actor security.Actor,
+	runtime *Runtime,
+) error {
+	if ctx == nil {
+		return errors.New("site access context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if runtime == nil {
+		return ErrNotFound
+	}
+	if err := c.access.Check(ctx, actor, readPermission); err != nil {
+		return err
 	}
 	guest, err := c.access.IsGuestSubject(ctx, actor)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if guest && !runtime.site.IsPublic {
-		return nil, security.ErrForbidden
+		return security.ErrForbidden
 	}
-	return runtime, nil
+	return nil
 }
 
 func (c *Catalog) Reload(ctx context.Context) error {
@@ -491,15 +548,6 @@ func (c *Catalog) Reload(ctx context.Context) error {
 		if err := c.validateFileReferences(ctx, security.System(), runtime.fileReferences, nil); err != nil {
 			return fmt.Errorf("validate site file references at index %d: %w", index, err)
 		}
-		if err := c.prepareRuntime(ctx, runtime); err != nil {
-			return fmt.Errorf(
-				"prepare site runtime at index %d with id %d: %w",
-				index,
-				item.ID,
-				err,
-			)
-		}
-
 		domain := runtime.site.Domain
 
 		if _, exists := next.byDomain[domain]; exists {
@@ -519,7 +567,12 @@ func (c *Catalog) Reload(ctx context.Context) error {
 		next.byID[item.ID] = runtime
 	}
 
-	c.snapshot.Store(next)
+	current := c.snapshot.Load()
+	preparations, err := c.prepareRuntimePlan(ctx, current, next)
+	if err != nil {
+		return fmt.Errorf("prepare reloaded site runtimes: %w", err)
+	}
+	c.publishRuntimeSnapshot(next, preparations)
 	return nil
 }
 
@@ -581,16 +634,64 @@ func (c *Catalog) Create(
 	}
 	nextRuntime, err := NewRuntimeFromBlueprint(ctx, stored, blueprint)
 	if err != nil {
-		return nil, fmt.Errorf("build created site runtime: %w", err)
+		return nil, rollbackCreatedSite(
+			ctx,
+			management,
+			stored.ID,
+			fmt.Errorf("build created site runtime: %w", err),
+		)
 	}
-	if err := c.prepareRuntime(ctx, nextRuntime); err != nil {
-		return nil, fmt.Errorf("prepare created site runtime: %w", err)
+	if _, exists := currentSnapshot.byID[nextRuntime.site.ID]; exists {
+		return nil, rollbackCreatedSite(
+			ctx,
+			management,
+			stored.ID,
+			fmt.Errorf("%w: site id %d already exists", ErrConflict, stored.ID),
+		)
+	}
+	if _, exists := currentSnapshot.byDomain[nextRuntime.site.Domain]; exists {
+		return nil, rollbackCreatedSite(
+			ctx,
+			management,
+			stored.ID,
+			fmt.Errorf(
+				"%w: site domain %q already exists",
+				ErrConflict,
+				nextRuntime.site.Domain,
+			),
+		)
 	}
 	nextSnapshot := cloneSnapshot(currentSnapshot, 1)
 	nextSnapshot.byDomain[nextRuntime.site.Domain] = nextRuntime
 	nextSnapshot.byID[nextRuntime.site.ID] = nextRuntime
-	c.snapshot.Store(nextSnapshot)
+	preparations, err := c.prepareRuntimePlan(ctx, currentSnapshot, nextSnapshot)
+	if err != nil {
+		return nil, rollbackCreatedSite(
+			ctx,
+			management,
+			stored.ID,
+			fmt.Errorf("prepare created site runtime: %w", err),
+		)
+	}
+	c.publishRuntimeSnapshot(nextSnapshot, preparations)
 	return nextRuntime, nil
+}
+
+func rollbackCreatedSite(
+	ctx context.Context,
+	repository ManagementRepository,
+	id ID,
+	cause error,
+) error {
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := repository.Delete(rollbackCtx, id); err != nil {
+		return errors.Join(
+			cause,
+			fmt.Errorf("rollback created site %d: %w", id, err),
+		)
+	}
+	return cause
 }
 
 func (c *Catalog) Update(
@@ -645,10 +746,14 @@ func (c *Catalog) Update(
 	if existing, exists := currentSnapshot.byDomain[nextRuntime.site.Domain]; exists && existing.site.ID != input.ID {
 		return nil, ErrConflict
 	}
-	if err := c.prepareRuntime(ctx, nextRuntime); err != nil {
+	nextSnapshot := cloneSnapshot(currentSnapshot, 0)
+	delete(nextSnapshot.byDomain, current.site.Domain)
+	nextSnapshot.byDomain[nextRuntime.site.Domain] = nextRuntime
+	nextSnapshot.byID[input.ID] = nextRuntime
+	preparations, err := c.prepareRuntimePlan(ctx, currentSnapshot, nextSnapshot)
+	if err != nil {
 		return nil, fmt.Errorf("prepare updated site runtime: %w", err)
 	}
-
 	stored, err := c.repository.Update(
 		ctx,
 		actor.AuditUserID(),
@@ -662,12 +767,7 @@ func (c *Catalog) Update(
 	nextRuntime.site.CreatedBy = cloneUserID(stored.CreatedBy)
 	nextRuntime.site.UpdatedBy = cloneUserID(stored.UpdatedBy)
 
-	nextSnapshot := cloneSnapshot(currentSnapshot, 0)
-
-	delete(nextSnapshot.byDomain, current.site.Domain)
-	nextSnapshot.byDomain[nextRuntime.site.Domain] = nextRuntime
-	nextSnapshot.byID[input.ID] = nextRuntime
-	c.snapshot.Store(nextSnapshot)
+	c.publishRuntimeSnapshot(nextSnapshot, preparations)
 
 	return nextRuntime, nil
 }
@@ -703,13 +803,17 @@ func (c *Catalog) Delete(
 	if !ok {
 		return errors.New("site management repository is unavailable")
 	}
-	if err := management.Delete(ctx, id); err != nil {
-		return fmt.Errorf("delete site: %w", err)
-	}
 	nextSnapshot := cloneSnapshot(currentSnapshot, -1)
 	delete(nextSnapshot.byDomain, current.site.Domain)
 	delete(nextSnapshot.byID, id)
-	c.snapshot.Store(nextSnapshot)
+	preparations, err := c.prepareRuntimePlan(ctx, currentSnapshot, nextSnapshot)
+	if err != nil {
+		return fmt.Errorf("prepare deleted site runtime: %w", err)
+	}
+	if err := management.Delete(ctx, id); err != nil {
+		return fmt.Errorf("delete site: %w", err)
+	}
+	c.publishRuntimeSnapshot(nextSnapshot, preparations)
 	return nil
 }
 

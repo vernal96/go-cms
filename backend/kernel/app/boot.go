@@ -84,6 +84,8 @@ func (a *App) boot(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	a.coreDatabase = coreServices.Database()
+	a.main.adapters[core.ModuleCode] = a.coreDatabase
 	profiles, err := bindCoreServices(a.definition.Profiles, coreServices)
 	if err != nil {
 		return err

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -338,22 +339,46 @@ func TestReloadPreparesRuntimesBeforeAtomicSnapshotPublication(t *testing.T) {
 	if err := catalog.Reload(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	published := []ID(nil)
+	if err := catalog.AddRuntimePreparer(
+		context.Background(),
+		func(
+			_ context.Context,
+			plan RuntimePlan,
+		) (RuntimePreparation, error) {
+			ids := make([]ID, 0, len(plan.Next()))
+			for _, runtime := range plan.Next() {
+				ids = append(ids, runtime.Site().ID)
+			}
+			return RuntimePreparation{Publish: func() { published = ids }}, nil
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
 	prepared := make(map[ID]int)
 	if err := catalog.AddRuntimePreparer(
 		context.Background(),
-		func(_ context.Context, runtime *Runtime) error {
-			id := runtime.Site().ID
-			prepared[id]++
-			if id == 3 {
-				return errors.New("compile failed")
+		func(
+			_ context.Context,
+			plan RuntimePlan,
+		) (RuntimePreparation, error) {
+			for _, runtime := range plan.Next() {
+				id := runtime.Site().ID
+				prepared[id]++
+				if id == 3 {
+					return RuntimePreparation{}, errors.New("compile failed")
+				}
 			}
-			return nil
+			return RuntimePreparation{}, nil
 		},
 	); err != nil {
 		t.Fatal(err)
 	}
 	if prepared[1] != 1 {
 		t.Fatalf("initial runtime prepare calls = %#v", prepared)
+	}
+	if !reflect.DeepEqual(published, []ID{1}) {
+		t.Fatalf("initial published runtimes = %#v", published)
 	}
 
 	repository.items = []Site{{
@@ -369,6 +394,9 @@ func TestReloadPreparesRuntimesBeforeAtomicSnapshotPublication(t *testing.T) {
 	if prepared[2] != 1 {
 		t.Fatalf("replacement runtime prepare calls = %#v", prepared)
 	}
+	if !reflect.DeepEqual(published, []ID{2}) {
+		t.Fatalf("replacement published runtimes = %#v", published)
+	}
 
 	repository.items = []Site{{
 		ID:          3,
@@ -382,6 +410,9 @@ func TestReloadPreparesRuntimesBeforeAtomicSnapshotPublication(t *testing.T) {
 	}
 	if _, exists := catalog.RuntimeByID(2); !exists {
 		t.Fatal("failed runtime preparation replaced the previous snapshot")
+	}
+	if !reflect.DeepEqual(published, []ID{2}) {
+		t.Fatalf("failed later preparation partially published: %#v", published)
 	}
 }
 

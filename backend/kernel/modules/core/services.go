@@ -28,7 +28,8 @@ type Services struct {
 	Groups        group.Service
 	Authorization access.Service
 
-	database Database
+	database    Database
+	cachePolicy *repositoryCachePolicy
 }
 
 // NewServices assembles the site-independent part of the core domain. Site
@@ -39,9 +40,11 @@ func NewServices(
 	filesystems filesystem.Catalog,
 	passwordHashers user.PasswordHasherFactory,
 ) (*Services, error) {
-	if err := validateDatabase(database); err != nil {
+	coherent, err := newCoherentDatabase(database)
+	if err != nil {
 		return nil, err
 	}
+	database = coherent
 	if permissions == nil {
 		return nil, errors.New("core permission catalog is nil")
 	}
@@ -108,7 +111,17 @@ func NewServices(
 		Groups:        groups,
 		Authorization: authorization,
 		database:      database,
+		cachePolicy:   coherent.policy,
 	}, nil
+}
+
+// Database returns the cache-coherent core persistence boundary used by all
+// application services and site runtimes.
+func (s *Services) Database() Database {
+	if s == nil {
+		return nil
+	}
+	return s.database
 }
 
 // BuildContent completes the core runtime once profile definitions can build

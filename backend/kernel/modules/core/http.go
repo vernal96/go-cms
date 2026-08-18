@@ -48,15 +48,15 @@ func (r *Runtime) HTTP() httptransport.Builder {
 		return httptransport.Contribution{
 			ResourceHandlers: []httptransport.ResourceHandler{
 				{
-					Type:    resourcetype.Page,
+					Type:    httptransport.ResourceHandlerCode(resourcetype.Page),
 					Handler: pageResourceHandler{logger: r.logger},
 				},
 				{
-					Type:    resourcetype.Link,
+					Type:    httptransport.ResourceHandlerCode(resourcetype.Link),
 					Handler: externalLinkHandler{},
 				},
 				{
-					Type: resourcetype.ResourceLink,
+					Type: httptransport.ResourceHandlerCode(resourcetype.ResourceLink),
 					Handler: resourceLinkHandler{
 						resolver: resolver,
 					},
@@ -90,7 +90,7 @@ func (h *terminalResourceHandler) ServeHTTP(
 	response http.ResponseWriter,
 	request *http.Request,
 ) {
-	siteRuntime, siteExists := httptransport.SiteRuntimeFromContext(
+	siteRuntime, siteExists := SiteRuntimeFromContext(
 		request.Context(),
 	)
 	actor, actorExists := httptransport.ActorFromContext(request.Context())
@@ -123,7 +123,9 @@ func (h *terminalResourceHandler) ServeHTTP(
 		return
 	}
 
-	handler, exists := h.handlers.Handler(item.Type)
+	handler, exists := h.handlers.Handler(
+		httptransport.ResourceHandlerCode(item.Type),
+	)
 	if !exists {
 		http.NotFound(response, request)
 		return
@@ -132,7 +134,7 @@ func (h *terminalResourceHandler) ServeHTTP(
 	handler.ServeHTTP(
 		response,
 		request.WithContext(
-			httptransport.WithResource(request.Context(), item),
+			WithResource(request.Context(), item),
 		),
 	)
 }
@@ -182,8 +184,8 @@ func (h pageResourceHandler) ServeHTTP(
 	request *http.Request,
 ) {
 	ctx := request.Context()
-	item, resourceExists := httptransport.ResourceFromContext(ctx)
-	siteRuntime, siteExists := httptransport.SiteRuntimeFromContext(ctx)
+	item, resourceExists := ResourceFromContext(ctx)
+	siteRuntime, siteExists := SiteRuntimeFromContext(ctx)
 	if !resourceExists || !siteExists {
 		http.Error(
 			response,
@@ -437,7 +439,7 @@ func (externalLinkHandler) ServeHTTP(
 	response http.ResponseWriter,
 	request *http.Request,
 ) {
-	item, exists := httptransport.ResourceFromContext(request.Context())
+	item, exists := ResourceFromContext(request.Context())
 	if !exists || item.ExternalURL == nil {
 		http.NotFound(response, request)
 		return
@@ -458,10 +460,10 @@ func (h resourceLinkHandler) ServeHTTP(
 	response http.ResponseWriter,
 	request *http.Request,
 ) {
-	item, resourceExists := httptransport.ResourceFromContext(
+	item, resourceExists := ResourceFromContext(
 		request.Context(),
 	)
-	siteRuntime, siteExists := httptransport.SiteRuntimeFromContext(
+	siteRuntime, siteExists := SiteRuntimeFromContext(
 		request.Context(),
 	)
 	actor, actorExists := httptransport.ActorFromContext(request.Context())

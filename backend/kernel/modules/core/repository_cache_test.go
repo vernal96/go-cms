@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,10 +29,16 @@ func TestCachedSiteRepositoryUsesCacheAndInvalidatesUpdate(t *testing.T) {
 			},
 		}},
 	}
+	policy := newRepositoryCachePolicy()
+	policy.register(
+		RepositoryCacheDescriptor{Code: store.Code(), Namespace: "test"},
+		store,
+	)
 	repository := &cachedSiteRepository{
-		base:  base,
-		store: store,
-		ttl:   5 * time.Minute,
+		base:   &invalidatingSiteRepository{base: base, policy: policy},
+		store:  store,
+		ttl:    5 * time.Minute,
+		policy: policy,
 	}
 
 	first, err := repository.List(context.Background())
@@ -70,6 +77,33 @@ func TestCachedSiteRepositoryUsesCacheAndInvalidatesUpdate(t *testing.T) {
 	) {
 		t.Fatalf("invalidated tags = %v", store.invalidated)
 	}
+
+	store.invalidated = nil
+	created, err := repository.Create(
+		context.Background(),
+		nil,
+		site.Site{ID: 2, Domain: "created.example.test"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(
+		store.invalidated,
+		[]cache.Tag{sitesTag, siteTag(created.ID)},
+	) {
+		t.Fatalf("create invalidated tags = %v", store.invalidated)
+	}
+
+	store.invalidated = nil
+	if err := repository.Delete(context.Background(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(
+		store.invalidated,
+		[]cache.Tag{sitesTag, siteTag(created.ID)},
+	) {
+		t.Fatalf("delete invalidated tags = %v", store.invalidated)
+	}
 }
 
 func TestCachedRepositoriesFailOpen(t *testing.T) {
@@ -80,10 +114,16 @@ func TestCachedRepositoriesFailOpen(t *testing.T) {
 	base := &siteRepositoryStub{
 		items: []site.Site{{ID: 1, Settings: map[string]any{}}},
 	}
+	policy := newRepositoryCachePolicy()
+	policy.register(
+		RepositoryCacheDescriptor{Code: store.Code(), Namespace: "test"},
+		store,
+	)
 	repository := &cachedSiteRepository{
-		base:  base,
-		store: store,
-		ttl:   time.Minute,
+		base:   &invalidatingSiteRepository{base: base, policy: policy},
+		store:  store,
+		ttl:    time.Minute,
+		policy: policy,
 	}
 	if _, err := repository.List(context.Background()); err != nil {
 		t.Fatalf("cache read/write error escaped: %v", err)
@@ -104,10 +144,16 @@ func TestCachedSiteRepositoryDoesNotInvalidateFailedMutation(t *testing.T) {
 	store := newMemoryCacheStore()
 	updateErr := errors.New("database unavailable")
 	base := &siteRepositoryStub{updateErr: updateErr}
+	policy := newRepositoryCachePolicy()
+	policy.register(
+		RepositoryCacheDescriptor{Code: store.Code(), Namespace: "test"},
+		store,
+	)
 	repository := &cachedSiteRepository{
-		base:  base,
-		store: store,
-		ttl:   time.Minute,
+		base:   &invalidatingSiteRepository{base: base, policy: policy},
+		store:  store,
+		ttl:    time.Minute,
+		policy: policy,
 	}
 	if _, err := repository.Update(
 		context.Background(),
@@ -138,10 +184,18 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 			}},
 		},
 	}
+	policy := newRepositoryCachePolicy()
+	policy.register(
+		RepositoryCacheDescriptor{Code: store.Code(), Namespace: "test"},
+		store,
+	)
 	repository := &cachedResourceRepository{
-		base:  base,
-		store: store,
-		ttl:   5 * time.Minute,
+		base: &invalidatingResourceRepository{
+			base: base, policy: policy,
+		},
+		store:  store,
+		ttl:    5 * time.Minute,
+		policy: policy,
 	}
 
 	first, err := repository.ByID(context.Background(), 7)
@@ -193,14 +247,123 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 	}
 
 	store.invalidated = nil
+	updatedInput := base.item
+	updatedInput.SiteID = 4
+	updated, err := repository.Update(
+		context.Background(),
+		nil,
+		base.item,
+		updatedInput,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(
+		store.invalidated,
+		[]cache.Tag{siteTag(3), siteTag(4), resourceTag(7)},
+	) {
+		t.Fatalf("update invalidated = %v", store.invalidated)
+	}
+
+	store.invalidated = nil
+	if err := repository.SoftDelete(context.Background(), nil, updated.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(
+		store.invalidated,
+		[]cache.Tag{siteTag(4), resourceTag(7)},
+	) {
+		t.Fatalf("soft delete invalidated = %v", store.invalidated)
+	}
+
+	store.invalidated = nil
+	if err := repository.Restore(context.Background(), nil, updated.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(
+		store.invalidated,
+		[]cache.Tag{siteTag(4), resourceTag(7)},
+	) {
+		t.Fatalf("restore invalidated = %v", store.invalidated)
+	}
+
+	store.invalidated = nil
 	if err := repository.Delete(context.Background(), 7); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(
 		store.invalidated,
-		[]cache.Tag{siteTag(3), resourceTag(7)},
+		[]cache.Tag{siteTag(4), resourceTag(7)},
 	) {
 		t.Fatalf("delete invalidated = %v", store.invalidated)
+	}
+}
+
+func TestRepositoryCacheCoherencePreventsStaleReadFillAfterWrite(t *testing.T) {
+	store := newMemoryCacheStore()
+	base := &blockingResourceRepository{
+		resourceRepositoryStub: &resourceRepositoryStub{item: resource.Resource{
+			ID: 7, SiteID: 3, Title: "before",
+		}},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	policy := newRepositoryCachePolicy()
+	policy.register(
+		RepositoryCacheDescriptor{Code: store.Code(), Namespace: "test"},
+		store,
+	)
+	repository := &cachedResourceRepository{
+		base: &invalidatingResourceRepository{
+			base: base, policy: policy,
+		},
+		store:  store,
+		ttl:    time.Minute,
+		policy: policy,
+	}
+
+	readDone := make(chan resource.Resource, 1)
+	readErr := make(chan error, 1)
+	go func() {
+		result, err := repository.ByID(context.Background(), 7)
+		readDone <- result
+		readErr <- err
+	}()
+	<-base.started
+	if policy.coherenceMu.TryLock() {
+		policy.coherenceMu.Unlock()
+		t.Fatal("cache fill did not hold the coherence read barrier")
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := repository.Update(
+			context.Background(),
+			nil,
+			base.item,
+			resource.Resource{ID: 7, SiteID: 3, Title: "after"},
+			nil,
+		)
+		writeDone <- err
+	}()
+	close(base.release)
+	if err := <-readErr; err != nil {
+		t.Fatal(err)
+	}
+	if result := <-readDone; result.Title != "before" {
+		t.Fatalf("in-flight read = %#v", result)
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+
+	fresh, err := repository.ByID(context.Background(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Title != "after" {
+		t.Fatalf("stale cache fill survived write: %#v", fresh)
 	}
 }
 
@@ -281,7 +444,20 @@ func (s *memoryCacheStore) InvalidateTag(
 	tag cache.Tag,
 ) error {
 	s.invalidated = append(s.invalidated, tag)
-	return s.invalidateErr
+	if s.invalidateErr != nil {
+		return s.invalidateErr
+	}
+	for key, options := range s.options {
+		for _, current := range options.Tags {
+			if current != tag {
+				continue
+			}
+			delete(s.values, key)
+			delete(s.options, key)
+			break
+		}
+	}
+	return nil
 }
 
 func (*memoryCacheStore) Close() error {
@@ -311,14 +487,92 @@ func (r *siteRepositoryStub) Update(
 	if r.updateErr != nil {
 		return site.Site{}, r.updateErr
 	}
-	r.items = []site.Site{item}
+	for index := range r.items {
+		if r.items[index].ID == item.ID {
+			r.items[index] = item
+			return item, nil
+		}
+	}
 	return item, nil
+}
+
+func (r *siteRepositoryStub) FindByID(
+	_ context.Context,
+	id site.ID,
+) (site.Site, error) {
+	for _, item := range r.items {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return site.Site{}, site.ErrNotFound
+}
+
+func (r *siteRepositoryStub) FindByDomain(
+	_ context.Context,
+	domain string,
+) (site.Site, error) {
+	for _, item := range r.items {
+		if item.Domain == domain {
+			return item, nil
+		}
+	}
+	return site.Site{}, site.ErrNotFound
+}
+
+func (r *siteRepositoryStub) ListPage(
+	_ context.Context,
+	_ site.ListQuery,
+) (site.Page, error) {
+	return site.Page{Items: append([]site.Site(nil), r.items...), Total: len(r.items)}, nil
+}
+
+func (r *siteRepositoryStub) Create(
+	_ context.Context,
+	_ *security.UserID,
+	item site.Site,
+) (site.Site, error) {
+	r.items = append(r.items, item)
+	return item, nil
+}
+
+func (r *siteRepositoryStub) Delete(
+	_ context.Context,
+	id site.ID,
+) error {
+	for index, item := range r.items {
+		if item.ID == id {
+			r.items = append(r.items[:index], r.items[index+1:]...)
+			return nil
+		}
+	}
+	return site.ErrNotFound
 }
 
 type resourceRepositoryStub struct {
 	item      resource.Resource
 	byIDCalls int
 	deleteErr error
+}
+
+type blockingResourceRepository struct {
+	*resourceRepositoryStub
+	once    sync.Once
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingResourceRepository) ByID(
+	context.Context,
+	resource.ID,
+) (resource.Resource, error) {
+	result := r.item
+	r.once.Do(func() {
+		close(r.started)
+		<-r.release
+	})
+	r.byIDCalls++
+	return result, nil
 }
 
 func (r *resourceRepositoryStub) Create(
@@ -354,13 +608,14 @@ func (r *resourceRepositoryStub) ListBySite(
 }
 
 func (r *resourceRepositoryStub) Update(
-	context.Context,
-	*security.UserID,
-	resource.Resource,
-	resource.Resource,
-	resource.ValidateImageMedia,
+	_ context.Context,
+	_ *security.UserID,
+	_ resource.Resource,
+	item resource.Resource,
+	_ resource.ValidateImageMedia,
 ) (resource.Resource, error) {
-	return r.item, nil
+	r.item = item
+	return item, nil
 }
 
 func (r *resourceRepositoryStub) Delete(
@@ -370,6 +625,40 @@ func (r *resourceRepositoryStub) Delete(
 	return r.deleteErr
 }
 
+func (r *resourceRepositoryStub) ExistsInSite(
+	_ context.Context,
+	siteID site.ID,
+	id resource.ID,
+) (bool, error) {
+	return r.item.SiteID == siteID && r.item.ID == id, nil
+}
+
+func (r *resourceRepositoryStub) ListChildren(
+	context.Context,
+	site.ID,
+	*resource.ID,
+) ([]resource.Child, error) {
+	return nil, nil
+}
+
+func (*resourceRepositoryStub) SoftDelete(
+	context.Context,
+	*security.UserID,
+	resource.ID,
+) error {
+	return nil
+}
+
+func (*resourceRepositoryStub) Restore(
+	context.Context,
+	*security.UserID,
+	resource.ID,
+	bool,
+) error {
+	return nil
+}
+
 var _ cache.Store = (*memoryCacheStore)(nil)
-var _ site.Repository = (*siteRepositoryStub)(nil)
-var _ resource.Repository = (*resourceRepositoryStub)(nil)
+var _ site.ManagementRepository = (*siteRepositoryStub)(nil)
+var _ resource.ManagementRepository = (*resourceRepositoryStub)(nil)
+var _ resource.LifecycleRepository = (*resourceRepositoryStub)(nil)

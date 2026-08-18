@@ -142,7 +142,7 @@ func makeCompilerProfile(
 	}
 	runtime, err := blueprint.Build(
 		context.Background(),
-		kernel.RuntimeScope{SiteID: "compiler-test"},
+		kernel.NewRuntimeScope("compiler-test", "", "", nil),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -636,7 +636,9 @@ func TestProfileRejectsDuplicateResourceHandler(t *testing.T) {
 			},
 			contribution: httptransport.Contribution{
 				ResourceHandlers: []httptransport.ResourceHandler{{
-					Type:    resourceType.Code(),
+					Type: httptransport.ResourceHandlerCode(
+						resourceType.Code(),
+					),
 					Handler: http.NotFoundHandler(),
 				}},
 			},
@@ -645,7 +647,9 @@ func TestProfileRejectsDuplicateResourceHandler(t *testing.T) {
 			code: "second",
 			contribution: httptransport.Contribution{
 				ResourceHandlers: []httptransport.ResourceHandler{{
-					Type:    resourceType.Code(),
+					Type: httptransport.ResourceHandlerCode(
+						resourceType.Code(),
+					),
 					Handler: http.NotFoundHandler(),
 				}},
 			},

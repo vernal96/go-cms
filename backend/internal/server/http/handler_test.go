@@ -121,6 +121,99 @@ type repository struct {
 	isPublic bool
 }
 
+type publicationSiteRepository struct {
+	items       []site.Site
+	updateCalls int
+}
+
+func (r *publicationSiteRepository) List(context.Context) ([]site.Site, error) {
+	return append([]site.Site(nil), r.items...), nil
+}
+
+func (r *publicationSiteRepository) Update(
+	_ context.Context,
+	_ *security.UserID,
+	item site.Site,
+) (site.Site, error) {
+	for index := range r.items {
+		if r.items[index].ID != item.ID {
+			continue
+		}
+		r.updateCalls++
+		r.items[index] = item
+		return item, nil
+	}
+	return site.Site{}, site.ErrNotFound
+}
+
+func (r *publicationSiteRepository) FindByID(
+	_ context.Context,
+	id site.ID,
+) (site.Site, error) {
+	for _, item := range r.items {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return site.Site{}, site.ErrNotFound
+}
+
+func (r *publicationSiteRepository) FindByDomain(
+	_ context.Context,
+	domain string,
+) (site.Site, error) {
+	for _, item := range r.items {
+		if item.Domain == domain {
+			return item, nil
+		}
+	}
+	return site.Site{}, site.ErrNotFound
+}
+
+func (r *publicationSiteRepository) ListPage(
+	context.Context,
+	site.ListQuery,
+) (site.Page, error) {
+	return site.Page{
+		Items: append([]site.Site(nil), r.items...),
+		Total: len(r.items),
+	}, nil
+}
+
+func (r *publicationSiteRepository) Create(
+	_ context.Context,
+	_ *security.UserID,
+	item site.Site,
+) (site.Site, error) {
+	var maxID site.ID
+	for _, current := range r.items {
+		if current.ID > maxID {
+			maxID = current.ID
+		}
+	}
+	item.ID = maxID + 1
+	r.items = append(r.items, item)
+	return item, nil
+}
+
+func (r *publicationSiteRepository) Delete(
+	_ context.Context,
+	id site.ID,
+) error {
+	for index, item := range r.items {
+		if item.ID != id {
+			continue
+		}
+		r.items = append(r.items[:index], r.items[index+1:]...)
+		return nil
+	}
+	return site.ErrNotFound
+}
+
+func (r *publicationSiteRepository) set(items ...site.Site) {
+	r.items = append([]site.Site(nil), items...)
+}
+
 func (r repository) List(context.Context) ([]site.Site, error) {
 	return []site.Site{
 		{
@@ -845,6 +938,62 @@ type transportModule struct {
 	widgets      []widget.Widget
 }
 
+type publicationModule struct {
+	builds *int
+}
+
+func (publicationModule) Code() kernel.ModuleCode { return "publication" }
+
+func (m publicationModule) Build(
+	_ context.Context,
+	ctx kernel.ModuleContext,
+) (kernel.ModuleRuntime, error) {
+	if m.builds != nil {
+		*m.builds++
+	}
+	settings := ctx.Scope().Settings()
+	broken, _ := settings["broken"].(bool)
+	return publicationRuntime{
+		domain: ctx.Scope().Domain(),
+		broken: broken,
+	}, nil
+}
+
+type publicationRuntime struct {
+	domain string
+	broken bool
+}
+
+func (publicationRuntime) ModuleCode() kernel.ModuleCode {
+	return "publication"
+}
+
+func (r publicationRuntime) HTTP() httptransport.Builder {
+	return httptransport.BuilderFunc(func(
+		context.Context,
+	) (httptransport.Contribution, error) {
+		if r.broken {
+			return httptransport.Contribution{}, errors.New(
+				"publication HTTP compile failed",
+			)
+		}
+		return httptransport.Contribution{
+			Routes: func(registrar httptransport.Registrar) error {
+				return registrar.Route(httptransport.Route{
+					Method:  http.MethodGet,
+					Pattern: "/version",
+					Handler: http.HandlerFunc(func(
+						response http.ResponseWriter,
+						_ *http.Request,
+					) {
+						_, _ = response.Write([]byte(r.domain))
+					}),
+				})
+			},
+		}, nil
+	})
+}
+
 func (m transportModule) Code() kernel.ModuleCode {
 	return m.code
 }
@@ -860,16 +1009,18 @@ func (m transportModule) Build(
 	kernel.ModuleContext,
 ) (kernel.ModuleRuntime, error) {
 	return &transportRuntime{
-		code:         m.code,
-		resourceType: m.resourceType.Code(),
-		order:        m.order,
-		widgets:      append([]widget.Widget(nil), m.widgets...),
+		code: m.code,
+		resourceType: httptransport.ResourceHandlerCode(
+			m.resourceType.Code(),
+		),
+		order:   m.order,
+		widgets: append([]widget.Widget(nil), m.widgets...),
 	}, nil
 }
 
 type transportRuntime struct {
 	code         kernel.ModuleCode
-	resourceType resourcetype.Code
+	resourceType httptransport.ResourceHandlerCode
 	order        *[]string
 	widgets      []widget.Widget
 }
@@ -1049,6 +1200,176 @@ func newTransportTestApp(
 		t.Fatal(err)
 	}
 	return runtimeApp
+}
+
+func TestSiteHTTPPublicationIsAtomicAcrossUpdateCreateAndReload(t *testing.T) {
+	ctx := context.Background()
+	moduleBuilds := 0
+	repository := &publicationSiteRepository{items: []site.Site{{
+		ID:          1,
+		ProfileCode: "dev",
+		Domain:      "first.test",
+		Locale:      "en-US",
+		Settings:    map[string]any{"broken": false},
+		IsPublic:    true,
+	}}}
+	application, err := appkernel.New(ctx, appkernel.Definition{
+		Logger:           loggerFactory{},
+		PasswordHasher:   argon2id.Factory{},
+		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		EventBus:         eventBusFactory{},
+		MainDatabase: appkernel.DatabaseDefinition{
+			Connector: connectorFactory{},
+			Adapters: []kernel.ModuleDatabaseFactory{
+				databaseFactory{sites: repository},
+			},
+		},
+		Profiles: []kernel.Profile{{
+			Code: "dev",
+			Modules: []kernel.ProfileModule{
+				{Module: core.Module{}},
+				{Module: admin.Module{}},
+				{Module: publicationModule{builds: &moduleBuilds}},
+			},
+			Params: []field.Definition{{
+				Key: "broken", Type: field.TypeCheckbox, Label: "Broken",
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.Close() })
+	if err := application.Boot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newTestHandler(application)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(host string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "http://"+host+"/version", nil)
+		req.Host = host
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		return response
+	}
+	assertResponse := func(host, body string) {
+		t.Helper()
+		response := request(host)
+		if response.Code != http.StatusOK || response.Body.String() != body {
+			t.Fatalf(
+				"%s response = %d %q, want 200 %q",
+				host,
+				response.Code,
+				response.Body.String(),
+				body,
+			)
+		}
+	}
+
+	buildsBeforeRequests := moduleBuilds
+	assertResponse("first.test", "first.test")
+	assertResponse("first.test", "first.test")
+	if moduleBuilds != buildsBeforeRequests {
+		t.Fatalf("HTTP requests rebuilt module runtime: %d -> %d", buildsBeforeRequests, moduleBuilds)
+	}
+	initialRuntime, _ := application.Sites().RuntimeByID(1)
+	_, err = application.Sites().Update(ctx, security.System(), site.UpdateInput{
+		ID:          1,
+		ProfileCode: "dev",
+		Domain:      "broken.test",
+		Locale:      "en-US",
+		Settings:    map[string]any{"broken": true},
+		IsPublic:    true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "publication HTTP compile failed") {
+		t.Fatalf("failed update error = %v", err)
+	}
+	if repository.updateCalls != 0 {
+		t.Fatalf("failed preparation persisted update %d times", repository.updateCalls)
+	}
+	preserved, _ := application.Sites().RuntimeByID(1)
+	if preserved != initialRuntime {
+		t.Fatal("failed HTTP preparation replaced the site runtime")
+	}
+	assertResponse("first.test", "first.test")
+
+	updated, err := application.Sites().Update(ctx, security.System(), site.UpdateInput{
+		ID:          1,
+		ProfileCode: "dev",
+		Domain:      "updated.test",
+		Locale:      "en-US",
+		Settings:    map[string]any{"broken": false},
+		IsPublic:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated == initialRuntime {
+		t.Fatal("successful update retained the old runtime")
+	}
+	assertResponse("updated.test", "updated.test")
+	if response := request("first.test"); response.Code != http.StatusNotFound {
+		t.Fatalf("old domain response = %d", response.Code)
+	}
+
+	created, err := application.Sites().Create(ctx, security.System(), site.CreateInput{
+		ProfileCode: "dev",
+		Domain:      "created.test",
+		Locale:      "en-US",
+		Settings:    map[string]any{"broken": false},
+		IsPublic:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertResponse("created.test", "created.test")
+	if _, err := application.Sites().Create(ctx, security.System(), site.CreateInput{
+		ProfileCode: "dev",
+		Domain:      "broken-create.test",
+		Locale:      "en-US",
+		Settings:    map[string]any{"broken": true},
+		IsPublic:    true,
+	}); err == nil {
+		t.Fatal("create ignored HTTP preparation failure")
+	}
+	if _, exists := application.Sites().RuntimeByID(3); exists {
+		t.Fatal("failed create published a site runtime")
+	}
+	if _, err := repository.FindByID(ctx, 3); !errors.Is(err, site.ErrNotFound) {
+		t.Fatalf("failed create left a persisted site: %v", err)
+	}
+	assertResponse("created.test", "created.test")
+
+	repository.set(
+		site.Site{
+			ID: 1, ProfileCode: "dev", Domain: "reloaded.test", Locale: "en-US",
+			Settings: map[string]any{"broken": false}, IsPublic: true,
+		},
+		created.Site(),
+	)
+	if err := application.ReloadSites(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertResponse("reloaded.test", "reloaded.test")
+	reloaded, _ := application.Sites().RuntimeByID(1)
+	repository.set(
+		site.Site{
+			ID: 1, ProfileCode: "dev", Domain: "broken-reload.test", Locale: "en-US",
+			Settings: map[string]any{"broken": true}, IsPublic: true,
+		},
+		created.Site(),
+	)
+	if err := application.ReloadSites(ctx); err == nil {
+		t.Fatal("reload ignored HTTP preparation failure")
+	}
+	afterFailure, _ := application.Sites().RuntimeByID(1)
+	if afterFailure != reloaded {
+		t.Fatal("failed reload replaced the working runtime")
+	}
+	assertResponse("reloaded.test", "reloaded.test")
 }
 
 func TestHandlerMiddlewareOrderForRoutesAndResources(t *testing.T) {

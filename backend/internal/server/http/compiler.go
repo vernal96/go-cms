@@ -275,6 +275,7 @@ func (c *profileCompiler) compileResourceHandlers(
 
 	for _, contribution := range contributions {
 		for _, definition := range contribution.contribution.ResourceHandlers {
+			resourceTypeCode := resourcetype.Code(definition.Type)
 			if definition.Type == "" {
 				return nil, fmt.Errorf(
 					"profile %q module %q has empty resource handler type",
@@ -291,7 +292,7 @@ func (c *profileCompiler) compileResourceHandlers(
 				)
 			}
 			if _, exists := c.runtime.Registry().ResourceType(
-				definition.Type,
+				resourceTypeCode,
 			); !exists {
 				return nil, fmt.Errorf(
 					"profile %q module %q resource handler %q has no registered resource type",
@@ -300,7 +301,7 @@ func (c *profileCompiler) compileResourceHandlers(
 					definition.Type,
 				)
 			}
-			if previous, exists := handlers.owners[definition.Type]; exists {
+			if previous, exists := handlers.owners[resourceTypeCode]; exists {
 				return nil, fmt.Errorf(
 					"profile %q module %q resource handler %q duplicates module %q",
 					c.profile,
@@ -341,8 +342,8 @@ func (c *profileCompiler) compileResourceHandlers(
 				)
 			}
 
-			handlers.handlers[definition.Type] = handler
-			handlers.owners[definition.Type] = contribution.module
+			handlers.handlers[resourceTypeCode] = handler
+			handlers.owners[resourceTypeCode] = contribution.module
 		}
 	}
 	return handlers, nil
@@ -846,12 +847,12 @@ type compiledResourceHandlers struct {
 }
 
 func (r *compiledResourceHandlers) Handler(
-	code resourcetype.Code,
+	code httptransport.ResourceHandlerCode,
 ) (http.Handler, bool) {
 	if r == nil {
 		return nil, false
 	}
-	handler, exists := r.handlers[code]
+	handler, exists := r.handlers[resourcetype.Code(code)]
 	return handler, exists
 }
 
