@@ -74,6 +74,13 @@ func (Module) Code() kernel.ModuleCode {
 	return ModuleCode
 }
 
+func (Module) ModuleDescriptor() kernel.ModuleDescriptor {
+	return kernel.ModuleDescriptor{
+		Label:       "Core",
+		Description: "Базовые возможности управления содержимым",
+	}
+}
+
 func (Module) Registry() kernel.ModuleRegistry {
 	return kernel.ModuleRegistry{
 		FieldTypes:    field.StandardTypes(),
@@ -218,5 +225,6 @@ func (r *Runtime) RepositoryCache() (
 }
 
 var _ kernel.Module = Module{}
+var _ kernel.ModuleDescriptorProvider = Module{}
 var _ kernel.RegistryProvider = Module{}
 var _ kernel.ModuleRuntime = (*Runtime)(nil)

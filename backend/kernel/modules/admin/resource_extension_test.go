@@ -13,6 +13,9 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
+	corewidgets "github.com/vernal96/go-cms/kernel/modules/core/widgets"
 	"github.com/vernal96/go-cms/kernel/modules/resourceextension"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
@@ -59,6 +62,24 @@ func (*extensionTestRuntime) ModuleCode() kernel.ModuleCode { return "feature" }
 func (r *extensionTestRuntime) ResourceEditorExtension() resourceextension.Editor {
 	return r.editor
 }
+
+type widgetMetadataModule struct{}
+
+func (widgetMetadataModule) Code() kernel.ModuleCode { return "feature" }
+func (widgetMetadataModule) Registry() kernel.ModuleRegistry {
+	return kernel.ModuleRegistry{ResourceTypes: resourcetype.StandardTypes()}
+}
+func (widgetMetadataModule) ModuleDescriptor() kernel.ModuleDescriptor {
+	return kernel.ModuleDescriptor{Label: "Feature widgets", Description: "Feature description"}
+}
+func (widgetMetadataModule) Build(context.Context, kernel.ModuleContext) (kernel.ModuleRuntime, error) {
+	return widgetMetadataRuntime{}, nil
+}
+
+type widgetMetadataRuntime struct{}
+
+func (widgetMetadataRuntime) ModuleCode() kernel.ModuleCode { return "feature" }
+func (widgetMetadataRuntime) Widgets() []widget.Widget      { return corewidgets.All() }
 
 type extensionTestEditor struct {
 	saved bool
@@ -159,6 +180,71 @@ func (*extensionTestResources) Update(
 func (*extensionTestResources) Delete(context.Context, resource.ID) error {
 	return errors.New("not implemented")
 }
+func (r *extensionTestResources) CreateWidget(
+	_ context.Context,
+	_ resource.ID,
+	binding widget.Binding,
+) (widget.Binding, error) {
+	binding.ID = widget.BindingID(len(r.item.Widgets) + 1)
+	r.item.Widgets = append(r.item.Widgets, widget.CloneBinding(binding))
+	return widget.CloneBinding(binding), nil
+}
+func (r *extensionTestResources) UpdateWidget(
+	_ context.Context,
+	_ resource.ID,
+	binding widget.Binding,
+) (widget.Binding, error) {
+	for index := range r.item.Widgets {
+		if r.item.Widgets[index].ID == binding.ID {
+			r.item.Widgets[index] = widget.CloneBinding(binding)
+			return widget.CloneBinding(binding), nil
+		}
+	}
+	return widget.Binding{}, resource.ErrNotFound
+}
+func (r *extensionTestResources) DeleteWidget(
+	_ context.Context,
+	_ resource.ID,
+	bindingID widget.BindingID,
+) error {
+	for index, binding := range r.item.Widgets {
+		if binding.ID != bindingID {
+			continue
+		}
+		area := binding.Area
+		position := binding.Position
+		r.item.Widgets = append(r.item.Widgets[:index], r.item.Widgets[index+1:]...)
+		for itemIndex := range r.item.Widgets {
+			if r.item.Widgets[itemIndex].Area == area && r.item.Widgets[itemIndex].Position > position {
+				r.item.Widgets[itemIndex].Position--
+			}
+		}
+		return nil
+	}
+	return resource.ErrNotFound
+}
+func (r *extensionTestResources) ReorderWidgets(
+	_ context.Context,
+	_ resource.ID,
+	order []widget.Order,
+) ([]widget.Binding, error) {
+	byID := make(map[widget.BindingID]widget.Binding, len(r.item.Widgets))
+	for _, binding := range r.item.Widgets {
+		byID[binding.ID] = binding
+	}
+	result := make([]widget.Binding, 0, len(order))
+	for _, item := range order {
+		binding, exists := byID[item.ID]
+		if !exists {
+			return nil, resource.ErrNotFound
+		}
+		binding.Area = item.Area
+		binding.Position = item.Position
+		result = append(result, binding)
+	}
+	r.item.Widgets = widget.CloneBindings(result)
+	return widget.CloneBindings(result), nil
+}
 func (r *extensionTestResources) ExistsInSite(
 	_ context.Context,
 	siteID site.ID,
@@ -173,6 +259,8 @@ func (*extensionTestResources) ListChildren(
 ) ([]resource.Child, error) {
 	return nil, errors.New("not implemented")
 }
+
+var _ resource.WidgetRepository = (*extensionTestResources)(nil)
 
 type extensionTestPolicy struct{ err error }
 
@@ -246,6 +334,59 @@ func TestResourceMetadataHasNoExtensionsWithoutProfileProvider(t *testing.T) {
 	)
 	if err != nil || len(metadata.Extensions) != 0 {
 		t.Fatalf("metadata = %#v, %v", metadata, err)
+	}
+}
+
+func TestResourceMetadataDescribesTemplateSlotsAndProfileWidgets(t *testing.T) {
+	presentation := widget.DefaultPresentation()
+	profile := kernel.Profile{
+		Code:    "widgets",
+		Modules: []kernel.ProfileModule{{Module: widgetMetadataModule{}}},
+		Templates: []template.Definition{{
+			Code: "page", Label: "Page",
+			Layout: template.Layout{
+				Body: []template.LayoutItem{
+					{Kind: template.ItemWidget, Key: "content", Widget: "feature_content", Presentation: presentation},
+					{Kind: template.ItemResourceSlot},
+				},
+				Sidebar: []template.LayoutItem{{Kind: template.ItemResourceSlot}},
+			},
+		}},
+		WidgetViews: []widget.ViewDeclaration{{Widget: "feature_content", Code: "compact", Label: "Compact"}},
+	}
+	factory, err := kernel.NewProfileRuntimeFactory(extensionTestDatabaseResolver{}, kernel.RuntimeServices{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), EventBus: extensionTestBus{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blueprint, err := factory.Compile(context.Background(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := site.NewRuntimeFromBlueprint(context.Background(), site.Site{
+		ID: 7, ProfileCode: profile.Code, Domain: "example.com", Locale: "ru-RU", Settings: map[string]any{},
+	}, blueprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	management := &Management{
+		sites:      extensionTestSites{runtime: runtime},
+		authorizer: managementAuthorizer{denied: map[permission.Code]error{}},
+		policy:     extensionTestPolicy{},
+	}
+	metadata, err := management.ResourceMetadata(context.Background(), security.User(1), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metadata.Templates) != 1 || !metadata.Templates[0].SupportsResourceWidgets ||
+		len(metadata.Templates[0].WidgetAreas) != 2 {
+		t.Fatalf("templates = %#v", metadata.Templates)
+	}
+	if len(metadata.Widgets) != 1 || metadata.Widgets[0].Code != "feature_content" ||
+		metadata.Widgets[0].ModuleCode != "feature" || metadata.Widgets[0].ModuleLabel != "Feature widgets" ||
+		len(metadata.Widgets[0].Views) != 1 || metadata.Widgets[0].Views[0].Code != "compact" {
+		t.Fatalf("widgets = %#v", metadata.Widgets)
 	}
 }
 
@@ -326,6 +467,9 @@ func TestResourceExtensionChecksPermissionSiteAndApplicability(t *testing.T) {
 }
 
 var _ kernel.Module = extensionTestModule{}
+var _ kernel.Module = widgetMetadataModule{}
+var _ kernel.ModuleDescriptorProvider = widgetMetadataModule{}
+var _ widget.Provider = widgetMetadataRuntime{}
 var _ eventbus.Bus = extensionTestBus{}
 var _ resourceextension.EditorProvider = (*extensionTestRuntime)(nil)
 var _ SiteCatalog = extensionTestSites{}

@@ -14,6 +14,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
@@ -348,6 +349,38 @@ func (r *cachedResourceRepository) Update(
 	return result, nil
 }
 
+func (r *cachedResourceRepository) CreateWidget(ctx context.Context, id resource.ID, binding widget.Binding) (widget.Binding, error) {
+	repository, ok := r.base.(resource.WidgetRepository)
+	if !ok {
+		return widget.Binding{}, errors.New("resource widget repository is unavailable")
+	}
+	return repository.CreateWidget(ctx, id, binding)
+}
+
+func (r *cachedResourceRepository) UpdateWidget(ctx context.Context, id resource.ID, binding widget.Binding) (widget.Binding, error) {
+	repository, ok := r.base.(resource.WidgetRepository)
+	if !ok {
+		return widget.Binding{}, errors.New("resource widget repository is unavailable")
+	}
+	return repository.UpdateWidget(ctx, id, binding)
+}
+
+func (r *cachedResourceRepository) DeleteWidget(ctx context.Context, id resource.ID, bindingID widget.BindingID) error {
+	repository, ok := r.base.(resource.WidgetRepository)
+	if !ok {
+		return errors.New("resource widget repository is unavailable")
+	}
+	return repository.DeleteWidget(ctx, id, bindingID)
+}
+
+func (r *cachedResourceRepository) ReorderWidgets(ctx context.Context, id resource.ID, order []widget.Order) ([]widget.Binding, error) {
+	repository, ok := r.base.(resource.WidgetRepository)
+	if !ok {
+		return nil, errors.New("resource widget repository is unavailable")
+	}
+	return repository.ReorderWidgets(ctx, id, order)
+}
+
 func (r *cachedResourceRepository) Delete(
 	ctx context.Context,
 	id resource.ID,
@@ -468,5 +501,6 @@ var _ site.Repository = (*cachedSiteRepository)(nil)
 var _ site.ManagementRepository = (*cachedSiteRepository)(nil)
 var _ site.StatisticsRepository = (*cachedSiteRepository)(nil)
 var _ resource.Repository = (*cachedResourceRepository)(nil)
+var _ resource.WidgetRepository = (*cachedResourceRepository)(nil)
 var _ resource.ManagementRepository = (*cachedResourceRepository)(nil)
 var _ resource.StatisticsRepository = (*cachedResourceRepository)(nil)

@@ -175,9 +175,12 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 			SiteID:   3,
 			Title:    "cached",
 			Settings: map[string]any{"count": json.Number("2")},
-			Widgets: []resource.WidgetBinding{{
-				Code:     widget.Code("content_summary"),
-				Position: 0,
+			Widgets: []widget.Binding{{
+				ID:           1,
+				Code:         widget.Code("content_summary"),
+				Area:         widget.AreaBody,
+				Position:     0,
+				Presentation: widget.DefaultPresentation(),
 				Params: map[string]any{
 					"limit": json.Number("3"),
 				},
@@ -264,6 +267,30 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 		[]cache.Tag{siteTag(3), siteTag(4), resourceTag(7)},
 	) {
 		t.Fatalf("update invalidated = %v", store.invalidated)
+	}
+	beforeWidgetUpdate, err := repository.ByID(context.Background(), updated.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeWidgetUpdate.Widgets[0].Presentation.Columns != 12 {
+		t.Fatalf("widget before cached update = %#v", beforeWidgetUpdate.Widgets[0])
+	}
+
+	store.invalidated = nil
+	changedWidget := updated.Widgets[0]
+	changedWidget.Presentation.Columns = 8
+	if _, err := repository.UpdateWidget(context.Background(), updated.ID, changedWidget); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(store.invalidated, []cache.Tag{siteTag(4), resourceTag(7)}) {
+		t.Fatalf("widget update invalidated = %v", store.invalidated)
+	}
+	freshAfterWidgetUpdate, err := repository.ByID(context.Background(), updated.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if freshAfterWidgetUpdate.Widgets[0].Presentation.Columns != 8 {
+		t.Fatalf("stale widget survived cache invalidation = %#v", freshAfterWidgetUpdate.Widgets[0])
 	}
 
 	store.invalidated = nil
@@ -625,6 +652,43 @@ func (r *resourceRepositoryStub) Delete(
 	return r.deleteErr
 }
 
+func (r *resourceRepositoryStub) CreateWidget(_ context.Context, _ resource.ID, binding widget.Binding) (widget.Binding, error) {
+	r.item.Widgets = append(r.item.Widgets, binding)
+	return binding, nil
+}
+
+func (r *resourceRepositoryStub) UpdateWidget(_ context.Context, _ resource.ID, binding widget.Binding) (widget.Binding, error) {
+	for index := range r.item.Widgets {
+		if r.item.Widgets[index].ID == binding.ID {
+			r.item.Widgets[index] = binding
+			return binding, nil
+		}
+	}
+	return widget.Binding{}, resource.ErrNotFound
+}
+
+func (r *resourceRepositoryStub) DeleteWidget(_ context.Context, _ resource.ID, bindingID widget.BindingID) error {
+	for index, binding := range r.item.Widgets {
+		if binding.ID == bindingID {
+			r.item.Widgets = append(r.item.Widgets[:index], r.item.Widgets[index+1:]...)
+			return nil
+		}
+	}
+	return resource.ErrNotFound
+}
+
+func (r *resourceRepositoryStub) ReorderWidgets(_ context.Context, _ resource.ID, order []widget.Order) ([]widget.Binding, error) {
+	for index := range r.item.Widgets {
+		for _, item := range order {
+			if r.item.Widgets[index].ID == item.ID {
+				r.item.Widgets[index].Area = item.Area
+				r.item.Widgets[index].Position = item.Position
+			}
+		}
+	}
+	return widget.CloneBindings(r.item.Widgets), nil
+}
+
 func (r *resourceRepositoryStub) ExistsInSite(
 	_ context.Context,
 	siteID site.ID,
@@ -661,4 +725,5 @@ func (*resourceRepositoryStub) Restore(
 var _ cache.Store = (*memoryCacheStore)(nil)
 var _ site.ManagementRepository = (*siteRepositoryStub)(nil)
 var _ resource.ManagementRepository = (*resourceRepositoryStub)(nil)
+var _ resource.WidgetRepository = (*resourceRepositoryStub)(nil)
 var _ resource.LifecycleRepository = (*resourceRepositoryStub)(nil)

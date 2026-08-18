@@ -201,13 +201,46 @@ export interface ResourceChildrenResponse {
 
 export interface ResourceMetadata {
   types: Array<{ code: 'page' | 'link'; label: string }>
-  templates: Array<{
-    code: string
-    label: string
-    icon: string
-    fields: FieldDefinition[]
-  }>
+  templates: ResourceTemplate[]
+  widgets: WidgetDefinition[]
   extensions: ResourceExtensionMetadata[]
+}
+
+export type WidgetArea = 'body' | 'sidebar'
+
+export interface ResourceTemplate {
+  code: string
+  label: string
+  icon: string
+  fields: FieldDefinition[]
+  supports_resource_widgets: boolean
+  widget_areas: WidgetArea[]
+}
+
+export interface WidgetDefinition {
+  code: string
+  module_code: string
+  module_label: string
+  module_description: string
+  label: string
+  description: string
+  fields: FieldDefinition[]
+  editor_tabs: Array<{ code: string; label: string; fields: string[] }>
+  summary_fields: string[]
+  views: Array<{ code: string; label: string }>
+}
+
+export interface ResourceWidget {
+  id: number
+  code: string
+  area: WidgetArea
+  position: number
+  view: string
+  columns: number
+  margin_top: number
+  margin_bottom: number
+  enabled: boolean
+  params: Record<string, unknown>
 }
 
 export interface ResourceExtensionMetadata {
@@ -281,6 +314,7 @@ export interface Resource {
   deleted: boolean
   deleted_at: string | null
   settings: Record<string, unknown>
+  widgets: ResourceWidget[]
 }
 
 export interface ResourceDetailsResponse {

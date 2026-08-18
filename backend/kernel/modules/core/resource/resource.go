@@ -52,7 +52,7 @@ type Resource struct {
 	PublishedAt      *time.Time
 	UnpublishedAt    *time.Time
 	Settings         map[string]any
-	Widgets          []WidgetBinding
+	Widgets          []widget.Binding
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	CreatedBy        *security.UserID
@@ -84,7 +84,6 @@ type CreateInput struct {
 	PublishedAt      *time.Time
 	UnpublishedAt    *time.Time
 	Settings         map[string]any
-	Widgets          []WidgetInput
 }
 
 type UpdateInput struct {
@@ -109,18 +108,26 @@ type UpdateInput struct {
 	PublishedAt      *time.Time
 	UnpublishedAt    *time.Time
 	Settings         map[string]any
-	Widgets          []WidgetInput
 }
 
-type WidgetInput struct {
-	Code   widget.Code
-	Params map[string]any
+type CreateWidgetInput struct {
+	Code         widget.Code
+	Area         widget.AreaCode
+	View         widget.ViewCode
+	Columns      int
+	MarginTop    int
+	MarginBottom int
+	Enabled      *bool
+	Params       map[string]any
 }
 
-type WidgetBinding struct {
-	Code     widget.Code
-	Position int
-	Params   map[string]any
+type UpdateWidgetInput struct {
+	View         widget.ViewCode
+	Columns      int
+	MarginTop    int
+	MarginBottom int
+	Enabled      *bool
+	Params       map[string]any
 }
 
 type Node struct {
@@ -161,6 +168,13 @@ type Repository interface {
 		ValidateImageMedia,
 	) (Resource, error)
 	Delete(context.Context, ID) error
+}
+
+type WidgetRepository interface {
+	CreateWidget(context.Context, ID, widget.Binding) (widget.Binding, error)
+	UpdateWidget(context.Context, ID, widget.Binding) (widget.Binding, error)
+	DeleteWidget(context.Context, ID, widget.BindingID) error
+	ReorderWidgets(context.Context, ID, []widget.Order) ([]widget.Binding, error)
 }
 
 type LifecycleRepository interface {
@@ -204,7 +218,7 @@ func Clone(item Resource) Resource {
 	item.PublishedAt = cloneTime(item.PublishedAt)
 	item.UnpublishedAt = cloneTime(item.UnpublishedAt)
 	item.Settings = cloneMap(item.Settings)
-	item.Widgets = cloneWidgetBindings(item.Widgets)
+	item.Widgets = widget.CloneBindings(item.Widgets)
 	item.CreatedBy = cloneUserID(item.CreatedBy)
 	item.UpdatedBy = cloneUserID(item.UpdatedBy)
 	item.DeletedAt = cloneTime(item.DeletedAt)
@@ -220,19 +234,6 @@ func cloneFileReferences(source map[string]file.ID) map[string]file.ID {
 	result := make(map[string]file.ID, len(source))
 	for key, value := range source {
 		result[key] = value
-	}
-	return result
-}
-
-func cloneWidgetBindings(source []WidgetBinding) []WidgetBinding {
-	if source == nil {
-		return nil
-	}
-
-	result := make([]WidgetBinding, len(source))
-	for index, binding := range source {
-		result[index] = binding
-		result[index].Params = cloneMap(binding.Params)
 	}
 	return result
 }

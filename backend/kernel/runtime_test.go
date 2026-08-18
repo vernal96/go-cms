@@ -952,6 +952,9 @@ func TestProfileRuntimeCollectsOnlyProfileModuleWidgets(t *testing.T) {
 		context.Background(),
 		kernel.Profile{
 			Code: "with-widgets",
+			WidgetViews: []widget.ViewDeclaration{{
+				Widget: "content_summary", Code: "compact", Label: "Compact",
+			}},
 			Modules: []kernel.ProfileModule{{
 				Module: widgetProviderModule{
 					code: "content",
@@ -974,7 +977,9 @@ func TestProfileRuntimeCollectsOnlyProfileModuleWidgets(t *testing.T) {
 	}
 	definitions := current.Widgets()
 	if len(definitions) != 1 ||
-		definitions[0].Code != "content_summary" {
+		definitions[0].Code != "content_summary" ||
+		definitions[0].Module.Code != "content" ||
+		len(definitions[0].Views) != 1 || definitions[0].Views[0].Code != "compact" {
 		t.Fatalf("profile widgets = %#v", definitions)
 	}
 	definitions[0].Label = "Changed"

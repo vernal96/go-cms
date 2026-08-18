@@ -47,6 +47,7 @@ describe('ResourceEditView schema transitions', () => {
           deleted: false,
           deleted_at: null,
           settings: { page_title: 'Old title' },
+					widgets: [],
         },
         permissions: { update: true, delete: true, restore: true },
       })
@@ -60,6 +61,8 @@ describe('ResourceEditView schema transitions', () => {
             code: 'page',
             label: 'Страница',
             icon: 'document',
+					supports_resource_widgets: true,
+					widget_areas: ['body', 'sidebar'],
             fields: [
               {
                 key: 'page_title',
@@ -74,6 +77,8 @@ describe('ResourceEditView schema transitions', () => {
             code: 'landing',
             label: 'Лендинг',
             icon: 'document',
+					supports_resource_widgets: false,
+					widget_areas: [],
             fields: [
               {
                 key: 'hero_title',
@@ -92,6 +97,7 @@ describe('ResourceEditView schema transitions', () => {
             ],
           },
         ],
+			widgets: [],
 			extensions: [],
       })
       .mockResolvedValueOnce({ items: [] })
@@ -107,6 +113,9 @@ describe('ResourceEditView schema transitions', () => {
 		expect(wrapper.findAllComponents({ name: 'ElTabPane' }).some(
 			(tab) => String(tab.props('name')).startsWith('extension:'),
 		)).toBe(false)
+		expect(wrapper.findAllComponents({ name: 'ElTabPane' }).some(
+			(tab) => tab.props('name') === 'widgets',
+		)).toBe(true)
 
     const selects = wrapper.findAllComponents({ name: 'ElSelect' })
     expect(selects).toHaveLength(3)
@@ -118,6 +127,9 @@ describe('ResourceEditView schema transitions', () => {
       .props('model') as Record<string, unknown>
     expect(model.template_code).toBe('landing')
     expect(model.settings).toEqual({ hero_title: '', columns: null })
+		expect(wrapper.findAllComponents({ name: 'ElTabPane' }).some(
+			(tab) => tab.props('name') === 'widgets',
+		)).toBe(false)
 
     selects[2]?.vm.$emit('change', 'link')
     await flushPromises()
@@ -138,6 +150,7 @@ describe('ResourceEditView schema transitions', () => {
 					is_searchable: true, in_menu: true, in_sitemap: true, sort: 0,
 					published_at: null, unpublished_at: null, deleted: false, deleted_at: null,
 					settings: {},
+					widgets: [],
 				},
 				permissions: { update: true, delete: true, restore: true },
 			})
@@ -146,7 +159,8 @@ describe('ResourceEditView schema transitions', () => {
 					{ code: 'page', label: 'Страница' },
 					{ code: 'link', label: 'Ссылка' },
 				],
-				templates: [{ code: 'page', label: 'Страница', icon: 'document', fields: [] }],
+				templates: [{ code: 'page', label: 'Страница', icon: 'document', fields: [], supports_resource_widgets: false, widget_areas: [] }],
+				widgets: [],
 				extensions: [{
 					code: 'seo', title: 'SEO', applies_to: ['page'], fields: [], variables: [],
 				}],

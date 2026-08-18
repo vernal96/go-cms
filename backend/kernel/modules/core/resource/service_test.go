@@ -173,6 +173,7 @@ func (s testSites) RuntimeByID(id site.ID) (*site.Runtime, bool) {
 
 type memoryRepository struct {
 	nextID       ID
+	nextWidgetID widget.BindingID
 	items        map[ID]Resource
 	createError  error
 	updateError  error
@@ -182,9 +183,93 @@ type memoryRepository struct {
 
 func newMemoryRepository() *memoryRepository {
 	return &memoryRepository{
-		nextID: 1,
-		items:  make(map[ID]Resource),
+		nextID: 1, nextWidgetID: 1,
+		items: make(map[ID]Resource),
 	}
+}
+
+func (r *memoryRepository) CreateWidget(_ context.Context, id ID, binding widget.Binding) (widget.Binding, error) {
+	item, exists := r.items[id]
+	if !exists {
+		return widget.Binding{}, ErrNotFound
+	}
+	binding = widget.CloneBinding(binding)
+	binding.ID = r.nextWidgetID
+	r.nextWidgetID++
+	item.Widgets = append(item.Widgets, binding)
+	r.items[id] = item
+	return widget.CloneBinding(binding), nil
+}
+
+func (r *memoryRepository) UpdateWidget(_ context.Context, id ID, binding widget.Binding) (widget.Binding, error) {
+	item, exists := r.items[id]
+	if !exists {
+		return widget.Binding{}, ErrNotFound
+	}
+	for index := range item.Widgets {
+		if item.Widgets[index].ID == binding.ID {
+			item.Widgets[index] = widget.CloneBinding(binding)
+			r.items[id] = item
+			return widget.CloneBinding(binding), nil
+		}
+	}
+	return widget.Binding{}, ErrNotFound
+}
+
+func (r *memoryRepository) DeleteWidget(_ context.Context, id ID, bindingID widget.BindingID) error {
+	item, exists := r.items[id]
+	if !exists {
+		return ErrNotFound
+	}
+	removed := false
+	result := make([]widget.Binding, 0, len(item.Widgets))
+	for _, binding := range item.Widgets {
+		if binding.ID == bindingID {
+			removed = true
+			continue
+		}
+		result = append(result, binding)
+	}
+	if !removed {
+		return ErrNotFound
+	}
+	positions := map[widget.AreaCode]int{widget.AreaBody: 0, widget.AreaSidebar: 0}
+	for index := range result {
+		result[index].Position = positions[result[index].Area]
+		positions[result[index].Area]++
+	}
+	item.Widgets = result
+	r.items[id] = item
+	return nil
+}
+
+func (r *memoryRepository) ReorderWidgets(_ context.Context, id ID, order []widget.Order) ([]widget.Binding, error) {
+	item, exists := r.items[id]
+	if !exists {
+		return nil, ErrNotFound
+	}
+	byID := make(map[widget.BindingID]widget.Binding, len(item.Widgets))
+	for _, binding := range item.Widgets {
+		byID[binding.ID] = binding
+	}
+	result := make([]widget.Binding, len(order))
+	for index, ordered := range order {
+		binding, exists := byID[ordered.ID]
+		if !exists {
+			return nil, ErrNotFound
+		}
+		binding.Area, binding.Position = ordered.Area, ordered.Position
+		result[index] = binding
+	}
+	sort.SliceStable(result, func(left, right int) bool {
+		if result[left].Area == result[right].Area {
+			return result[left].Position < result[right].Position
+		}
+		return result[left].Area < result[right].Area
+	})
+	item.Widgets = result
+	r.items[id] = item
+	return widget.CloneBindings(result), nil
 }
 
 func (r *memoryRepository) Create(
@@ -594,6 +679,10 @@ func newTestService(
 				{
 					Code:  "article",
 					Label: "Article",
+					Layout: template.Layout{
+						Body:    []template.LayoutItem{{Kind: template.ItemResourceSlot}},
+						Sidebar: []template.LayoutItem{{Kind: template.ItemResourceSlot}},
+					},
 					Fields: []field.Definition{{
 						Key:      "headline",
 						Type:     field.TypeString,
@@ -605,6 +694,10 @@ func newTestService(
 				{
 					Code:  "empty",
 					Label: "Empty",
+					Layout: template.Layout{
+						Body:    []template.LayoutItem{{Kind: template.ItemResourceSlot}},
+						Sidebar: []template.LayoutItem{{Kind: template.ItemResourceSlot}},
+					},
 				},
 			},
 		},
@@ -731,116 +824,85 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 	}
 }
 
-func TestServiceValidatesNormalizesAndReplacesWidgets(t *testing.T) {
+func TestServiceWidgetBindingsKeepIdentityAcrossReorderAndMove(t *testing.T) {
 	service, _, _ := newTestService(t)
 	ctx := context.Background()
 	templateCode := template.Code("empty")
-
 	created, err := service.Create(ctx, security.System(), CreateInput{
-		SiteID:   1,
-		Template: &templateCode,
-		Title:    "Home",
-		Widgets: []WidgetInput{
-			{
-				Code: "test_summary",
-				Params: map[string]any{
-					"title": "Primary",
-					"limit": json.Number("3"),
-				},
-			},
-			{
-				Code: "test_summary",
-				Params: map[string]any{
-					"title": "Secondary",
-				},
-			},
-		},
+		SiteID: 1, Template: &templateCode, Title: "Home",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(created.Widgets) != 2 ||
-		created.Widgets[0].Position != 0 ||
-		created.Widgets[1].Position != 1 ||
-		created.Widgets[0].Params["limit"] != int64(3) {
-		t.Fatalf("created widgets = %#v", created.Widgets)
+	enabled := true
+	first, err := service.CreateWidget(ctx, security.System(), created.ID, CreateWidgetInput{
+		Code: "test_summary", Area: widget.AreaBody, Columns: 12, Enabled: &enabled,
+		Params: map[string]any{"title": "Primary", "limit": json.Number("3")},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	created.Widgets[0].Params["title"] = "Mutated"
+	second, err := service.CreateWidget(ctx, security.System(), created.ID, CreateWidgetInput{
+		Code: "test_summary", Area: widget.AreaBody, Columns: 6, Enabled: &enabled,
+		Params: map[string]any{"title": "Secondary"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID <= 0 || second.ID <= 0 || first.ID == second.ID || first.Params["limit"] != int64(3) {
+		t.Fatalf("bindings = %#v / %#v", first, second)
+	}
+	updated, err := service.UpdateWidget(ctx, security.System(), created.ID, first.ID, UpdateWidgetInput{
+		Columns: 8, Enabled: &enabled, Params: map[string]any{"title": "Updated"},
+	})
+	if err != nil || updated.ID != first.ID || updated.Params["title"] != "Updated" {
+		t.Fatalf("updated = %#v, %v", updated, err)
+	}
+	ordered, err := service.ReorderWidgets(ctx, security.System(), created.ID, []widget.Order{
+		{ID: second.ID, Area: widget.AreaBody, Position: 0},
+		{ID: first.ID, Area: widget.AreaSidebar, Position: 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ordered) != 2 || ordered[0].ID != second.ID || ordered[1].ID != first.ID || ordered[1].Area != widget.AreaSidebar {
+		t.Fatalf("ordered = %#v", ordered)
+	}
 	stored, err := service.Get(ctx, security.System(), created.ID)
+	if err != nil || stored.Widgets[1].ID != first.ID {
+		t.Fatalf("stored = %#v, %v", stored.Widgets, err)
+	}
+	if err := service.DeleteWidget(ctx, security.System(), created.ID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ = service.Get(ctx, security.System(), created.ID)
+	if len(stored.Widgets) != 1 || stored.Widgets[0].ID != first.ID || stored.Widgets[0].Position != 0 {
+		t.Fatalf("after delete = %#v", stored.Widgets)
+	}
+}
+
+func TestServiceRejectsInvalidWidgetMutations(t *testing.T) {
+	service, _, _ := newTestService(t)
+	ctx := context.Background()
+	templateCode := template.Code("empty")
+	created, err := service.Create(ctx, security.System(), CreateInput{SiteID: 1, Template: &templateCode, Title: "Home"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Widgets[0].Params["title"] != "Primary" {
-		t.Fatal("resource widgets share caller memory")
-	}
-
-	updated, err := service.Update(ctx, security.System(), UpdateInput{
-		ID:           created.ID,
-		Type:         resourcetype.Page,
-		Template:     &templateCode,
-		Title:        "Home",
-		IsPublic:     true,
-		IsSearchable: true,
-		InMenu:       true,
-		InSitemap:    true,
-		Widgets: []WidgetInput{{
-			Code: "test_summary",
-			Params: map[string]any{
-				"title": "Replacement",
-			},
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(updated.Widgets) != 1 ||
-		updated.Widgets[0].Position != 0 ||
-		updated.Widgets[0].Params["title"] != "Replacement" {
-		t.Fatalf("updated widgets = %#v", updated.Widgets)
-	}
-
-	testCases := []struct {
-		name   string
-		widget WidgetInput
-		match  string
+	enabled := true
+	tests := []struct {
+		name  string
+		input CreateWidgetInput
+		match string
 	}{
-		{
-			name: "unknown widget",
-			widget: WidgetInput{
-				Code: "missing_widget",
-			},
-			match: "unknown widget",
-		},
-		{
-			name: "missing required param",
-			widget: WidgetInput{
-				Code: "test_summary",
-			},
-			match: "required",
-		},
-		{
-			name: "unknown param",
-			widget: WidgetInput{
-				Code: "test_summary",
-				Params: map[string]any{
-					"title":   "Title",
-					"unknown": true,
-				},
-			},
-			match: "defined",
-		},
+		{name: "unknown", input: CreateWidgetInput{Code: "missing_widget", Area: widget.AreaBody, Columns: 12, Enabled: &enabled, Params: map[string]any{}}, match: "unavailable"},
+		{name: "required", input: CreateWidgetInput{Code: "test_summary", Area: widget.AreaBody, Columns: 12, Enabled: &enabled, Params: map[string]any{}}, match: "required"},
+		{name: "area", input: CreateWidgetInput{Code: "test_summary", Area: "footer", Columns: 12, Enabled: &enabled, Params: map[string]any{"title": "Title"}}, match: "area"},
+		{name: "columns", input: CreateWidgetInput{Code: "test_summary", Area: widget.AreaBody, Columns: 13, Enabled: &enabled, Params: map[string]any{"title": "Title"}}, match: "columns"},
 	}
-	for _, test := range testCases {
+	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := service.Create(ctx, security.System(), CreateInput{
-				SiteID:   2,
-				Template: &templateCode,
-				Title:    "Invalid",
-				Widgets: []WidgetInput{
-					test.widget,
-				},
-			})
+			_, err := service.CreateWidget(ctx, security.System(), created.ID, test.input)
 			if err == nil || !strings.Contains(err.Error(), test.match) {
 				t.Fatalf("error = %v", err)
 			}

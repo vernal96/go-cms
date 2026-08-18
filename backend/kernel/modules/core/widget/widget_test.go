@@ -56,11 +56,15 @@ func boolPointer(value bool) *bool {
 	return &value
 }
 
+func testModule(code string) ModuleDescriptor {
+	return ModuleDescriptor{Code: code, Label: "Test " + code}
+}
+
 func TestCatalogQualifiesCompilesAndClonesWidgets(t *testing.T) {
 	var received map[string]any
 	catalog, err := Compile(
 		[]Source{{
-			Module: "content",
+			Module: testModule("content"),
 			Widgets: []Widget{&testWidget{
 				definition: Definition{
 					Code:        "summary",
@@ -79,6 +83,7 @@ func TestCatalogQualifiesCompilesAndClonesWidgets(t *testing.T) {
 				},
 			}},
 		}},
+		nil,
 		standardResolver(),
 	)
 	if err != nil {
@@ -105,7 +110,9 @@ func TestCatalogQualifiesCompilesAndClonesWidgets(t *testing.T) {
 
 	definitions := catalog.Definitions()
 	if len(definitions) != 1 ||
-		definitions[0].Code != "content_summary" {
+		definitions[0].Code != "content_summary" ||
+		definitions[0].Module.Code != "content" ||
+		definitions[0].Module.Label != "Test content" {
 		t.Fatalf("definitions = %#v", definitions)
 	}
 	definitions[0].Fields[0].Label = "Changed"
@@ -117,7 +124,7 @@ func TestCatalogQualifiesCompilesAndClonesWidgets(t *testing.T) {
 func TestRuntimeClassifiesParamsAndInstanceFailures(t *testing.T) {
 	catalog, err := Compile(
 		[]Source{{
-			Module: "content",
+			Module: testModule("content"),
 			Widgets: []Widget{&testWidget{
 				definition: Definition{
 					Code:        "summary",
@@ -135,6 +142,7 @@ func TestRuntimeClassifiesParamsAndInstanceFailures(t *testing.T) {
 				},
 			}},
 		}},
+		nil,
 		standardResolver(),
 	)
 	if err != nil {
@@ -177,7 +185,7 @@ func TestCatalogRejectsInvalidAndDuplicateWidgets(t *testing.T) {
 		{
 			name: "typed nil",
 			sources: []Source{{
-				Module:  "content",
+				Module:  testModule("content"),
 				Widgets: []Widget{(*testWidget)(nil)},
 			}},
 			match: "is nil",
@@ -185,7 +193,7 @@ func TestCatalogRejectsInvalidAndDuplicateWidgets(t *testing.T) {
 		{
 			name: "duplicate local",
 			sources: []Source{{
-				Module: "content",
+				Module: testModule("content"),
 				Widgets: []Widget{
 					valid("summary"),
 					valid("summary"),
@@ -196,15 +204,15 @@ func TestCatalogRejectsInvalidAndDuplicateWidgets(t *testing.T) {
 		{
 			name: "duplicate global",
 			sources: []Source{
-				{Module: "content_news", Widgets: []Widget{valid("top")}},
-				{Module: "content", Widgets: []Widget{valid("news_top")}},
+				{Module: testModule("content_news"), Widgets: []Widget{valid("top")}},
+				{Module: testModule("content"), Widgets: []Widget{valid("news_top")}},
 			},
 			match: "duplicate global widget code",
 		},
 		{
 			name: "empty description",
 			sources: []Source{{
-				Module: "content",
+				Module: testModule("content"),
 				Widgets: []Widget{&testWidget{
 					definition: Definition{
 						Code:  "summary",
@@ -217,7 +225,7 @@ func TestCatalogRejectsInvalidAndDuplicateWidgets(t *testing.T) {
 		{
 			name: "unknown field type",
 			sources: []Source{{
-				Module: "content",
+				Module: testModule("content"),
 				Widgets: []Widget{&testWidget{
 					definition: Definition{
 						Code:        "summary",
@@ -233,14 +241,91 @@ func TestCatalogRejectsInvalidAndDuplicateWidgets(t *testing.T) {
 			}},
 			match: "unknown type",
 		},
+		{
+			name: "unknown editor tab field",
+			sources: []Source{{
+				Module: testModule("content"),
+				Widgets: []Widget{&testWidget{definition: Definition{
+					Code: "summary", Label: "Summary", Description: "Description",
+					EditorTabs: []EditorTab{{Code: "main", Label: "Main", Fields: []string{"missing"}}},
+				}}},
+			}},
+			match: "unknown field",
+		},
+		{
+			name: "unassigned editor field",
+			sources: []Source{{
+				Module: testModule("content"),
+				Widgets: []Widget{&testWidget{definition: Definition{
+					Code: "summary", Label: "Summary", Description: "Description",
+					Fields:     []field.Definition{{Key: "title", Type: field.TypeString, Label: "Title"}},
+					EditorTabs: []EditorTab{{Code: "main", Label: "Main"}},
+				}}},
+			}},
+			match: "not assigned",
+		},
 	}
 
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := Compile(test.sources, standardResolver())
+			_, err := Compile(test.sources, nil, standardResolver())
 			if err == nil || !strings.Contains(err.Error(), test.match) {
 				t.Fatalf("error = %v", err)
 			}
 		})
+	}
+}
+
+func TestZeroFieldWidgetAndImplicitDefaultView(t *testing.T) {
+	catalog, err := Compile([]Source{{
+		Module: testModule("content"),
+		Widgets: []Widget{&testWidget{
+			definition: Definition{Code: "empty", Label: "Empty", Description: "No params"},
+			new: func(values map[string]any) (Instance, error) {
+				return testInstance{data: values}, nil
+			},
+		}},
+	}}, []ViewDeclaration{{Widget: "content_empty", Code: "compact", Label: "Compact"}}, standardResolver())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, _ := catalog.Widget("content_empty")
+	if _, err := runtime.New(map[string]any{}); err != nil {
+		t.Fatalf("empty params: %v", err)
+	}
+	definition := runtime.Definition()
+	if len(definition.Views) != 1 || definition.Views[0].Code != "compact" {
+		t.Fatalf("custom views = %#v", definition.Views)
+	}
+	if err := runtime.ValidatePresentation(DefaultPresentation()); err != nil {
+		t.Fatalf("implicit default: %v", err)
+	}
+	custom := DefaultPresentation()
+	custom.View = "compact"
+	if err := runtime.ValidatePresentation(custom); err != nil {
+		t.Fatalf("custom view: %v", err)
+	}
+	custom.View = "missing"
+	if err := runtime.ValidatePresentation(custom); !errors.Is(err, ErrInvalidPresentation) {
+		t.Fatalf("invalid view error = %v", err)
+	}
+}
+
+func TestPresentationAndAreasValidate(t *testing.T) {
+	if !ValidArea(AreaBody) || !ValidArea(AreaSidebar) || ValidArea("footer") {
+		t.Fatal("widget area validation is incorrect")
+	}
+	for _, presentation := range []Presentation{
+		{Columns: 0, Enabled: true},
+		{Columns: 13, Enabled: true},
+		{Columns: 12, MarginTop: -1, Enabled: true},
+		{Columns: 12, MarginBottom: 4, Enabled: true},
+	} {
+		if !errors.Is(presentation.Validate(), ErrInvalidPresentation) {
+			t.Fatalf("presentation accepted: %#v", presentation)
+		}
+	}
+	if err := DefaultPresentation().Validate(); err != nil {
+		t.Fatal(err)
 	}
 }

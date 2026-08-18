@@ -148,9 +148,14 @@ const (
 )
 
 type pageResourceResponse struct {
-	Resource   pageResourcePayload  `json:"resource"`
-	Widgets    []pageWidgetResponse `json:"widgets"`
-	Extensions map[string]any       `json:"extensions,omitempty"`
+	Resource   pageResourcePayload `json:"resource"`
+	Widgets    pageWidgetsResponse `json:"widgets"`
+	Extensions map[string]any      `json:"extensions,omitempty"`
+}
+
+type pageWidgetsResponse struct {
+	Body    []pageWidgetResponse `json:"body"`
+	Sidebar []pageWidgetResponse `json:"sidebar"`
 }
 
 type pageResourcePayload struct {
@@ -165,10 +170,14 @@ type pageResourcePayload struct {
 }
 
 type pageWidgetResponse struct {
-	Code     widget.Code      `json:"code"`
-	Position int              `json:"position"`
-	Data     json.RawMessage  `json:"data,omitempty"`
-	Error    *pageWidgetError `json:"error,omitempty"`
+	Key          string           `json:"key"`
+	Code         widget.Code      `json:"code"`
+	View         widget.ViewCode  `json:"view"`
+	Columns      int              `json:"columns"`
+	MarginTop    int              `json:"margin_top"`
+	MarginBottom int              `json:"margin_bottom"`
+	Data         json.RawMessage  `json:"data,omitempty"`
+	Error        *pageWidgetError `json:"error,omitempty"`
 }
 
 type pageWidgetError struct {
@@ -206,19 +215,78 @@ func (h pageResourceHandler) ServeHTTP(
 			ContentType: item.ContentType,
 			Content:     item.Content,
 		},
-		Widgets: make([]pageWidgetResponse, 0, len(item.Widgets)),
+		Widgets: pageWidgetsResponse{
+			Body: []pageWidgetResponse{}, Sidebar: []pageWidgetResponse{},
+		},
+	}
+	if item.Template == nil {
+		http.Error(response, "resource template is unavailable", http.StatusInternalServerError)
+		return
+	}
+	templateRuntime, exists := siteRuntime.Profile().Template(*item.Template)
+	if !exists {
+		http.Error(response, "resource template is unavailable", http.StatusInternalServerError)
+		return
+	}
+	placements, err := template.Compose(templateRuntime, item.Widgets)
+	if err != nil {
+		h.logError(ctx, "resource widget composition failed", item, widget.Binding{}, err)
+		http.Error(response, "resource response failed", http.StatusInternalServerError)
+		return
+	}
+	result.Widgets.Body = h.renderWidgets(ctx, siteRuntime, item, placements.Body)
+	if ctx.Err() != nil {
+		return
+	}
+	result.Widgets.Sidebar = h.renderWidgets(ctx, siteRuntime, item, placements.Sidebar)
+
+	result.Extensions = h.publicExtensions(
+		ctx,
+		siteRuntime.Site(),
+		siteRuntime.Profile().Modules(),
+		item,
+		httptransport.PreviewFromContext(ctx),
+	)
+
+	raw, err := json.Marshal(result)
+	if err != nil {
+		h.logError(ctx, "resource response encoding failed", item, widget.Binding{}, err)
+		http.Error(response, "resource response failed", http.StatusInternalServerError)
+		return
 	}
 
-	for _, binding := range item.Widgets {
-		if err := ctx.Err(); err != nil {
-			return
-		}
+	response.Header().Set("Content-Type", "application/json; charset=utf-8")
+	response.WriteHeader(http.StatusOK)
+	_, _ = response.Write(append(raw, '\n'))
+}
 
-		rendered := pageWidgetResponse{
-			Code:     binding.Code,
-			Position: binding.Position,
+func (h pageResourceHandler) renderWidgets(
+	ctx context.Context,
+	siteRuntime *site.Runtime,
+	item resource.Resource,
+	placements []widget.Placement,
+) []pageWidgetResponse {
+	result := make([]pageWidgetResponse, 0, len(placements))
+	for _, placement := range placements {
+		if err := ctx.Err(); err != nil {
+			return result
 		}
-		runtime, exists := siteRuntime.Profile().Widget(binding.Code)
+		if !placement.Presentation.Enabled {
+			continue
+		}
+		binding := widget.Binding{
+			ID: placement.BindingID, Code: placement.Code, Area: placement.Area,
+			Position: placement.Position, Presentation: placement.Presentation,
+			Params: placement.Params,
+		}
+		rendered := pageWidgetResponse{
+			Key: placement.Key, Code: placement.Code,
+			View:         widget.PublicView(placement.Presentation.View),
+			Columns:      placement.Presentation.Columns,
+			MarginTop:    placement.Presentation.MarginTop,
+			MarginBottom: placement.Presentation.MarginBottom,
+		}
+		runtime, exists := siteRuntime.Profile().Widget(placement.Code)
 		if !exists {
 			rendered.Error = h.widgetError(
 				ctx,
@@ -227,11 +295,11 @@ func (h pageResourceHandler) ServeHTTP(
 				widgetUnavailableError,
 				fmt.Errorf("widget %q is unavailable", binding.Code),
 			)
-			result.Widgets = append(result.Widgets, rendered)
+			result = append(result, rendered)
 			continue
 		}
 
-		instance, err := runtime.New(binding.Params)
+		instance, err := runtime.New(placement.Params)
 		if err != nil {
 			code := instanceFailedError
 			if errors.Is(err, widget.ErrInvalidParams) {
@@ -244,18 +312,23 @@ func (h pageResourceHandler) ServeHTTP(
 				code,
 				err,
 			)
-			result.Widgets = append(result.Widgets, rendered)
+			result = append(result, rendered)
 			continue
 		}
 
 		data, err := instance.Render(ctx, widget.RenderInput{
+			Site: widget.SiteSnapshot{
+				ID: int64(siteRuntime.Site().ID), Domain: siteRuntime.Site().Domain,
+				Locale: siteRuntime.Site().Locale,
+			},
 			Resource: widget.ResourceSnapshot{
 				ID:      int64(item.ID),
+				Title:   item.Title,
 				Content: item.Content,
 			},
 		})
 		if ctx.Err() != nil {
-			return
+			return result
 		}
 		if err != nil {
 			rendered.Error = h.widgetError(
@@ -265,7 +338,7 @@ func (h pageResourceHandler) ServeHTTP(
 				renderFailedError,
 				err,
 			)
-			result.Widgets = append(result.Widgets, rendered)
+			result = append(result, rendered)
 			continue
 		}
 		if data == nil {
@@ -276,7 +349,7 @@ func (h pageResourceHandler) ServeHTTP(
 				invalidResultError,
 				errors.New("widget returned nil data"),
 			)
-			result.Widgets = append(result.Widgets, rendered)
+			result = append(result, rendered)
 			continue
 		}
 		rawData, err := json.Marshal(data)
@@ -288,45 +361,14 @@ func (h pageResourceHandler) ServeHTTP(
 				invalidResultError,
 				err,
 			)
-			result.Widgets = append(result.Widgets, rendered)
+			result = append(result, rendered)
 			continue
 		}
 
 		rendered.Data = rawData
-		result.Widgets = append(result.Widgets, rendered)
+		result = append(result, rendered)
 	}
-
-	result.Extensions = h.publicExtensions(
-		ctx,
-		siteRuntime.Site(),
-		siteRuntime.Profile().Modules(),
-		item,
-		httptransport.PreviewFromContext(ctx),
-	)
-
-	raw, err := json.Marshal(result)
-	if err != nil {
-		h.logError(
-			ctx,
-			"resource response encoding failed",
-			item,
-			resource.WidgetBinding{},
-			err,
-		)
-		http.Error(
-			response,
-			"resource response failed",
-			http.StatusInternalServerError,
-		)
-		return
-	}
-
-	response.Header().Set(
-		"Content-Type",
-		"application/json; charset=utf-8",
-	)
-	response.WriteHeader(http.StatusOK)
-	_, _ = response.Write(append(raw, '\n'))
+	return result
 }
 
 func (h pageResourceHandler) publicExtensions(
@@ -404,7 +446,7 @@ func (h pageResourceHandler) logExtensionError(
 func (h pageResourceHandler) widgetError(
 	ctx context.Context,
 	item resource.Resource,
-	binding resource.WidgetBinding,
+	binding widget.Binding,
 	code string,
 	err error,
 ) *pageWidgetError {
@@ -416,7 +458,7 @@ func (h pageResourceHandler) logError(
 	ctx context.Context,
 	message string,
 	item resource.Resource,
-	binding resource.WidgetBinding,
+	binding widget.Binding,
 	err error,
 ) {
 	if h.logger == nil {
@@ -425,8 +467,11 @@ func (h pageResourceHandler) logError(
 
 	attributes := []any{
 		slog.String("event", "resource.widget.failed"),
+		slog.Int64("site.id", int64(item.SiteID)),
 		slog.Int64("resource.id", int64(item.ID)),
 		slog.String("widget.code", string(binding.Code)),
+		slog.Int64("widget.id", int64(binding.ID)),
+		slog.String("widget.area", string(binding.Area)),
 		slog.Int("widget.position", binding.Position),
 		slog.Any("error", err),
 	}

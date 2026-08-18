@@ -48,6 +48,7 @@ type SiteResolver interface {
 
 type Service struct {
 	repository Repository
+	widgets    WidgetRepository
 	sites      SiteResolver
 	media      media.Service
 	authorizer security.Authorizer
@@ -73,9 +74,14 @@ func NewService(
 	if authorizer == nil {
 		return nil, errors.New("resource authorizer is nil")
 	}
+	widgets, ok := repository.(WidgetRepository)
+	if !ok {
+		return nil, errors.New("resource widget repository is unavailable")
+	}
 
 	result := &Service{
 		repository: repository,
+		widgets:    widgets,
 		sites:      sites,
 		media:      mediaService,
 		authorizer: authorizer,
@@ -136,7 +142,6 @@ func (s *Service) Create(
 		PublishedAt:      cloneTime(input.PublishedAt),
 		UnpublishedAt:    cloneTime(input.UnpublishedAt),
 		Settings:         cloneMap(input.Settings),
-		Widgets:          widgetBindings(input.Widgets),
 		CreatedBy:        actor.AuditUserID(),
 		UpdatedBy:        actor.AuditUserID(),
 	}
@@ -300,7 +305,7 @@ func (s *Service) Update(
 		PublishedAt:      cloneTime(input.PublishedAt),
 		UnpublishedAt:    cloneTime(input.UnpublishedAt),
 		Settings:         cloneMap(input.Settings),
-		Widgets:          widgetBindings(input.Widgets),
+		Widgets:          widget.CloneBindings(current.Widgets),
 		CreatedAt:        current.CreatedAt,
 		UpdatedAt:        current.UpdatedAt,
 		CreatedBy:        cloneUserID(current.CreatedBy),
@@ -435,16 +440,198 @@ func (s *Service) Move(ctx context.Context, actor security.Actor, id ID, parentI
 		ExternalURL: current.ExternalURL, IsPublic: current.IsPublic, IsSearchable: current.IsSearchable,
 		InMenu: current.InMenu, InSitemap: current.InSitemap, Sort: position,
 		PublishedAt: current.PublishedAt, UnpublishedAt: current.UnpublishedAt,
-		Settings: current.Settings, Widgets: widgetInputsFromBindings(current.Widgets),
+		Settings: current.Settings,
 	})
 }
 
-func widgetInputsFromBindings(source []WidgetBinding) []WidgetInput {
-	result := make([]WidgetInput, len(source))
-	for index, binding := range source {
-		result[index] = WidgetInput{Code: binding.Code, Params: cloneMap(binding.Params)}
+func (s *Service) CreateWidget(
+	ctx context.Context,
+	actor security.Actor,
+	resourceID ID,
+	input CreateWidgetInput,
+) (widget.Binding, error) {
+	current, profileRuntime, templateRuntime, err := s.widgetMutationContext(ctx, actor, resourceID)
+	if err != nil {
+		return widget.Binding{}, err
 	}
-	return result
+	presentation := widget.Presentation{
+		View: widget.NormalizeView(input.View), Columns: input.Columns,
+		MarginTop: input.MarginTop, MarginBottom: input.MarginBottom,
+		Enabled: input.Enabled == nil || *input.Enabled,
+	}
+	runtime, exists := profileRuntime.Widget(input.Code)
+	if !exists {
+		return widget.Binding{}, fmt.Errorf("%w: widget %q is unavailable", ErrInvalid, input.Code)
+	}
+	if !templateRuntime.AllowsResourceArea(input.Area) {
+		return widget.Binding{}, fmt.Errorf("%w: template does not support widget area %q", ErrInvalid, input.Area)
+	}
+	if err := runtime.ValidatePresentation(presentation); err != nil {
+		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	params, err := runtime.NormalizeParams(input.Params)
+	if err != nil {
+		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	position := 0
+	for _, binding := range current.Widgets {
+		if binding.Area == input.Area {
+			position++
+		}
+	}
+	created, err := s.widgets.CreateWidget(ctx, resourceID, widget.Binding{
+		Code: input.Code, Area: input.Area, Position: position,
+		Presentation: presentation, Params: params,
+	})
+	if err != nil {
+		return widget.Binding{}, fmt.Errorf("create resource %d widget: %w", resourceID, err)
+	}
+	return widget.CloneBinding(created), nil
+}
+
+func (s *Service) UpdateWidget(
+	ctx context.Context,
+	actor security.Actor,
+	resourceID ID,
+	bindingID widget.BindingID,
+	input UpdateWidgetInput,
+) (widget.Binding, error) {
+	current, profileRuntime, _, err := s.widgetMutationContext(ctx, actor, resourceID)
+	if err != nil {
+		return widget.Binding{}, err
+	}
+	binding, exists := findWidget(current.Widgets, bindingID)
+	if !exists {
+		return widget.Binding{}, ErrNotFound
+	}
+	runtime, exists := profileRuntime.Widget(binding.Code)
+	if !exists {
+		return widget.Binding{}, fmt.Errorf("%w: widget %q is unavailable", ErrInvalid, binding.Code)
+	}
+	binding.Presentation = widget.Presentation{
+		View: widget.NormalizeView(input.View), Columns: input.Columns,
+		MarginTop: input.MarginTop, MarginBottom: input.MarginBottom,
+		Enabled: input.Enabled == nil || *input.Enabled,
+	}
+	if err := runtime.ValidatePresentation(binding.Presentation); err != nil {
+		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	binding.Params, err = runtime.NormalizeParams(input.Params)
+	if err != nil {
+		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	updated, err := s.widgets.UpdateWidget(ctx, resourceID, binding)
+	if err != nil {
+		return widget.Binding{}, fmt.Errorf("update resource %d widget %d: %w", resourceID, bindingID, err)
+	}
+	return widget.CloneBinding(updated), nil
+}
+
+func (s *Service) DeleteWidget(
+	ctx context.Context,
+	actor security.Actor,
+	resourceID ID,
+	bindingID widget.BindingID,
+) error {
+	current, _, _, err := s.widgetMutationContext(ctx, actor, resourceID)
+	if err != nil {
+		return err
+	}
+	if _, exists := findWidget(current.Widgets, bindingID); !exists {
+		return ErrNotFound
+	}
+	if err := s.widgets.DeleteWidget(ctx, resourceID, bindingID); err != nil {
+		return fmt.Errorf("delete resource %d widget %d: %w", resourceID, bindingID, err)
+	}
+	return nil
+}
+
+func (s *Service) ReorderWidgets(
+	ctx context.Context,
+	actor security.Actor,
+	resourceID ID,
+	order []widget.Order,
+) ([]widget.Binding, error) {
+	current, _, templateRuntime, err := s.widgetMutationContext(ctx, actor, resourceID)
+	if err != nil {
+		return nil, err
+	}
+	if len(order) != len(current.Widgets) {
+		return nil, fmt.Errorf("%w: widget order must contain every binding", ErrInvalid)
+	}
+	known := make(map[widget.BindingID]struct{}, len(current.Widgets))
+	for _, binding := range current.Widgets {
+		known[binding.ID] = struct{}{}
+	}
+	positions := map[widget.AreaCode]int{widget.AreaBody: 0, widget.AreaSidebar: 0}
+	seen := make(map[widget.BindingID]struct{}, len(order))
+	for _, item := range order {
+		if _, exists := known[item.ID]; !exists {
+			return nil, fmt.Errorf("%w: unknown widget binding %d", ErrInvalid, item.ID)
+		}
+		if _, exists := seen[item.ID]; exists {
+			return nil, fmt.Errorf("%w: duplicate widget binding %d", ErrInvalid, item.ID)
+		}
+		seen[item.ID] = struct{}{}
+		if !templateRuntime.AllowsResourceArea(item.Area) {
+			return nil, fmt.Errorf("%w: template does not support widget area %q", ErrInvalid, item.Area)
+		}
+		if item.Position != positions[item.Area] {
+			return nil, fmt.Errorf("%w: widget %d in %q has position %d instead of %d", ErrInvalid, item.ID, item.Area, item.Position, positions[item.Area])
+		}
+		positions[item.Area]++
+	}
+	updated, err := s.widgets.ReorderWidgets(ctx, resourceID, order)
+	if err != nil {
+		return nil, fmt.Errorf("reorder resource %d widgets: %w", resourceID, err)
+	}
+	return widget.CloneBindings(updated), nil
+}
+
+func (s *Service) widgetMutationContext(
+	ctx context.Context,
+	actor security.Actor,
+	resourceID ID,
+) (Resource, interface {
+	Widget(widget.Code) (*widget.Runtime, bool)
+}, interface {
+	AllowsResourceArea(widget.AreaCode) bool
+}, error) {
+	if err := validateContext(ctx, "resource widget mutation"); err != nil {
+		return Resource{}, nil, nil, err
+	}
+	if err := s.authorizer.Check(ctx, actor, updatePermission); err != nil {
+		return Resource{}, nil, nil, err
+	}
+	if resourceID <= 0 {
+		return Resource{}, nil, nil, errors.New("resource id is invalid")
+	}
+	stored, err := s.repository.ByID(ctx, resourceID)
+	if err != nil {
+		return Resource{}, nil, nil, fmt.Errorf("get resource %d for widget mutation: %w", resourceID, err)
+	}
+	current, err := s.validateStored(ctx, stored)
+	if err != nil {
+		return Resource{}, nil, nil, err
+	}
+	siteRuntime, exists := s.sites.RuntimeByID(current.SiteID)
+	if !exists || current.Template == nil {
+		return Resource{}, nil, nil, fmt.Errorf("%w: resource template does not support widgets", ErrInvalid)
+	}
+	templateRuntime, exists := siteRuntime.Profile().Template(*current.Template)
+	if !exists || !templateRuntime.SupportsResourceWidgets() {
+		return Resource{}, nil, nil, fmt.Errorf("%w: resource template does not support widgets", ErrInvalid)
+	}
+	return current, siteRuntime.Profile(), templateRuntime, nil
+}
+
+func findWidget(bindings []widget.Binding, id widget.BindingID) (widget.Binding, bool) {
+	for _, binding := range bindings {
+		if binding.ID == id {
+			return widget.CloneBinding(binding), true
+		}
+	}
+	return widget.Binding{}, false
 }
 
 func (s *Service) Tree(
@@ -599,13 +786,6 @@ func (s *Service) normalize(
 	}
 
 	profileRuntime := siteRuntime.Profile()
-	widgets, err := normalizeWidgetBindings(
-		profileRuntime,
-		item.Widgets,
-	)
-	if err != nil {
-		return Resource{}, err
-	}
 
 	resourceType, exists := profileRuntime.Registry().ResourceType(
 		item.Type,
@@ -667,6 +847,9 @@ func (s *Service) normalize(
 	}
 
 	if payload.Template == nil {
+		if len(item.Widgets) != 0 {
+			return Resource{}, errors.New("resource without template has widgets")
+		}
 		if len(payload.Settings) != 0 {
 			return Resource{}, errors.New(
 				"resource without template has settings",
@@ -683,6 +866,11 @@ func (s *Service) normalize(
 				*payload.Template,
 			)
 		}
+		widgets, err := normalizeWidgetBindings(profileRuntime, templateRuntime, item.Widgets)
+		if err != nil {
+			return Resource{}, err
+		}
+		item.Widgets = widgets
 
 		settings, err := templateRuntime.FieldSchema().Validate(
 			payload.Settings,
@@ -727,7 +915,6 @@ func (s *Service) normalize(
 	item.TargetResourceID = resourceID(payload.TargetResourceID)
 	item.ExternalURL = cloneString(payload.ExternalURL)
 	item.Settings = cloneMap(payload.Settings)
-	item.Widgets = widgets
 	return item, nil
 }
 
@@ -764,45 +951,43 @@ func resourceFileReferenceMap(references []field.FileReference) map[string]file.
 	return result
 }
 
-func widgetBindings(source []WidgetInput) []WidgetBinding {
-	if source == nil {
-		return nil
-	}
-
-	result := make([]WidgetBinding, len(source))
-	for index, input := range source {
-		result[index] = WidgetBinding{
-			Code:     input.Code,
-			Position: index,
-			Params:   cloneMap(input.Params),
-		}
-	}
-	return result
-}
-
 func normalizeWidgetBindings(
 	profileRuntime interface {
 		Widget(widget.Code) (*widget.Runtime, bool)
 	},
-	source []WidgetBinding,
-) ([]WidgetBinding, error) {
+	templateRuntime interface {
+		AllowsResourceArea(widget.AreaCode) bool
+	},
+	source []widget.Binding,
+) ([]widget.Binding, error) {
 	if profileRuntime == nil {
 		return nil, errors.New("resource widget profile runtime is nil")
+	}
+	if templateRuntime == nil {
+		return nil, errors.New("resource widget template runtime is nil")
 	}
 	if source == nil {
 		return nil, nil
 	}
 
-	result := make([]WidgetBinding, len(source))
+	result := make([]widget.Binding, len(source))
+	positions := map[widget.AreaCode]int{widget.AreaBody: 0, widget.AreaSidebar: 0}
+	ids := make(map[widget.BindingID]struct{}, len(source))
 	for index, binding := range source {
-		if binding.Position != index {
-			return nil, fmt.Errorf(
-				"resource widget %q has position %d instead of %d",
-				binding.Code,
-				binding.Position,
-				index,
-			)
+		if binding.ID <= 0 {
+			return nil, fmt.Errorf("resource widget at index %d has invalid id %d", index, binding.ID)
 		}
+		if _, exists := ids[binding.ID]; exists {
+			return nil, fmt.Errorf("resource widget id %d is duplicated", binding.ID)
+		}
+		ids[binding.ID] = struct{}{}
+		if !widget.ValidArea(binding.Area) || !templateRuntime.AllowsResourceArea(binding.Area) {
+			return nil, fmt.Errorf("resource widget %d uses unsupported area %q", binding.ID, binding.Area)
+		}
+		if binding.Position != positions[binding.Area] {
+			return nil, fmt.Errorf("resource widget %d in %q has position %d instead of %d", binding.ID, binding.Area, binding.Position, positions[binding.Area])
+		}
+		positions[binding.Area]++
 
 		runtime, exists := profileRuntime.Widget(binding.Code)
 		if !exists {
@@ -811,7 +996,12 @@ func normalizeWidgetBindings(
 				binding.Code,
 			)
 		}
-		params, err := runtime.FieldSchema().Validate(binding.Params)
+		presentation := binding.Presentation
+		presentation.View = widget.NormalizeView(presentation.View)
+		if err := runtime.ValidatePresentation(presentation); err != nil {
+			return nil, fmt.Errorf("validate resource widget %q presentation: %w", binding.Code, err)
+		}
+		params, err := runtime.NormalizeParams(binding.Params)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"validate resource widget %q params: %w",
@@ -820,11 +1010,9 @@ func normalizeWidgetBindings(
 			)
 		}
 
-		result[index] = WidgetBinding{
-			Code:     binding.Code,
-			Position: index,
-			Params:   params,
-		}
+		result[index] = binding
+		result[index].Presentation = presentation
+		result[index].Params = params
 	}
 	return result, nil
 }

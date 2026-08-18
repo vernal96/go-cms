@@ -9,6 +9,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
@@ -354,6 +355,72 @@ func (r *invalidatingResourceRepository) Update(
 	return result, err
 }
 
+func (r *invalidatingResourceRepository) CreateWidget(ctx context.Context, id resource.ID, binding widget.Binding) (widget.Binding, error) {
+	repository, ok := r.base.(resource.WidgetRepository)
+	if !ok {
+		return widget.Binding{}, errors.New("resource widget repository is unavailable")
+	}
+	var result widget.Binding
+	err := r.mutateWidgets(ctx, id, func() error {
+		var err error
+		result, err = repository.CreateWidget(ctx, id, binding)
+		return err
+	})
+	return result, err
+}
+
+func (r *invalidatingResourceRepository) UpdateWidget(ctx context.Context, id resource.ID, binding widget.Binding) (widget.Binding, error) {
+	repository, ok := r.base.(resource.WidgetRepository)
+	if !ok {
+		return widget.Binding{}, errors.New("resource widget repository is unavailable")
+	}
+	var result widget.Binding
+	err := r.mutateWidgets(ctx, id, func() error {
+		var err error
+		result, err = repository.UpdateWidget(ctx, id, binding)
+		return err
+	})
+	return result, err
+}
+
+func (r *invalidatingResourceRepository) DeleteWidget(ctx context.Context, id resource.ID, bindingID widget.BindingID) error {
+	repository, ok := r.base.(resource.WidgetRepository)
+	if !ok {
+		return errors.New("resource widget repository is unavailable")
+	}
+	return r.mutateWidgets(ctx, id, func() error {
+		return repository.DeleteWidget(ctx, id, bindingID)
+	})
+}
+
+func (r *invalidatingResourceRepository) ReorderWidgets(ctx context.Context, id resource.ID, order []widget.Order) ([]widget.Binding, error) {
+	repository, ok := r.base.(resource.WidgetRepository)
+	if !ok {
+		return nil, errors.New("resource widget repository is unavailable")
+	}
+	var result []widget.Binding
+	err := r.mutateWidgets(ctx, id, func() error {
+		var err error
+		result, err = repository.ReorderWidgets(ctx, id, order)
+		return err
+	})
+	return result, err
+}
+
+func (r *invalidatingResourceRepository) mutateWidgets(ctx context.Context, id resource.ID, mutate func() error) error {
+	return withRepositoryCacheWrite(r.policy, func() error {
+		current, err := r.base.ByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := mutate(); err != nil {
+			return err
+		}
+		r.policy.invalidate(ctx, resourceTags(current)...)
+		return nil
+	})
+}
+
 func (r *invalidatingResourceRepository) Delete(
 	ctx context.Context,
 	id resource.ID,
@@ -420,5 +487,6 @@ var _ Database = (*coherentDatabase)(nil)
 var _ site.ManagementRepository = (*invalidatingSiteRepository)(nil)
 var _ site.StatisticsRepository = (*invalidatingSiteRepository)(nil)
 var _ resource.ManagementRepository = (*invalidatingResourceRepository)(nil)
+var _ resource.WidgetRepository = (*invalidatingResourceRepository)(nil)
 var _ resource.LifecycleRepository = (*invalidatingResourceRepository)(nil)
 var _ resource.StatisticsRepository = (*invalidatingResourceRepository)(nil)

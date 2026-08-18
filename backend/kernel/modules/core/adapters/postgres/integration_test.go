@@ -77,26 +77,28 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 24 {
+	if len(entries) != 26 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	expected := map[string]bool{
-		"000005_identity.up.sql":                false,
-		"000005_identity.down.sql":              false,
-		"000006_permissions.up.sql":             false,
-		"000006_permissions.down.sql":           false,
-		"000007_resource_widgets.up.sql":        false,
-		"000007_resource_widgets.down.sql":      false,
-		"000008_user_blocking.up.sql":           false,
-		"000008_user_blocking.down.sql":         false,
-		"000009_file_field_references.up.sql":   false,
-		"000009_file_field_references.down.sql": false,
-		"000010_user_preferences.up.sql":        false,
-		"000010_user_preferences.down.sql":      false,
-		"000011_user_accent_color.up.sql":       false,
-		"000011_user_accent_color.down.sql":     false,
-		"000012_resource_editor_tree.up.sql":    false,
-		"000012_resource_editor_tree.down.sql":  false,
+		"000005_identity.up.sql":                   false,
+		"000005_identity.down.sql":                 false,
+		"000006_permissions.up.sql":                false,
+		"000006_permissions.down.sql":              false,
+		"000007_resource_widgets.up.sql":           false,
+		"000007_resource_widgets.down.sql":         false,
+		"000008_user_blocking.up.sql":              false,
+		"000008_user_blocking.down.sql":            false,
+		"000009_file_field_references.up.sql":      false,
+		"000009_file_field_references.down.sql":    false,
+		"000010_user_preferences.up.sql":           false,
+		"000010_user_preferences.down.sql":         false,
+		"000011_user_accent_color.up.sql":          false,
+		"000011_user_accent_color.down.sql":        false,
+		"000012_resource_editor_tree.up.sql":       false,
+		"000012_resource_editor_tree.down.sql":     false,
+		"000013_resource_widget_bindings.up.sql":   false,
+		"000013_resource_widget_bindings.down.sql": false,
 	}
 	for _, entry := range entries {
 		if _, exists := expected[entry.Name()]; exists {
@@ -197,7 +199,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 12 || !hasVersion || dirty {
+	if version != 13 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,
@@ -718,32 +720,46 @@ WHERE id = $1;
 		InMenu:       true,
 		InSitemap:    true,
 		Settings:     map[string]any{"headline": "Home"},
-		Widgets: []resource.WidgetBinding{
-			{
-				Code:     widget.Code("content_summary"),
-				Position: 0,
-				Params:   map[string]any{"title": "Primary"},
-			},
-			{
-				Code:     widget.Code("content_summary"),
-				Position: 1,
-				Params:   map[string]any{"title": "Secondary"},
-			},
-		},
 	}, validateImageMedia)
 
 	if err != nil {
 		t.Fatalf("create root resource: %v", err)
 	}
-	if len(root.Widgets) != 2 ||
-		root.Widgets[1].Params["title"] != "Secondary" {
-		t.Fatalf("created root widgets = %#v", root.Widgets)
+	widgetRepository, ok := resourceRepository.(resource.WidgetRepository)
+	if !ok {
+		t.Fatal("resource widget repository is unavailable")
+	}
+	presentation := widget.DefaultPresentation()
+	firstWidget, err := widgetRepository.CreateWidget(ctx, root.ID, widget.Binding{
+		Code: "content_summary", Area: widget.AreaBody, Position: 0,
+		Presentation: presentation, Params: map[string]any{"title": "Primary"},
+	})
+	if err != nil {
+		t.Fatalf("create first root widget: %v", err)
+	}
+	secondWidget, err := widgetRepository.CreateWidget(ctx, root.ID, widget.Binding{
+		Code: "content_summary", Area: widget.AreaBody, Position: 1,
+		Presentation: presentation, Params: map[string]any{"title": "Secondary"},
+	})
+	if err != nil || firstWidget.ID <= 0 || secondWidget.ID <= 0 {
+		t.Fatalf("created root widgets = %#v / %#v, %v", firstWidget, secondWidget, err)
 	}
 	loadedRoot, err := resourceRepository.ByID(ctx, root.ID)
 	if err != nil || len(loadedRoot.Widgets) != 2 ||
 		loadedRoot.Widgets[0].Code != "content_summary" {
 		t.Fatalf("loaded root widgets = %#v, %v", loadedRoot.Widgets, err)
 	}
+	reordered, err := widgetRepository.ReorderWidgets(ctx, root.ID, []widget.Order{
+		{ID: secondWidget.ID, Area: widget.AreaBody, Position: 0},
+		{ID: firstWidget.ID, Area: widget.AreaSidebar, Position: 0},
+	})
+	if err != nil || len(reordered) != 2 || reordered[0].ID != secondWidget.ID ||
+		reordered[1].ID != firstWidget.ID || reordered[1].Area != widget.AreaSidebar {
+		t.Fatalf("reordered root widgets = %#v, %v", reordered, err)
+	}
+	firstWidget.Area = widget.AreaSidebar
+	firstWidget.Position = 0
+	secondWidget.Position = 0
 
 	documentRootPath := "/"
 	if _, err := resourceRepository.Create(ctx, nil, resource.Resource{
@@ -785,11 +801,7 @@ WHERE id = $1;
 
 	nextRoot := resource.Clone(root)
 	nextRoot.ImageMediaID = &replacementMedia.ID
-	nextRoot.Widgets = []resource.WidgetBinding{{
-		Code:     "content_summary",
-		Position: 0,
-		Params:   map[string]any{"title": "Replacement"},
-	}}
+	nextRoot.Widgets = reordered
 	root, err = resourceRepository.Update(
 		ctx,
 		nil,
@@ -800,9 +812,14 @@ WHERE id = $1;
 	if err != nil {
 		t.Fatalf("replace root media: %v", err)
 	}
-	if len(root.Widgets) != 1 ||
-		root.Widgets[0].Params["title"] != "Replacement" {
-		t.Fatalf("updated root widgets = %#v", root.Widgets)
+	firstWidget.Params = map[string]any{"title": "Replacement"}
+	firstWidget.Presentation.Columns = 8
+	firstWidget, err = widgetRepository.UpdateWidget(ctx, root.ID, firstWidget)
+	if err != nil || firstWidget.ID <= 0 {
+		t.Fatalf("update root widget: %#v, %v", firstWidget, err)
+	}
+	if err := widgetRepository.DeleteWidget(ctx, root.ID, secondWidget.ID); err != nil {
+		t.Fatalf("delete root widget: %v", err)
 	}
 	loadedRoot, err = resourceRepository.ByID(ctx, root.ID)
 	if err != nil || len(loadedRoot.Widgets) != 1 ||
@@ -861,16 +878,17 @@ WHERE id = $1;
 			InMenu:       true,
 			InSitemap:    true,
 			Settings:     map[string]any{},
-			Widgets: []resource.WidgetBinding{{
-				Code:     "content_summary",
-				Position: 0,
-				Params:   map[string]any{},
-			}},
 		},
 		nil,
 	)
 	if err != nil {
 		t.Fatalf("create widget child: %v", err)
+	}
+	if _, err := widgetRepository.CreateWidget(ctx, widgetChild.ID, widget.Binding{
+		Code: "content_summary", Area: widget.AreaSidebar, Position: 0,
+		Presentation: presentation, Params: map[string]any{},
+	}); err != nil {
+		t.Fatalf("create child widget: %v", err)
 	}
 	children, err := resourceManagement.ListChildren(ctx, root.SiteID, &root.ID)
 	if err != nil || len(children) == 0 {

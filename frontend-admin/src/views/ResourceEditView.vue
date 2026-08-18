@@ -26,6 +26,7 @@ import { AdminAPIError, adminRequest, adminRequestVoid } from '../api/admin-api'
 import DynamicFieldsForm from '../components/fields/DynamicFieldsForm.vue'
 import RichTextEditor from '../components/RichTextEditor.vue'
 import ResourceExtensionEditor from '../components/resource-extensions/ResourceExtensionEditor.vue'
+import ResourceWidgetsEditor from '../components/resource-widgets/ResourceWidgetsEditor.vue'
 import {
   createFieldValues,
   fieldErrorMessage,
@@ -40,6 +41,7 @@ import type {
   ResourceOption,
   ResourceOptionsResponse,
   ResourceUpdatePayload,
+  ResourceWidget,
 } from '../types/admin'
 import type { FieldValidationError } from '../types/auth'
 
@@ -55,7 +57,7 @@ const deleting = ref(false)
 const loadError = ref<string | null>(null)
 const submitError = ref<string | null>(null)
 const activeTab = ref('main')
-const metadata = ref<ResourceMetadata>({ types: [], templates: [], extensions: [] })
+const metadata = ref<ResourceMetadata>({ types: [], templates: [], widgets: [], extensions: [] })
 const options = ref<ResourceOption[]>([])
 const canUpdate = ref(false)
 const canDelete = ref(false)
@@ -64,6 +66,7 @@ const deleted = ref(false)
 const deletedAt = ref<string | null>(null)
 const serverFieldErrors = ref<FieldValidationError[]>([])
 const localFieldErrors = ref<DynamicFieldErrors>({})
+const resourceWidgets = ref<ResourceWidget[]>([])
 
 const form = reactive({
   parent_id: null as number | null,
@@ -89,6 +92,9 @@ const resourceId = computed(() => Number(route.params.resourceId))
 const siteId = computed(() => Number(route.params.siteId))
 const selectedTemplate = computed(() =>
   metadata.value.templates.find((item) => item.code === form.template_code) ?? null,
+)
+const showWidgetsTab = computed(() =>
+  form.type === 'page' && selectedTemplate.value?.supports_resource_widgets === true,
 )
 const applicableExtensions = computed(() =>
   metadata.value.extensions.filter((extension) => extension.applies_to.includes(form.type)),
@@ -129,6 +135,7 @@ async function load(): Promise<void> {
     const item = details.resource
     deleted.value = item.deleted
     deletedAt.value = item.deleted_at
+    resourceWidgets.value = item.widgets ?? []
     Object.assign(form, {
       parent_id: item.parent_id,
       type: item.type,
@@ -161,6 +168,10 @@ async function load(): Promise<void> {
 
 async function changeType(value: 'page' | 'link'): Promise<void> {
   if (value === form.type) return
+  if (value === 'link' && resourceWidgets.value.length) {
+    ElMessage.error('Сначала удалите виджеты, затем измените тип ресурса.')
+    return
+  }
   try {
     await ElMessageBox.confirm(
       'При смене типа несовместимые данные и настройки будут полностью очищены.',
@@ -185,6 +196,11 @@ async function changeType(value: 'page' | 'link'): Promise<void> {
 
 async function changeTemplate(value: string): Promise<void> {
   if (value === form.template_code) return
+  const nextTemplate = metadata.value.templates.find((item) => item.code === value)
+  if (resourceWidgets.value.length && !nextTemplate?.supports_resource_widgets) {
+    ElMessage.error('Сначала удалите виджеты: выбранный шаблон не содержит области для виджетов.')
+    return
+  }
   try {
     await ElMessageBox.confirm(
       'Параметры предыдущего шаблона будут полностью очищены.',
@@ -196,6 +212,7 @@ async function changeTemplate(value: string): Promise<void> {
   form.settings = createFieldValues(selectedTemplate.value?.fields ?? [])
   serverFieldErrors.value = []
   localFieldErrors.value = {}
+  if (!selectedTemplate.value?.supports_resource_widgets && activeTab.value === 'widgets') activeTab.value = 'main'
 }
 
 function generateCode(): void {
@@ -409,6 +426,20 @@ watch(() => [route.params.siteId, route.params.resourceId], () => void load())
           <el-form-item v-else label="Внешний URL" required class="resource-content-field">
             <el-input v-model="form.external_url" placeholder="https://example.com" :disabled="!canUpdate" />
           </el-form-item>
+        </el-tab-pane>
+
+        <el-tab-pane v-if="showWidgetsTab" label="Виджеты" name="widgets">
+          <resource-widgets-editor
+            v-if="selectedTemplate"
+            v-model="resourceWidgets"
+            :access-token="accessToken"
+            :site-id="siteId"
+            :resource-id="resourceId"
+            :template="selectedTemplate"
+            :definitions="metadata.widgets"
+            :can-update="canUpdate && !deleted"
+            @unauthorized="emit('unauthorized')"
+          />
         </el-tab-pane>
 
         <el-tab-pane label="Настройки" name="settings">

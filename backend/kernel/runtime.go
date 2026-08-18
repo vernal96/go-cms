@@ -21,11 +21,12 @@ type ModuleCode string
 type ProfileCode string
 
 type Profile struct {
-	Code      ProfileCode
-	Name      string
-	Modules   []ProfileModule
-	Params    []field.Definition
-	Templates []template.Definition
+	Code        ProfileCode
+	Name        string
+	Modules     []ProfileModule
+	Params      []field.Definition
+	Templates   []template.Definition
+	WidgetViews []widget.ViewDeclaration
 }
 
 type ProfileModule struct {
@@ -38,6 +39,16 @@ type ProfileModule struct {
 type Module interface {
 	Code() ModuleCode
 	Build(context.Context, ModuleContext) (ModuleRuntime, error)
+}
+
+type ModuleDescriptor struct {
+	Label       string
+	Description string
+}
+
+// ModuleDescriptorProvider is optional human metadata for admin/catalog UIs.
+type ModuleDescriptorProvider interface {
+	ModuleDescriptor() ModuleDescriptor
 }
 
 // DependencyProvider explicitly declares module runtime dependencies. A
@@ -893,17 +904,31 @@ func (b *ProfileBlueprint) Build(
 			return nil, err
 		}
 		if provider, ok := runtime.(widget.Provider); ok {
+			descriptor := ModuleDescriptor{Label: string(module.Code())}
+			if provider, ok := module.(ModuleDescriptorProvider); ok {
+				descriptor = provider.ModuleDescriptor()
+			}
 			widgetSources = append(widgetSources, widget.Source{
-				Module:  string(module.Code()),
+				Module: widget.ModuleDescriptor{
+					Code: string(module.Code()), Label: descriptor.Label,
+					Description: descriptor.Description,
+				},
 				Widgets: provider.Widgets(),
 			})
 		}
 	}
 
-	widgets, err := widget.Compile(widgetSources, registry)
+	widgets, err := widget.Compile(widgetSources, profile.WidgetViews, registry)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"compile widgets for profile %q: %w",
+			profile.Code,
+			err,
+		)
+	}
+	if err := b.templates.ValidateWidgets(widgets); err != nil {
+		return nil, fmt.Errorf(
+			"validate template widgets for profile %q: %w",
 			profile.Code,
 			err,
 		)
@@ -1010,6 +1035,7 @@ func cloneProfile(profile Profile) Profile {
 	}
 	profile.Params = field.CloneDefinitions(profile.Params)
 	profile.Templates = template.CloneDefinitions(profile.Templates)
+	profile.WidgetViews = widget.CloneViewDeclarations(profile.WidgetViews)
 
 	return profile
 }

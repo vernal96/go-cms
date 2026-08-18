@@ -3,6 +3,7 @@ package templates
 import (
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 )
 
 func Page() template.Definition {
@@ -12,6 +13,20 @@ func Page() template.Definition {
 		Code:  "page",
 		Label: "Страница",
 		Icon:  "document",
+		Layout: template.Layout{
+			Body: []template.LayoutItem{
+				{
+					Kind:         template.ItemWidget,
+					Key:          "content",
+					Widget:       "core_content",
+					Presentation: widget.DefaultPresentation(),
+				},
+				{Kind: template.ItemResourceSlot},
+			},
+			Sidebar: []template.LayoutItem{
+				{Kind: template.ItemResourceSlot},
+			},
+		},
 		Fields: []field.Definition{
 			{
 				Key:      "page_title",

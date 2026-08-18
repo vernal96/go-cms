@@ -33,6 +33,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/modules/core/user/adapters/argon2id"
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
@@ -1184,6 +1185,11 @@ func newTransportTestApp(
 			},
 			Profiles: []kernel.Profile{{
 				Code: "dev",
+				Templates: []template.Definition{
+					{Code: "widgets", Label: "Widgets", Layout: template.Layout{Body: []template.LayoutItem{{Kind: template.ItemResourceSlot}}}},
+					{Code: "content", Label: "Content", Layout: template.Layout{Body: []template.LayoutItem{{Kind: template.ItemWidget, Key: "content", Widget: "core_content", Presentation: widget.DefaultPresentation()}}}},
+					{Code: "empty", Label: "Empty"},
+				},
 				Modules: []kernel.ProfileModule{
 					{Module: core.Module{}},
 					{Module: admin.Module{}},
@@ -1430,6 +1436,10 @@ func TestHandlerMiddlewareOrderForRoutesAndResources(t *testing.T) {
 func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 	t *testing.T,
 ) {
+	widgetsTemplate := template.Code("widgets")
+	emptyTemplate := template.Code("empty")
+	contentTemplate := template.Code("content")
+	presentation := widget.DefaultPresentation()
 	required := true
 	success := handlerWidget{
 		definition: widget.Definition{
@@ -1531,24 +1541,27 @@ func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 					ID:       7,
 					SiteID:   1,
 					Type:     resourcetype.Page,
+					Template: &widgetsTemplate,
 					Title:    "Page",
 					Path:     stringPointer("/page"),
 					Content:  "Content",
 					IsPublic: true,
-					Widgets: []resource.WidgetBinding{
-						{Code: "widgets_success", Position: 0},
-						{Code: "missing_widget", Position: 1},
-						{Code: "widgets_params", Position: 2},
-						{Code: "widgets_instance", Position: 3},
-						{Code: "widgets_render", Position: 4},
-						{Code: "widgets_result", Position: 5},
-						{Code: "widgets_success", Position: 6},
+					Widgets: []widget.Binding{
+						{ID: 1, Code: "widgets_success", Area: widget.AreaBody, Position: 0, Presentation: presentation},
+						{ID: 2, Code: "missing_widget", Area: widget.AreaBody, Position: 1, Presentation: presentation},
+						{ID: 3, Code: "widgets_params", Area: widget.AreaBody, Position: 2, Presentation: presentation},
+						{ID: 4, Code: "widgets_instance", Area: widget.AreaBody, Position: 3, Presentation: presentation},
+						{ID: 5, Code: "widgets_render", Area: widget.AreaBody, Position: 4, Presentation: presentation},
+						{ID: 6, Code: "widgets_result", Area: widget.AreaBody, Position: 5, Presentation: presentation},
+						{ID: 7, Code: "widgets_success", Area: widget.AreaBody, Position: 6, Presentation: presentation},
+						{ID: 8, Code: "widgets_success", Area: widget.AreaBody, Position: 7, Presentation: widget.Presentation{Columns: 12, Enabled: false}},
 					},
 				},
 				"/empty": {
 					ID:       8,
 					SiteID:   1,
 					Type:     resourcetype.Page,
+					Template: &emptyTemplate,
 					Title:    "Empty",
 					Path:     stringPointer("/empty"),
 					IsPublic: true,
@@ -1557,14 +1570,11 @@ func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 					ID:       9,
 					SiteID:   1,
 					Type:     resourcetype.Page,
+					Template: &contentTemplate,
 					Title:    "Core content",
 					Path:     stringPointer("/core-content"),
 					Content:  "Content from resource",
 					IsPublic: true,
-					Widgets: []resource.WidgetBinding{{
-						Code:     "core_content",
-						Position: 0,
-					}},
 				},
 			},
 		},
@@ -1594,8 +1604,11 @@ func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 	}
 
 	var payload struct {
-		Resource map[string]any   `json:"resource"`
-		Widgets  []map[string]any `json:"widgets"`
+		Resource map[string]any `json:"resource"`
+		Widgets  struct {
+			Body    []map[string]any `json:"body"`
+			Sidebar []map[string]any `json:"sidebar"`
+		} `json:"widgets"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
@@ -1607,7 +1620,7 @@ func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 		payload.Resource["content"] != "Content" {
 		t.Fatalf("resource payload = %#v", payload.Resource)
 	}
-	if len(payload.Widgets) != 7 {
+	if len(payload.Widgets.Body) != 7 || len(payload.Widgets.Sidebar) != 0 {
 		t.Fatalf("widgets = %#v", payload.Widgets)
 	}
 
@@ -1618,12 +1631,12 @@ func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 		4: "render_failed",
 		5: "invalid_result",
 	}
-	for index, current := range payload.Widgets {
+	for index, current := range payload.Widgets.Body {
 		if _, exists := current["params"]; exists {
 			t.Fatalf("widget %d leaked params: %#v", index, current)
 		}
-		if current["position"] != float64(index) {
-			t.Fatalf("widget %d position = %#v", index, current["position"])
+		if current["view"] != "default" || current["columns"] != float64(12) {
+			t.Fatalf("widget %d presentation = %#v", index, current)
 		}
 		expectedError, failed := expectedErrors[index]
 		if !failed {
@@ -1649,7 +1662,7 @@ func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK ||
-		!strings.Contains(response.Body.String(), `"widgets":[]`) {
+		!strings.Contains(response.Body.String(), `"widgets":{"body":[],"sidebar":[]}`) {
 		t.Fatalf(
 			"empty widgets response = %d, %s",
 			response.Code,
@@ -1670,17 +1683,19 @@ func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 	}
 
 	var contentPayload struct {
-		Widgets []struct {
-			Code widget.Code    `json:"code"`
-			Data map[string]any `json:"data"`
+		Widgets struct {
+			Body []struct {
+				Code widget.Code    `json:"code"`
+				Data map[string]any `json:"data"`
+			} `json:"body"`
 		} `json:"widgets"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &contentPayload); err != nil {
 		t.Fatal(err)
 	}
-	if len(contentPayload.Widgets) != 1 ||
-		contentPayload.Widgets[0].Code != "core_content" ||
-		contentPayload.Widgets[0].Data["content"] !=
+	if len(contentPayload.Widgets.Body) != 1 ||
+		contentPayload.Widgets.Body[0].Code != "core_content" ||
+		contentPayload.Widgets.Body[0].Data["content"] !=
 			"Content from resource" {
 		t.Fatalf("core content payload = %#v", contentPayload)
 	}

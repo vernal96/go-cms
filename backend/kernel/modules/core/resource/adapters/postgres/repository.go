@@ -186,15 +186,6 @@ RETURNING
 	if err != nil {
 		return resource.Resource{}, translateError(err)
 	}
-	if err := replaceResourceWidgets(
-		ctx,
-		transaction,
-		result.ID,
-		item.Widgets,
-	); err != nil {
-		return resource.Resource{}, err
-	}
-	result.Widgets = resource.Clone(item).Widgets
 	if err := replaceFileReferences(ctx, transaction, result.ID, item.FileReferences); err != nil {
 		return resource.Resource{}, err
 	}
@@ -810,15 +801,7 @@ WHERE item.id = tree.id
 		return resource.Resource{}, translateError(err)
 	}
 
-	if err := replaceResourceWidgets(
-		ctx,
-		transaction,
-		updated.ID,
-		item.Widgets,
-	); err != nil {
-		return resource.Resource{}, err
-	}
-	updated.Widgets = resource.Clone(item).Widgets
+	updated.Widgets = widget.CloneBindings(item.Widgets)
 	if err := replaceFileReferences(ctx, transaction, updated.ID, item.FileReferences); err != nil {
 		return resource.Resource{}, err
 	}
@@ -1178,73 +1161,273 @@ type rowQueryer interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }
 
-func replaceResourceWidgets(
+func (r *Repository) CreateWidget(
 	ctx context.Context,
-	transaction pgx.Tx,
 	resourceID resource.ID,
-	widgets []resource.WidgetBinding,
-) error {
-	if _, err := transaction.Exec(ctx, `
-DELETE FROM core.resource_widgets
-WHERE resource_id = $1;
-`, resourceID); err != nil {
-		return fmt.Errorf(
-			"delete widgets for resource %d: %w",
-			resourceID,
-			err,
-		)
+	binding widget.Binding,
+) (widget.Binding, error) {
+	if ctx == nil || resourceID <= 0 {
+		return widget.Binding{}, errors.New("resource widget create input is invalid")
 	}
-
-	for index, binding := range widgets {
-		if binding.Position != index {
-			return fmt.Errorf(
-				"resource %d widget %q has position %d instead of %d",
-				resourceID,
-				binding.Code,
-				binding.Position,
-				index,
-			)
-		}
-		params := binding.Params
-		if params == nil {
-			params = map[string]any{}
-		}
-		rawParams, err := json.Marshal(params)
-		if err != nil {
-			return fmt.Errorf(
-				"encode params for resource %d widget %q: %w",
-				resourceID,
-				binding.Code,
-				err,
-			)
-		}
-
-		if _, err := transaction.Exec(ctx, `
+	rawParams, err := encodeWidgetParams(binding)
+	if err != nil {
+		return widget.Binding{}, err
+	}
+	tx, err := r.connector.Pool().Begin(ctx)
+	if err != nil {
+		return widget.Binding{}, translateError(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := lockWidgetResource(ctx, tx, resourceID); err != nil {
+		return widget.Binding{}, err
+	}
+	var count int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM core.resource_widgets WHERE resource_id = $1 AND area = $2;`, resourceID, binding.Area).Scan(&count); err != nil {
+		return widget.Binding{}, translateError(err)
+	}
+	if binding.Position != count {
+		return widget.Binding{}, fmt.Errorf("resource %d widget position %d does not append to %q at %d", resourceID, binding.Position, binding.Area, count)
+	}
+	created, err := scanWidget(tx.QueryRow(ctx, `
 INSERT INTO core.resource_widgets
-(
-    resource_id,
-    widget_code,
-    position,
-    params
-)
-VALUES ($1, $2, $3, $4::jsonb);
-`,
-			resourceID,
-			binding.Code,
-			binding.Position,
-			string(rawParams),
-		); err != nil {
-			return fmt.Errorf(
-				"insert resource %d widget %q at position %d: %w",
-				resourceID,
-				binding.Code,
-				binding.Position,
-				err,
+    (resource_id, widget_code, area, position, view, columns, margin_top, margin_bottom, enabled, params)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bottom, enabled, params;
+`, resourceID, binding.Code, binding.Area, binding.Position, binding.Presentation.View,
+		binding.Presentation.Columns, binding.Presentation.MarginTop, binding.Presentation.MarginBottom,
+		binding.Presentation.Enabled, string(rawParams)))
+	if err != nil {
+		return widget.Binding{}, translateError(err)
+	}
+	if err := touchWidgetResource(ctx, tx, resourceID); err != nil {
+		return widget.Binding{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return widget.Binding{}, translateError(err)
+	}
+	return created, nil
+}
+
+func (r *Repository) UpdateWidget(
+	ctx context.Context,
+	resourceID resource.ID,
+	binding widget.Binding,
+) (widget.Binding, error) {
+	if ctx == nil || resourceID <= 0 || binding.ID <= 0 {
+		return widget.Binding{}, errors.New("resource widget update input is invalid")
+	}
+	rawParams, err := encodeWidgetParams(binding)
+	if err != nil {
+		return widget.Binding{}, err
+	}
+	tx, err := r.connector.Pool().Begin(ctx)
+	if err != nil {
+		return widget.Binding{}, translateError(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := lockWidgetResource(ctx, tx, resourceID); err != nil {
+		return widget.Binding{}, err
+	}
+	updated, err := scanWidget(tx.QueryRow(ctx, `
+UPDATE core.resource_widgets
+SET widget_code = $3, area = $4, position = $5, view = $6, columns = $7,
+    margin_top = $8, margin_bottom = $9, enabled = $10, params = $11::jsonb
+WHERE resource_id = $1 AND id = $2
+RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bottom, enabled, params;
+`, resourceID, binding.ID, binding.Code, binding.Area, binding.Position,
+		binding.Presentation.View, binding.Presentation.Columns, binding.Presentation.MarginTop,
+		binding.Presentation.MarginBottom, binding.Presentation.Enabled, string(rawParams)))
+	if err != nil {
+		return widget.Binding{}, translateError(err)
+	}
+	if err := touchWidgetResource(ctx, tx, resourceID); err != nil {
+		return widget.Binding{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return widget.Binding{}, translateError(err)
+	}
+	return updated, nil
+}
+
+func (r *Repository) DeleteWidget(
+	ctx context.Context,
+	resourceID resource.ID,
+	bindingID widget.BindingID,
+) error {
+	if ctx == nil || resourceID <= 0 || bindingID <= 0 {
+		return errors.New("resource widget delete input is invalid")
+	}
+	tx, err := r.connector.Pool().Begin(ctx)
+	if err != nil {
+		return translateError(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := lockWidgetResource(ctx, tx, resourceID); err != nil {
+		return err
+	}
+	var area widget.AreaCode
+	var position int
+	if err := tx.QueryRow(ctx, `SELECT area, position FROM core.resource_widgets WHERE resource_id = $1 AND id = $2 FOR UPDATE;`, resourceID, bindingID).Scan(&area, &position); err != nil {
+		return translateError(err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM core.resource_widgets WHERE resource_id = $1 AND id = $2;`, resourceID, bindingID); err != nil {
+		return translateError(err)
+	}
+	var offset int
+	if err := tx.QueryRow(ctx, `SELECT coalesce(max(position), -1) + 1 FROM core.resource_widgets WHERE resource_id = $1 AND area = $2;`, resourceID, area).Scan(&offset); err != nil {
+		return translateError(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE core.resource_widgets SET position = position + $4 WHERE resource_id = $1 AND area = $2 AND position > $3;`, resourceID, area, position, offset); err != nil {
+		return translateError(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE core.resource_widgets SET position = position - $4::integer - 1 WHERE resource_id = $1 AND area = $2 AND position > $3::integer + $4::integer;`, resourceID, area, position, offset); err != nil {
+		return translateError(err)
+	}
+	if err := touchWidgetResource(ctx, tx, resourceID); err != nil {
+		return err
+	}
+	return translateError(tx.Commit(ctx))
+}
+
+func (r *Repository) ReorderWidgets(
+	ctx context.Context,
+	resourceID resource.ID,
+	order []widget.Order,
+) ([]widget.Binding, error) {
+	if ctx == nil || resourceID <= 0 {
+		return nil, errors.New("resource widget reorder input is invalid")
+	}
+	tx, err := r.connector.Pool().Begin(ctx)
+	if err != nil {
+		return nil, translateError(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := lockWidgetResource(ctx, tx, resourceID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `SELECT id FROM core.resource_widgets WHERE resource_id = $1 FOR UPDATE;`, resourceID)
+	if err != nil {
+		return nil, translateError(err)
+	}
+	known := make(map[widget.BindingID]struct{})
+	for rows.Next() {
+		var id widget.BindingID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, translateError(err)
+		}
+		known[id] = struct{}{}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, translateError(err)
+	}
+	if len(known) != len(order) {
+		return nil, errors.New("resource widget order is incomplete")
+	}
+	positions := map[widget.AreaCode]int{
+		widget.AreaBody:    0,
+		widget.AreaSidebar: 0,
+	}
+	seen := make(map[widget.BindingID]struct{}, len(order))
+	for _, item := range order {
+		if _, exists := known[item.ID]; !exists {
+			return nil, fmt.Errorf("resource widget %d is unavailable", item.ID)
+		}
+		if _, exists := seen[item.ID]; exists {
+			return nil, fmt.Errorf("resource widget %d is duplicated in order", item.ID)
+		}
+		seen[item.ID] = struct{}{}
+		if !widget.ValidArea(item.Area) {
+			return nil, fmt.Errorf("resource widget %d has invalid area %q", item.ID, item.Area)
+		}
+		if item.Position != positions[item.Area] {
+			return nil, fmt.Errorf(
+				"resource widget %d in %q has position %d instead of %d",
+				item.ID,
+				item.Area,
+				item.Position,
+				positions[item.Area],
 			)
 		}
+		positions[item.Area]++
 	}
+	var offset int
+	if err := tx.QueryRow(ctx, `SELECT coalesce(max(position), -1) + 1 FROM core.resource_widgets WHERE resource_id = $1;`, resourceID).Scan(&offset); err != nil {
+		return nil, translateError(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE core.resource_widgets SET position = position + $2 WHERE resource_id = $1;`, resourceID, offset); err != nil {
+		return nil, translateError(err)
+	}
+	for _, item := range order {
+		command, err := tx.Exec(ctx, `UPDATE core.resource_widgets SET area = $3, position = $4 WHERE resource_id = $1 AND id = $2;`, resourceID, item.ID, item.Area, item.Position)
+		if err != nil {
+			return nil, translateError(err)
+		}
+		if command.RowsAffected() != 1 {
+			return nil, resource.ErrNotFound
+		}
+	}
+	loaded := []resource.Resource{{ID: resourceID}}
+	if err := loadResourceWidgets(ctx, tx, loaded); err != nil {
+		return nil, err
+	}
+	if err := touchWidgetResource(ctx, tx, resourceID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, translateError(err)
+	}
+	return loaded[0].Widgets, nil
+}
 
+func lockWidgetResource(ctx context.Context, tx pgx.Tx, resourceID resource.ID) error {
+	var id resource.ID
+	if err := tx.QueryRow(ctx, `SELECT id FROM core.resources WHERE id = $1 FOR UPDATE;`, resourceID).Scan(&id); err != nil {
+		return translateError(err)
+	}
 	return nil
+}
+
+func touchWidgetResource(ctx context.Context, tx pgx.Tx, resourceID resource.ID) error {
+	if _, err := tx.Exec(ctx, `UPDATE core.resources SET updated_at = now() WHERE id = $1;`, resourceID); err != nil {
+		return translateError(err)
+	}
+	return nil
+}
+
+func encodeWidgetParams(binding widget.Binding) ([]byte, error) {
+	params := binding.Params
+	if params == nil {
+		params = map[string]any{}
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("encode params for widget %q: %w", binding.Code, err)
+	}
+	return raw, nil
+}
+
+func scanWidget(scanner rowScanner) (widget.Binding, error) {
+	var binding widget.Binding
+	var rawParams []byte
+	if err := scanner.Scan(
+		&binding.ID, &binding.Code, &binding.Area, &binding.Position,
+		&binding.Presentation.View, &binding.Presentation.Columns,
+		&binding.Presentation.MarginTop, &binding.Presentation.MarginBottom,
+		&binding.Presentation.Enabled, &rawParams,
+	); err != nil {
+		return widget.Binding{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(rawParams))
+	decoder.UseNumber()
+	if err := decoder.Decode(&binding.Params); err != nil {
+		return widget.Binding{}, fmt.Errorf("decode params for widget %d: %w", binding.ID, err)
+	}
+	if binding.Params == nil {
+		binding.Params = map[string]any{}
+	}
+	return binding, nil
 }
 
 func loadResourceWidgets(
@@ -1265,10 +1448,11 @@ func loadResourceWidgets(
 	}
 
 	rows, err := queryer.Query(ctx, `
-SELECT resource_id, widget_code, position, params
+SELECT resource_id, id, widget_code, area, position, view, columns,
+       margin_top, margin_bottom, enabled, params
 FROM core.resource_widgets
 WHERE resource_id = ANY($1::bigint[])
-ORDER BY resource_id, position;
+ORDER BY resource_id, area, position, id;
 `, ids)
 	if err != nil {
 		return fmt.Errorf("query resource widgets: %w", err)
@@ -1278,14 +1462,20 @@ ORDER BY resource_id, position;
 	for rows.Next() {
 		var (
 			resourceID resource.ID
-			code       string
-			position   int
+			binding    widget.Binding
 			rawParams  []byte
 		)
 		if err := rows.Scan(
 			&resourceID,
-			&code,
-			&position,
+			&binding.ID,
+			&binding.Code,
+			&binding.Area,
+			&binding.Position,
+			&binding.Presentation.View,
+			&binding.Presentation.Columns,
+			&binding.Presentation.MarginTop,
+			&binding.Presentation.MarginBottom,
+			&binding.Presentation.Enabled,
 			&rawParams,
 		); err != nil {
 			return fmt.Errorf("scan resource widget: %w", err)
@@ -1305,19 +1495,13 @@ ORDER BY resource_id, position;
 			return fmt.Errorf(
 				"decode params for resource %d widget %q: %w",
 				resourceID,
-				code,
+				binding.Code,
 				err,
 			)
 		}
 
-		items[index].Widgets = append(
-			items[index].Widgets,
-			resource.WidgetBinding{
-				Code:     widget.Code(code),
-				Position: position,
-				Params:   params,
-			},
-		)
+		binding.Params = params
+		items[index].Widgets = append(items[index].Widgets, binding)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate resource widgets: %w", err)
@@ -1640,5 +1824,6 @@ func cloneFileReferences(source map[string]file.ID) map[string]file.ID {
 }
 
 var _ resource.Repository = (*Repository)(nil)
+var _ resource.WidgetRepository = (*Repository)(nil)
 var _ resource.ManagementRepository = (*Repository)(nil)
 var _ resource.StatisticsRepository = (*Repository)(nil)

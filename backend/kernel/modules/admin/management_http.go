@@ -18,6 +18,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/modules/resourceextension"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
@@ -47,6 +48,10 @@ func registerManagementRoutes(router chi.Router, management *Management) {
 	router.Get("/sites/{siteID}/resource-options", handler.resourceOptions)
 	router.Get("/sites/{siteID}/resources/{resourceID}", handler.getResource)
 	router.Patch("/sites/{siteID}/resources/{resourceID}", handler.updateResource)
+	router.Post("/sites/{siteID}/resources/{resourceID}/widgets", handler.createResourceWidget)
+	router.Patch("/sites/{siteID}/resources/{resourceID}/widgets/{widgetID}", handler.updateResourceWidget)
+	router.Delete("/sites/{siteID}/resources/{resourceID}/widgets/{widgetID}", handler.deleteResourceWidget)
+	router.Put("/sites/{siteID}/resources/{resourceID}/widgets/order", handler.reorderResourceWidgets)
 	router.Get("/sites/{siteID}/resources/{resourceID}/extensions/{extensionCode}", handler.getResourceExtension)
 	router.Patch("/sites/{siteID}/resources/{resourceID}/extensions/{extensionCode}", handler.saveResourceExtension)
 	router.Post("/sites/{siteID}/resources/{resourceID}/extensions/{extensionCode}/preview", handler.previewResourceExtension)
@@ -321,6 +326,126 @@ func (h *managementHTTP) updateResource(response http.ResponseWriter, request *h
 		},
 	)
 	writeResult(response, http.StatusOK, result, err)
+}
+
+type resourceWidgetPresentationRequest struct {
+	View         widget.ViewCode `json:"view"`
+	Columns      int             `json:"columns"`
+	MarginTop    int             `json:"margin_top"`
+	MarginBottom int             `json:"margin_bottom"`
+	Enabled      *bool           `json:"enabled"`
+	Params       map[string]any  `json:"params"`
+}
+
+type createResourceWidgetRequest struct {
+	Code widget.Code     `json:"code"`
+	Area widget.AreaCode `json:"area"`
+	resourceWidgetPresentationRequest
+}
+
+func (h *managementHTTP) createResourceWidget(response http.ResponseWriter, request *http.Request) {
+	siteID, resourceID, ok := resourceWidgetResourceParams(response, request)
+	if !ok {
+		return
+	}
+	var payload createResourceWidgetRequest
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	if payload.Params == nil {
+		writeValidation(response, "widget params are required")
+		return
+	}
+	result, err := h.management.CreateResourceWidget(request.Context(), actor(request), siteID, resourceID, resource.CreateWidgetInput{
+		Code: payload.Code, Area: payload.Area, View: payload.View, Columns: payload.Columns,
+		MarginTop: payload.MarginTop, MarginBottom: payload.MarginBottom,
+		Enabled: payload.Enabled, Params: payload.Params,
+	})
+	writeResult(response, http.StatusCreated, result, err)
+}
+
+func (h *managementHTTP) updateResourceWidget(response http.ResponseWriter, request *http.Request) {
+	siteID, resourceID, ok := resourceWidgetResourceParams(response, request)
+	if !ok {
+		return
+	}
+	bindingID, ok := widgetID(response, request)
+	if !ok {
+		return
+	}
+	var payload resourceWidgetPresentationRequest
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	if payload.Params == nil || payload.Enabled == nil {
+		writeValidation(response, "widget params and enabled are required")
+		return
+	}
+	result, err := h.management.UpdateResourceWidget(request.Context(), actor(request), siteID, resourceID, bindingID, resource.UpdateWidgetInput{
+		View: payload.View, Columns: payload.Columns, MarginTop: payload.MarginTop,
+		MarginBottom: payload.MarginBottom, Enabled: payload.Enabled, Params: payload.Params,
+	})
+	writeResult(response, http.StatusOK, result, err)
+}
+
+func (h *managementHTTP) deleteResourceWidget(response http.ResponseWriter, request *http.Request) {
+	siteID, resourceID, ok := resourceWidgetResourceParams(response, request)
+	if !ok {
+		return
+	}
+	bindingID, ok := widgetID(response, request)
+	if !ok {
+		return
+	}
+	if err := h.management.DeleteResourceWidget(request.Context(), actor(request), siteID, resourceID, bindingID); err != nil {
+		writeManagementError(response, err)
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+type reorderResourceWidgetsRequest struct {
+	Items []widget.Order `json:"items"`
+}
+
+func (h *managementHTTP) reorderResourceWidgets(response http.ResponseWriter, request *http.Request) {
+	siteID, resourceID, ok := resourceWidgetResourceParams(response, request)
+	if !ok {
+		return
+	}
+	var payload reorderResourceWidgetsRequest
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	if payload.Items == nil {
+		writeValidation(response, "widget order items are required")
+		return
+	}
+	result, err := h.management.ReorderResourceWidgets(request.Context(), actor(request), siteID, resourceID, payload.Items)
+	writeResult(response, http.StatusOK, struct {
+		Items []ResourceWidget `json:"items"`
+	}{Items: result}, err)
+}
+
+func resourceWidgetResourceParams(response http.ResponseWriter, request *http.Request) (site.ID, resource.ID, bool) {
+	siteID, ok := siteID(response, request)
+	if !ok {
+		return 0, 0, false
+	}
+	resourceID, ok := resourceID(response, request)
+	if !ok {
+		return 0, 0, false
+	}
+	return siteID, resourceID, true
+}
+
+func widgetID(response http.ResponseWriter, request *http.Request) (widget.BindingID, bool) {
+	parsed, err := strconv.ParseInt(chi.URLParam(request, "widgetID"), 10, 64)
+	if err != nil || parsed <= 0 {
+		writeBadRequest(response, "widget_id is invalid")
+		return 0, false
+	}
+	return widget.BindingID(parsed), true
 }
 
 type moveResourceRequest struct {

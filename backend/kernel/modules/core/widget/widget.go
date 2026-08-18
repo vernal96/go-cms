@@ -11,17 +11,56 @@ import (
 )
 
 type Code string
+type ViewCode string
+type AreaCode string
+type BindingID int64
 
-var (
-	ErrInvalidParams  = errors.New("invalid widget params")
-	ErrInstanceFailed = errors.New("widget instance failed")
+const (
+	AreaBody    AreaCode = "body"
+	AreaSidebar AreaCode = "sidebar"
+	DefaultView ViewCode = "default"
 )
 
-type Definition struct {
-	Code        Code
+var (
+	ErrInvalidParams       = errors.New("invalid widget params")
+	ErrInvalidPresentation = errors.New("invalid widget presentation")
+	ErrInstanceFailed      = errors.New("widget instance failed")
+)
+
+type ModuleDescriptor struct {
+	Code        string
 	Label       string
 	Description string
-	Fields      []field.Definition
+}
+
+type EditorTab struct {
+	Code   string
+	Label  string
+	Fields []string
+}
+
+type View struct {
+	Code  ViewCode
+	Label string
+}
+
+// ViewDeclaration adds one profile-specific frontend view to a globally
+// qualified widget code. The built-in default view is implicit.
+type ViewDeclaration struct {
+	Widget Code
+	Code   ViewCode
+	Label  string
+}
+
+type Definition struct {
+	Code          Code
+	Module        ModuleDescriptor
+	Label         string
+	Description   string
+	Fields        []field.Definition
+	EditorTabs    []EditorTab
+	SummaryFields []string
+	Views         []View
 }
 
 // Widget is a module-owned widget definition. Definition.Code is local to
@@ -31,15 +70,22 @@ type Widget interface {
 	New(map[string]any) (Instance, error)
 }
 
-// ResourceSnapshot is the resource data available to a widget during render.
-// It deliberately lives in this package so widgets do not depend on resource
-// persistence types.
+// These neutral request snapshots keep rendering independent from runtime
+// services and persistence models.
+type SiteSnapshot struct {
+	ID     int64
+	Domain string
+	Locale string
+}
+
 type ResourceSnapshot struct {
 	ID      int64
+	Title   string
 	Content string
 }
 
 type RenderInput struct {
+	Site     SiteSnapshot
 	Resource ResourceSnapshot
 }
 
@@ -53,8 +99,100 @@ type Provider interface {
 }
 
 type Source struct {
-	Module  string
+	Module  ModuleDescriptor
 	Widgets []Widget
+}
+
+type Presentation struct {
+	View         ViewCode
+	Columns      int
+	MarginTop    int
+	MarginBottom int
+	Enabled      bool
+}
+
+func DefaultPresentation() Presentation {
+	return Presentation{Columns: 12, Enabled: true}
+}
+
+func (p Presentation) Validate() error {
+	if p.Columns < 1 || p.Columns > 12 {
+		return fmt.Errorf("%w: columns must be between 1 and 12", ErrInvalidPresentation)
+	}
+	if p.MarginTop < 0 || p.MarginTop > 3 {
+		return fmt.Errorf("%w: margin top must be between 0 and 3", ErrInvalidPresentation)
+	}
+	if p.MarginBottom < 0 || p.MarginBottom > 3 {
+		return fmt.Errorf("%w: margin bottom must be between 0 and 3", ErrInvalidPresentation)
+	}
+	if strings.TrimSpace(string(p.View)) != string(p.View) {
+		return fmt.Errorf("%w: view %q is invalid", ErrInvalidPresentation, p.View)
+	}
+	return nil
+}
+
+func NormalizeView(code ViewCode) ViewCode {
+	if code == DefaultView {
+		return ""
+	}
+	return code
+}
+
+func PublicView(code ViewCode) ViewCode {
+	if code == "" {
+		return DefaultView
+	}
+	return code
+}
+
+func ValidArea(code AreaCode) bool {
+	return code == AreaBody || code == AreaSidebar
+}
+
+type Binding struct {
+	ID           BindingID
+	Code         Code
+	Area         AreaCode
+	Position     int
+	Presentation Presentation
+	Params       map[string]any
+}
+
+type Order struct {
+	ID       BindingID
+	Area     AreaCode
+	Position int
+}
+
+type Placement struct {
+	Key          string
+	BindingID    BindingID
+	Code         Code
+	Area         AreaCode
+	Position     int
+	Presentation Presentation
+	Params       map[string]any
+}
+
+type Placements struct {
+	Body    []Placement
+	Sidebar []Placement
+}
+
+func CloneBinding(binding Binding) Binding {
+	binding.Params = cloneMap(binding.Params)
+	return binding
+}
+
+func CloneBindings(source []Binding) []Binding {
+	if source == nil {
+		return nil
+	}
+	result := make([]Binding, len(source))
+	for index, binding := range source {
+		result[index] = CloneBinding(binding)
+	}
+	return result
 }
 
 type Runtime struct {
@@ -67,7 +205,6 @@ func (r *Runtime) Definition() Definition {
 	if r == nil {
 		return Definition{}
 	}
-
 	return CloneDefinition(r.definition)
 }
 
@@ -75,31 +212,51 @@ func (r *Runtime) FieldSchema() *field.Schema {
 	if r == nil {
 		return nil
 	}
-
 	return r.schema
 }
 
-func (r *Runtime) New(values map[string]any) (Instance, error) {
+func (r *Runtime) NormalizeParams(values map[string]any) (map[string]any, error) {
 	if r == nil {
 		return nil, errors.New("widget runtime is nil")
 	}
-
 	normalized, err := r.schema.Validate(values)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidParams, err)
 	}
+	return normalized, nil
+}
 
+func (r *Runtime) ValidatePresentation(presentation Presentation) error {
+	if r == nil {
+		return errors.New("widget runtime is nil")
+	}
+	presentation.View = NormalizeView(presentation.View)
+	if err := presentation.Validate(); err != nil {
+		return err
+	}
+	if presentation.View == "" {
+		return nil
+	}
+	for _, view := range r.definition.Views {
+		if view.Code == presentation.View {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: widget %q has no view %q", ErrInvalidPresentation, r.definition.Code, presentation.View)
+}
+
+func (r *Runtime) New(values map[string]any) (Instance, error) {
+	normalized, err := r.NormalizeParams(values)
+	if err != nil {
+		return nil, err
+	}
 	instance, err := r.widget.New(normalized)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInstanceFailed, err)
 	}
 	if isNil(instance) {
-		return nil, fmt.Errorf(
-			"%w: widget returned nil instance",
-			ErrInstanceFailed,
-		)
+		return nil, fmt.Errorf("%w: widget returned nil instance", ErrInstanceFailed)
 	}
-
 	return instance, nil
 }
 
@@ -108,112 +265,147 @@ type Catalog struct {
 	runtimes map[Code]*Runtime
 }
 
-func Compile(
-	sources []Source,
-	resolver field.TypeResolver,
-) (*Catalog, error) {
+func Compile(sources []Source, views []ViewDeclaration, resolver field.TypeResolver) (*Catalog, error) {
 	if resolver == nil {
 		return nil, errors.New("widget field type resolver is nil")
 	}
-
-	catalog := &Catalog{
-		runtimes: make(map[Code]*Runtime),
-	}
-
+	catalog := &Catalog{runtimes: make(map[Code]*Runtime)}
 	for sourceIndex, source := range sources {
-		if source.Module == "" ||
-			strings.TrimSpace(source.Module) != source.Module {
-			return nil, fmt.Errorf(
-				"widget source at index %d has invalid module code %q",
-				sourceIndex,
-				source.Module,
-			)
+		if err := validateModuleDescriptor(source.Module); err != nil {
+			return nil, fmt.Errorf("widget source at index %d: %w", sourceIndex, err)
 		}
-
 		localCodes := make(map[Code]struct{}, len(source.Widgets))
 		for widgetIndex, current := range source.Widgets {
 			if isNil(current) {
-				return nil, fmt.Errorf(
-					"module %q widget at index %d is nil",
-					source.Module,
-					widgetIndex,
-				)
+				return nil, fmt.Errorf("module %q widget at index %d is nil", source.Module.Code, widgetIndex)
 			}
-
 			declaration := CloneDefinition(current.Definition())
 			localCode := declaration.Code
-			if localCode == "" ||
-				strings.TrimSpace(string(localCode)) != string(localCode) {
-				return nil, fmt.Errorf(
-					"module %q widget at index %d has invalid code %q",
-					source.Module,
-					widgetIndex,
-					localCode,
-				)
+			if localCode == "" || strings.TrimSpace(string(localCode)) != string(localCode) {
+				return nil, fmt.Errorf("module %q widget at index %d has invalid code %q", source.Module.Code, widgetIndex, localCode)
 			}
-			if declaration.Label == "" ||
-				strings.TrimSpace(declaration.Label) != declaration.Label {
-				return nil, fmt.Errorf(
-					"module %q widget %q has invalid label %q",
-					source.Module,
-					localCode,
-					declaration.Label,
-				)
+			if declaration.Label == "" || strings.TrimSpace(declaration.Label) != declaration.Label {
+				return nil, fmt.Errorf("module %q widget %q has invalid label %q", source.Module.Code, localCode, declaration.Label)
 			}
-			if declaration.Description == "" ||
-				strings.TrimSpace(declaration.Description) !=
-					declaration.Description {
-				return nil, fmt.Errorf(
-					"module %q widget %q has invalid description %q",
-					source.Module,
-					localCode,
-					declaration.Description,
-				)
+			if declaration.Description == "" || strings.TrimSpace(declaration.Description) != declaration.Description {
+				return nil, fmt.Errorf("module %q widget %q has invalid description %q", source.Module.Code, localCode, declaration.Description)
 			}
 			if _, exists := localCodes[localCode]; exists {
-				return nil, fmt.Errorf(
-					"module %q contains duplicate widget code %q",
-					source.Module,
-					localCode,
-				)
+				return nil, fmt.Errorf("module %q contains duplicate widget code %q", source.Module.Code, localCode)
 			}
 			localCodes[localCode] = struct{}{}
-
-			globalCode := Code(source.Module + "_" + string(localCode))
+			globalCode := Code(source.Module.Code + "_" + string(localCode))
 			if _, exists := catalog.runtimes[globalCode]; exists {
-				return nil, fmt.Errorf(
-					"duplicate global widget code %q",
-					globalCode,
-				)
+				return nil, fmt.Errorf("duplicate global widget code %q", globalCode)
 			}
-
 			schema, err := field.Compile(declaration.Fields, resolver)
 			if err != nil {
-				return nil, fmt.Errorf(
-					"compile widget %q fields: %w",
-					globalCode,
-					err,
-				)
+				return nil, fmt.Errorf("compile widget %q fields: %w", globalCode, err)
 			}
-
+			if err := validateEditorMetadata(declaration); err != nil {
+				return nil, fmt.Errorf("compile widget %q editor metadata: %w", globalCode, err)
+			}
 			declaration.Code = globalCode
+			declaration.Module = source.Module
+			declaration.Views = nil
 			catalog.order = append(catalog.order, globalCode)
-			catalog.runtimes[globalCode] = &Runtime{
-				definition: declaration,
-				schema:     schema,
-				widget:     current,
+			catalog.runtimes[globalCode] = &Runtime{definition: declaration, schema: schema, widget: current}
+		}
+	}
+	if err := catalog.addViews(views); err != nil {
+		return nil, err
+	}
+	return catalog, nil
+}
+
+func validateModuleDescriptor(descriptor ModuleDescriptor) error {
+	if descriptor.Code == "" || strings.TrimSpace(descriptor.Code) != descriptor.Code {
+		return fmt.Errorf("invalid module code %q", descriptor.Code)
+	}
+	if descriptor.Label == "" || strings.TrimSpace(descriptor.Label) != descriptor.Label {
+		return fmt.Errorf("module %q has invalid label %q", descriptor.Code, descriptor.Label)
+	}
+	if strings.TrimSpace(descriptor.Description) != descriptor.Description {
+		return fmt.Errorf("module %q has invalid description %q", descriptor.Code, descriptor.Description)
+	}
+	return nil
+}
+
+func validateEditorMetadata(definition Definition) error {
+	fields := make(map[string]struct{}, len(definition.Fields))
+	for _, current := range definition.Fields {
+		fields[current.Key] = struct{}{}
+	}
+	tabs := make(map[string]struct{}, len(definition.EditorTabs))
+	assigned := make(map[string]string)
+	for index, tab := range definition.EditorTabs {
+		if tab.Code == "" || strings.TrimSpace(tab.Code) != tab.Code || tab.Label == "" || strings.TrimSpace(tab.Label) != tab.Label {
+			return fmt.Errorf("tab at index %d is invalid", index)
+		}
+		if _, exists := tabs[tab.Code]; exists {
+			return fmt.Errorf("duplicate tab code %q", tab.Code)
+		}
+		tabs[tab.Code] = struct{}{}
+		for _, fieldCode := range tab.Fields {
+			if _, exists := fields[fieldCode]; !exists {
+				return fmt.Errorf("tab %q references unknown field %q", tab.Code, fieldCode)
+			}
+			if previous, exists := assigned[fieldCode]; exists {
+				return fmt.Errorf("field %q is assigned to tabs %q and %q", fieldCode, previous, tab.Code)
+			}
+			assigned[fieldCode] = tab.Code
+		}
+	}
+	if len(definition.EditorTabs) > 0 {
+		for fieldCode := range fields {
+			if _, exists := assigned[fieldCode]; !exists {
+				return fmt.Errorf("field %q is not assigned to an editor tab", fieldCode)
 			}
 		}
 	}
+	seenSummary := make(map[string]struct{}, len(definition.SummaryFields))
+	for _, fieldCode := range definition.SummaryFields {
+		if _, exists := fields[fieldCode]; !exists {
+			return fmt.Errorf("summary references unknown field %q", fieldCode)
+		}
+		if _, exists := seenSummary[fieldCode]; exists {
+			return fmt.Errorf("summary field %q is duplicated", fieldCode)
+		}
+		seenSummary[fieldCode] = struct{}{}
+	}
+	return nil
+}
 
-	return catalog, nil
+func (c *Catalog) addViews(views []ViewDeclaration) error {
+	seen := make(map[string]struct{}, len(views))
+	for index, declaration := range views {
+		if declaration.Widget == "" {
+			return fmt.Errorf("widget view at index %d has empty widget code", index)
+		}
+		if declaration.Code == "" || declaration.Code == DefaultView || strings.TrimSpace(string(declaration.Code)) != string(declaration.Code) {
+			return fmt.Errorf("widget %q has invalid custom view code %q", declaration.Widget, declaration.Code)
+		}
+		if declaration.Label == "" || strings.TrimSpace(declaration.Label) != declaration.Label {
+			return fmt.Errorf("widget %q view %q has invalid label %q", declaration.Widget, declaration.Code, declaration.Label)
+		}
+		runtime, exists := c.runtimes[declaration.Widget]
+		if !exists {
+			return fmt.Errorf("custom view references unknown widget %q", declaration.Widget)
+		}
+		key := string(declaration.Widget) + "\x00" + string(declaration.Code)
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("widget %q has duplicate custom view %q", declaration.Widget, declaration.Code)
+		}
+		seen[key] = struct{}{}
+		runtime.definition.Views = append(runtime.definition.Views, View{Code: declaration.Code, Label: declaration.Label})
+	}
+	return nil
 }
 
 func (c *Catalog) Widget(code Code) (*Runtime, bool) {
 	if c == nil {
 		return nil, false
 	}
-
 	runtime, exists := c.runtimes[code]
 	return runtime, exists
 }
@@ -222,20 +414,18 @@ func (c *Catalog) Definitions() []Definition {
 	if c == nil {
 		return nil
 	}
-
 	result := make([]Definition, 0, len(c.order))
 	for _, code := range c.order {
-		result = append(
-			result,
-			CloneDefinition(c.runtimes[code].definition),
-		)
+		result = append(result, CloneDefinition(c.runtimes[code].definition))
 	}
-
 	return result
 }
 
 func CloneDefinition(definition Definition) Definition {
 	definition.Fields = field.CloneDefinitions(definition.Fields)
+	definition.EditorTabs = cloneEditorTabs(definition.EditorTabs)
+	definition.SummaryFields = append([]string(nil), definition.SummaryFields...)
+	definition.Views = append([]View(nil), definition.Views...)
 	return definition
 }
 
@@ -243,10 +433,36 @@ func CloneDefinitions(source []Definition) []Definition {
 	if source == nil {
 		return nil
 	}
-
 	result := make([]Definition, len(source))
 	for index, definition := range source {
 		result[index] = CloneDefinition(definition)
+	}
+	return result
+}
+
+func CloneViewDeclarations(source []ViewDeclaration) []ViewDeclaration {
+	return append([]ViewDeclaration(nil), source...)
+}
+
+func cloneEditorTabs(source []EditorTab) []EditorTab {
+	if source == nil {
+		return nil
+	}
+	result := make([]EditorTab, len(source))
+	for index, tab := range source {
+		result[index] = tab
+		result[index].Fields = append([]string(nil), tab.Fields...)
+	}
+	return result
+}
+
+func cloneMap(source map[string]any) map[string]any {
+	if source == nil {
+		return nil
+	}
+	result := make(map[string]any, len(source))
+	for key, value := range source {
+		result[key] = value
 	}
 	return result
 }
@@ -255,11 +471,9 @@ func isNil(value any) bool {
 	if value == nil {
 		return true
 	}
-
 	reflected := reflect.ValueOf(value)
 	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		return reflected.IsNil()
 	default:
 		return false

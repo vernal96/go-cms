@@ -39,7 +39,7 @@ const metadataLoading = ref(false)
 const errorMessage = ref<string | null>(null)
 const serverFieldErrors = ref<FieldValidationError[]>([])
 const localFieldErrors = ref<DynamicFieldErrors>({})
-const metadata = ref<ResourceMetadata>({ types: [], templates: [], extensions: [] })
+const metadata = ref<ResourceMetadata>({ types: [], templates: [], widgets: [], extensions: [] })
 const parent = ref<ResourceTreeItem | null>(null)
 const form = reactive({
   type: 'page' as 'page' | 'link',

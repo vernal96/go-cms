@@ -20,6 +20,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/modules/resourceextension"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
@@ -504,10 +505,36 @@ func (m *Management) ResourceChildren(
 }
 
 type ResourceTemplate struct {
-	Code   template.Code     `json:"code"`
-	Label  string            `json:"label"`
-	Icon   string            `json:"icon"`
-	Fields []FieldDefinition `json:"fields"`
+	Code                    template.Code     `json:"code"`
+	Label                   string            `json:"label"`
+	Icon                    string            `json:"icon"`
+	Fields                  []FieldDefinition `json:"fields"`
+	SupportsResourceWidgets bool              `json:"supports_resource_widgets"`
+	WidgetAreas             []widget.AreaCode `json:"widget_areas"`
+}
+
+type WidgetEditorTab struct {
+	Code   string   `json:"code"`
+	Label  string   `json:"label"`
+	Fields []string `json:"fields"`
+}
+
+type WidgetView struct {
+	Code  widget.ViewCode `json:"code"`
+	Label string          `json:"label"`
+}
+
+type WidgetDefinition struct {
+	Code              widget.Code       `json:"code"`
+	ModuleCode        string            `json:"module_code"`
+	ModuleLabel       string            `json:"module_label"`
+	ModuleDescription string            `json:"module_description"`
+	Label             string            `json:"label"`
+	Description       string            `json:"description"`
+	Fields            []FieldDefinition `json:"fields"`
+	EditorTabs        []WidgetEditorTab `json:"editor_tabs"`
+	SummaryFields     []string          `json:"summary_fields"`
+	Views             []WidgetView      `json:"views"`
 }
 
 type ResourceType struct {
@@ -518,6 +545,7 @@ type ResourceType struct {
 type ResourceMetadata struct {
 	Types      []ResourceType               `json:"types"`
 	Templates  []ResourceTemplate           `json:"templates"`
+	Widgets    []WidgetDefinition           `json:"widgets"`
 	Extensions []resourceextension.Metadata `json:"extensions"`
 }
 
@@ -540,11 +568,36 @@ func (m *Management) ResourceMetadata(
 		if err != nil {
 			return ResourceMetadata{}, err
 		}
+		templateRuntime, _ := runtime.Profile().Template(definition.Code)
 		templates[index] = ResourceTemplate{
-			Code:   definition.Code,
-			Label:  definition.Label,
-			Icon:   iconOrDefault(definition.Icon),
-			Fields: fields,
+			Code:                    definition.Code,
+			Label:                   definition.Label,
+			Icon:                    iconOrDefault(definition.Icon),
+			Fields:                  fields,
+			SupportsResourceWidgets: templateRuntime.SupportsResourceWidgets(),
+			WidgetAreas:             templateRuntime.ResourceAreas(),
+		}
+	}
+	widgetDefinitions := runtime.Profile().Widgets()
+	widgets := make([]WidgetDefinition, len(widgetDefinitions))
+	for index, definition := range widgetDefinitions {
+		fields, err := fieldDefinitions(definition.Fields)
+		if err != nil {
+			return ResourceMetadata{}, err
+		}
+		tabs := make([]WidgetEditorTab, len(definition.EditorTabs))
+		for tabIndex, tab := range definition.EditorTabs {
+			tabs[tabIndex] = WidgetEditorTab{Code: tab.Code, Label: tab.Label, Fields: append([]string(nil), tab.Fields...)}
+		}
+		views := make([]WidgetView, len(definition.Views))
+		for viewIndex, view := range definition.Views {
+			views[viewIndex] = WidgetView{Code: view.Code, Label: view.Label}
+		}
+		widgets[index] = WidgetDefinition{
+			Code: definition.Code, ModuleCode: definition.Module.Code,
+			ModuleLabel: definition.Module.Label, ModuleDescription: definition.Module.Description,
+			Label: definition.Label, Description: definition.Description, Fields: fields,
+			EditorTabs: tabs, SummaryFields: append([]string(nil), definition.SummaryFields...), Views: views,
 		}
 	}
 	types := []ResourceType{{Code: resourcetype.Link, Label: "Ссылка"}}
@@ -566,7 +619,7 @@ func (m *Management) ResourceMetadata(
 		extensions = append(extensions, editor.Metadata())
 	}
 	return ResourceMetadata{
-		Types: types, Templates: templates, Extensions: extensions,
+		Types: types, Templates: templates, Widgets: widgets, Extensions: extensions,
 	}, nil
 }
 
@@ -777,6 +830,20 @@ type ResourceDTO struct {
 	Deleted       bool              `json:"deleted"`
 	DeletedAt     *time.Time        `json:"deleted_at"`
 	Settings      map[string]any    `json:"settings"`
+	Widgets       []ResourceWidget  `json:"widgets"`
+}
+
+type ResourceWidget struct {
+	ID           widget.BindingID `json:"id"`
+	Code         widget.Code      `json:"code"`
+	Area         widget.AreaCode  `json:"area"`
+	Position     int              `json:"position"`
+	View         widget.ViewCode  `json:"view"`
+	Columns      int              `json:"columns"`
+	MarginTop    int              `json:"margin_top"`
+	MarginBottom int              `json:"margin_bottom"`
+	Enabled      bool             `json:"enabled"`
+	Params       map[string]any   `json:"params"`
 }
 
 type ResourceDetails struct {
@@ -898,7 +965,6 @@ func (m *Management) UpdateResource(
 		PublishedAt:      input.PublishedAt,
 		UnpublishedAt:    input.UnpublishedAt,
 		Settings:         input.Settings,
-		Widgets:          widgetInputs(current.Widgets),
 	})
 	if err != nil {
 		return ResourceDetails{}, validationError(err)
@@ -912,6 +978,102 @@ func (m *Management) UpdateResource(
 	result.Permissions.Delete = canDelete
 	result.Permissions.Restore = canDelete
 	return result, nil
+}
+
+func (m *Management) CreateResourceWidget(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+	resourceID resource.ID,
+	input resource.CreateWidgetInput,
+) (ResourceWidget, error) {
+	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission); err != nil {
+		return ResourceWidget{}, err
+	}
+	if err := m.requireResourceSite(ctx, actor, siteID, resourceID); err != nil {
+		return ResourceWidget{}, err
+	}
+	created, err := m.resources.CreateWidget(ctx, actor, resourceID, input)
+	if err != nil {
+		return ResourceWidget{}, validationError(err)
+	}
+	return resourceWidgets([]widget.Binding{created})[0], nil
+}
+
+func (m *Management) UpdateResourceWidget(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+	resourceID resource.ID,
+	bindingID widget.BindingID,
+	input resource.UpdateWidgetInput,
+) (ResourceWidget, error) {
+	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission); err != nil {
+		return ResourceWidget{}, err
+	}
+	if err := m.requireResourceSite(ctx, actor, siteID, resourceID); err != nil {
+		return ResourceWidget{}, err
+	}
+	updated, err := m.resources.UpdateWidget(ctx, actor, resourceID, bindingID, input)
+	if err != nil {
+		if errors.Is(err, resource.ErrNotFound) {
+			return ResourceWidget{}, err
+		}
+		return ResourceWidget{}, validationError(err)
+	}
+	return resourceWidgets([]widget.Binding{updated})[0], nil
+}
+
+func (m *Management) DeleteResourceWidget(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+	resourceID resource.ID,
+	bindingID widget.BindingID,
+) error {
+	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission); err != nil {
+		return err
+	}
+	if err := m.requireResourceSite(ctx, actor, siteID, resourceID); err != nil {
+		return err
+	}
+	return m.resources.DeleteWidget(ctx, actor, resourceID, bindingID)
+}
+
+func (m *Management) ReorderResourceWidgets(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+	resourceID resource.ID,
+	order []widget.Order,
+) ([]ResourceWidget, error) {
+	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission); err != nil {
+		return nil, err
+	}
+	if err := m.requireResourceSite(ctx, actor, siteID, resourceID); err != nil {
+		return nil, err
+	}
+	updated, err := m.resources.ReorderWidgets(ctx, actor, resourceID, order)
+	if err != nil {
+		return nil, validationError(err)
+	}
+	return resourceWidgets(updated), nil
+}
+
+func (m *Management) requireResourceSite(
+	ctx context.Context,
+	actor security.Actor,
+	siteID site.ID,
+	resourceID resource.ID,
+) error {
+	current, err := m.resources.Get(ctx, actor, resourceID)
+	if err != nil {
+		return err
+	}
+	if current.SiteID != siteID {
+		return resource.ErrNotFound
+	}
+	return nil
 }
 
 func (m *Management) MoveResource(
@@ -1151,17 +1313,23 @@ func resourceDTO(item resource.Resource) ResourceDTO {
 		Deleted:       item.DeletedAt != nil,
 		DeletedAt:     item.DeletedAt,
 		Settings:      settings,
+		Widgets:       resourceWidgets(item.Widgets),
 	}
 }
 
-func widgetInputs(source []resource.WidgetBinding) []resource.WidgetInput {
-	result := make([]resource.WidgetInput, len(source))
+func resourceWidgets(source []widget.Binding) []ResourceWidget {
+	result := make([]ResourceWidget, len(source))
 	for index, binding := range source {
 		params := make(map[string]any, len(binding.Params))
 		for key, value := range binding.Params {
 			params[key] = value
 		}
-		result[index] = resource.WidgetInput{Code: binding.Code, Params: params}
+		result[index] = ResourceWidget{
+			ID: binding.ID, Code: binding.Code, Area: binding.Area, Position: binding.Position,
+			View: widget.PublicView(binding.Presentation.View), Columns: binding.Presentation.Columns,
+			MarginTop: binding.Presentation.MarginTop, MarginBottom: binding.Presentation.MarginBottom,
+			Enabled: binding.Presentation.Enabled, Params: params,
+		}
 	}
 	return result
 }
