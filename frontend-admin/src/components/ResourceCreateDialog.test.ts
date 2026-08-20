@@ -20,13 +20,14 @@ describe('ResourceCreateDialog', () => {
     const created: ResourceTreeItem = {
       id: 10,
       parent_id: null,
-      template_code: 'page',
+      template_code: null,
       icon: 'document',
       title: 'Home',
       menu_title: '',
       display_title: 'Home',
 		sort: 0,
 		deleted: false,
+		published: true,
 		deleted_at: null,
       has_children: false,
       can_create_child: true,
@@ -79,7 +80,7 @@ describe('ResourceCreateDialog', () => {
       title: ' Home ',
       menu_title: '',
       slug: '',
-      settings: { page_title: 'Home' },
+      settings: {},
     })
 
     const buttons = wrapper.findAllComponents({ name: 'ElButton' })
@@ -96,11 +97,11 @@ describe('ResourceCreateDialog', () => {
     expect(JSON.parse(String(init.body))).toEqual({
       parent_id: null,
       type: 'page',
-      template_code: 'page',
+      template_code: null,
       title: 'Home',
       menu_title: '',
       slug: '',
-      settings: { page_title: 'Home' },
+      settings: {},
     })
     expect(wrapper.emitted('created')?.[0]).toEqual([created, null])
   })

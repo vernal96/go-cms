@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, type Component } from 'vue'
 import {
   ElAlert,
   ElButton,
@@ -17,13 +17,16 @@ import {
   Delete,
   Document,
   Download,
+  Files,
   Folder,
   FolderAdd,
+  Headset,
   HomeFilled,
-  Picture,
   Refresh,
   Rank,
+  Tickets,
   Upload,
+  VideoCamera,
 } from '@element-plus/icons-vue'
 
 import {
@@ -67,6 +70,9 @@ const history = ref<Array<number | null>>([])
 const previewURL = ref('')
 const previewName = ref('')
 const previewVisible = ref(false)
+const previewKind = ref<'image' | 'audio' | 'video' | 'document'>('image')
+const previewItem = ref<FilesystemItem | null>(null)
+const thumbnailURLs = reactive<Record<string, string>>({})
 const uploadInput = ref<HTMLInputElement | null>(null)
 const folderInput = ref<HTMLInputElement | null>(null)
 const contextMenu = ref<{ item: FilesystemItem; x: number; y: number } | null>(null)
@@ -117,7 +123,14 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('click', closeContextMenu)
   revokePreview()
+  revokeThumbnails()
 })
+watch(() => listing.value?.items, (items) => {
+  revokeThumbnails()
+  for (const item of items ?? []) {
+    if (isImage(item)) void loadThumbnail(item)
+  }
+}, { deep: true })
 watch(() => props.allowedStorages, () => {
   if (disk.value && !visibleDisks.value.some((item) => item.code === disk.value)) {
     disk.value = visibleDisks.value[0]?.code ?? ''
@@ -174,7 +187,7 @@ function goUp(): void {
 }
 function activate(item: FilesystemItem): void {
   if (item.kind === 'folder') void loadFolder(item.id)
-  else if (isImage(item)) void preview(item)
+  else if (browserPreviewKind(item)) void preview(item)
   else void confirmDownload(item)
 }
 
@@ -411,8 +424,22 @@ async function preview(item: FilesystemItem): Promise<void> {
     const blob = await adminBlob(`/api/admin/filesystem/files/${item.id}/preview`, props.accessToken)
     previewURL.value = URL.createObjectURL(blob)
     previewName.value = item.name
+    previewKind.value = browserPreviewKind(item) ?? 'document'
+    previewItem.value = item
     previewVisible.value = true
-  } catch (caught) { ElMessage.error(message(caught, 'Не удалось открыть изображение.')) }
+  } catch (caught) { ElMessage.error(message(caught, 'Не удалось открыть файл.')) }
+}
+
+async function loadThumbnail(item: FilesystemItem): Promise<void> {
+  const key = itemKey(item)
+  try {
+    const blob = await adminBlob(`/api/admin/filesystem/files/${item.id}/preview`, props.accessToken)
+    if (!listing.value?.items.some((current) => itemKey(current) === key)) {
+      URL.revokeObjectURL(URL.createObjectURL(blob))
+      return
+    }
+    thumbnailURLs[key] = URL.createObjectURL(blob)
+  } catch { /* the file tile keeps its type icon */ }
 }
 async function confirmDownload(item: FilesystemItem): Promise<void> {
   try {
@@ -430,11 +457,25 @@ async function download(item: FilesystemItem): Promise<void> {
 function revokePreview(): void {
   if (previewURL.value) URL.revokeObjectURL(previewURL.value)
   previewURL.value = ''
+  previewItem.value = null
+}
+function revokeThumbnails(): void {
+  for (const url of Object.values(thumbnailURLs)) URL.revokeObjectURL(url)
+  for (const key of Object.keys(thumbnailURLs)) delete thumbnailURLs[key]
+}
+async function downloadPreview(): Promise<void> {
+  if (!previewItem.value) return
+  try { await download(previewItem.value) }
+  catch (caught) { ElMessage.error(message(caught, 'Не удалось скачать файл.')) }
 }
 function showContext(event: MouseEvent, item: FilesystemItem): void {
   event.preventDefault(); event.stopPropagation()
   if (!selected.value.has(itemKey(item))) selected.value = new Set([itemKey(item)])
-  contextMenu.value = { item, x: event.clientX, y: event.clientY }
+  contextMenu.value = {
+    item,
+    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 188)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 220)),
+  }
 }
 function closeContextMenu(): void { contextMenu.value = null }
 function openMoveDialog(): void {
@@ -458,6 +499,24 @@ function matchesPicker(item: FilesystemItem): boolean {
 function itemKey(item: FilesystemItem): string { return `${item.kind}:${item.id}` }
 function reference(item: FilesystemItem): { kind: 'file' | 'folder'; id: number } { return { kind: item.kind, id: item.id } }
 function isImage(item: FilesystemItem): boolean { return item.mime_type?.startsWith('image/') ?? false }
+function browserPreviewKind(item: FilesystemItem): 'image' | 'audio' | 'video' | 'document' | null {
+  if (item.kind !== 'file') return null
+  const mime = item.mime_type?.toLocaleLowerCase() ?? ''
+  if (mime.startsWith('image/')) return 'image'
+  if (mime.startsWith('audio/')) return 'audio'
+  if (mime.startsWith('video/')) return 'video'
+  if (mime === 'application/pdf' || mime.startsWith('text/') || ['json', 'xml', 'csv', 'md'].some((extension) => item.name.toLocaleLowerCase().endsWith(`.${extension}`))) return 'document'
+  return null
+}
+function fileIcon(item: FilesystemItem): Component {
+  if (item.kind === 'folder') return Folder
+  const mime = item.mime_type?.toLocaleLowerCase() ?? ''
+  if (mime.startsWith('audio/')) return Headset
+  if (mime.startsWith('video/')) return VideoCamera
+  if (mime === 'application/pdf') return Tickets
+  if (mime.includes('word') || mime.includes('document') || /\.(docx?|odt|rtf)$/i.test(item.name)) return Document
+  return Files
+}
 function formatDate(value: string): string { return new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) }
 function formatSize(value: number): string {
   if (value < 1024) return `${value} Б`
@@ -553,7 +612,13 @@ async function readEntries(entry: FileSystemDirectoryEntry): Promise<FileSystemE
           @dragstart.stop="startInternalDrag($event, item, index)"
           @dragend.stop="finishDrag"
         ><Rank /></span>
-        <component :is="item.kind === 'folder' ? Folder : isImage(item) ? Picture : Document" class="file-tile-icon" />
+        <img
+          v-if="item.kind === 'file' && isImage(item) && thumbnailURLs[itemKey(item)]"
+          :src="thumbnailURLs[itemKey(item)]"
+          :alt="item.name"
+          class="file-tile-thumbnail"
+        />
+        <component v-else :is="fileIcon(item)" class="file-tile-icon" />
         <span class="file-tile-name" :title="item.name">{{ item.name }}</span>
         <span class="file-tile-extra">{{ item.kind === 'folder' ? `${item.item_count ?? 0} эл.` : formatSize(item.size ?? 0) }}</span>
       </button>
@@ -583,7 +648,14 @@ async function readEntries(entry: FileSystemDirectoryEntry): Promise<FileSystemE
     />
 
     <el-dialog v-model="previewVisible" :title="previewName" width="min(900px, 90vw)" @closed="revokePreview">
-      <img :src="previewURL" :alt="previewName" class="file-preview-image" />
+      <img v-if="previewKind === 'image'" :src="previewURL" :alt="previewName" class="file-preview-image" />
+      <audio v-else-if="previewKind === 'audio'" :src="previewURL" class="file-preview-audio" controls />
+      <video v-else-if="previewKind === 'video'" :src="previewURL" class="file-preview-video" controls />
+      <iframe v-else :src="previewURL" :title="previewName" class="file-preview-document" />
+      <template #footer>
+        <el-button @click="previewVisible = false">Закрыть</el-button>
+        <el-button type="primary" @click="downloadPreview">Скачать</el-button>
+      </template>
     </el-dialog>
   </div>
 </template>

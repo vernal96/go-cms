@@ -39,6 +39,10 @@ describe('ResourceTree', () => {
           title: 'Home',
           menu_title: '',
           display_title: 'Home',
+          sort: 0,
+          deleted: false,
+          published: true,
+          deleted_at: null,
           has_children: false,
           can_create_child: true,
         },
@@ -85,6 +89,7 @@ describe('ResourceTree', () => {
     const wrapper = shallowMount(ResourceTree, {
       props: { accessToken: 'token', canCreate: false },
     })
+    expect(wrapper.find('.resource-panel-header .resource-search').exists()).toBe(true)
     expect(wrapper.findComponent({ name: 'ElButton' }).exists()).toBe(false)
     const initialKey = wrapper.findComponent({ name: 'ElTree' }).vm.$.vnode.key
 
@@ -101,6 +106,7 @@ describe('ResourceTree', () => {
 
     await wrapper.setProps({ canCreate: true })
     expect(wrapper.findComponent({ name: 'ElButton' }).exists()).toBe(true)
+    expect(wrapper.find('.resource-heading-add').exists()).toBe(true)
   })
 
   it('moves a resource into a folder as its last child', async () => {

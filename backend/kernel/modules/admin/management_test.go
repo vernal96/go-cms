@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
@@ -119,6 +120,31 @@ func TestResourceTreeItemUsesSafeTitleAndIconFallbacks(t *testing.T) {
 	}
 	if iconOrDefault("unsafe/path") != "document" {
 		t.Fatal("unsafe icon did not fall back to document")
+	}
+}
+
+func TestResourceTreeItemReportsEffectivePublication(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	future := now.Add(time.Hour)
+	past := now.Add(-time.Hour)
+	cases := []struct {
+		name string
+		item resource.Child
+		want bool
+	}{
+		{name: "public", item: resource.Child{IsPublic: true}, want: true},
+		{name: "private", item: resource.Child{IsPublic: false}},
+		{name: "starts later", item: resource.Child{IsPublic: true, PublishedAt: &future}},
+		{name: "already ended", item: resource.Child{IsPublic: true, UnpublishedAt: &past}},
+		{name: "deleted", item: resource.Child{IsPublic: true, DeletedAt: &past}},
+	}
+	for _, current := range cases {
+		t.Run(current.name, func(t *testing.T) {
+			if got := isPublished(current.item); got != current.want {
+				t.Fatalf("published = %v, want %v", got, current.want)
+			}
+		})
 	}
 }
 

@@ -27,6 +27,19 @@ func TestPageTypeNormalizesDefaultsAndRejectsIncompatibleFields(
 		t.Fatal("settings map was not initialized")
 	}
 
+	withoutTemplate, err := page.Normalize(Payload{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withoutTemplate.Template != nil || withoutTemplate.ContentType == nil ||
+		*withoutTemplate.ContentType != "html" || withoutTemplate.Settings == nil {
+		t.Fatalf("blank page normalization = %#v", withoutTemplate)
+	}
+	emptyTemplate := template.Code("")
+	if _, err := page.Normalize(Payload{Template: &emptyTemplate}); err == nil {
+		t.Fatal("page accepted an empty template code")
+	}
+
 	invalidContentType := "HTML"
 	_, err = page.Normalize(Payload{
 		Template:    &templateCode,

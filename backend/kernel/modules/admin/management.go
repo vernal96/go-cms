@@ -430,6 +430,24 @@ func (m *Management) CreateSite(
 	if err != nil {
 		return SiteDetails{}, validationError(err)
 	}
+	_, err = m.resources.Create(ctx, security.System(), resource.CreateInput{
+		SiteID:   runtime.Site().ID,
+		Type:     resourcetype.Page,
+		Title:    "Первая страница",
+		Slug:     "",
+		Settings: map[string]any{},
+	})
+	if err != nil {
+		rollbackErr := m.sites.Delete(ctx, security.System(), runtime.Site().ID)
+		if rollbackErr != nil {
+			return SiteDetails{}, fmt.Errorf(
+				"create initial resource: %v; rollback site: %w",
+				err,
+				rollbackErr,
+			)
+		}
+		return SiteDetails{}, validationError(err)
+	}
 	permissions, err := m.sitePermissions(ctx, actor)
 	if err != nil {
 		return SiteDetails{}, err
@@ -514,6 +532,7 @@ type ResourceTreeItem struct {
 	DisplayTitle   string         `json:"display_title"`
 	Sort           int            `json:"sort"`
 	Deleted        bool           `json:"deleted"`
+	Published      bool           `json:"published"`
 	DeletedAt      *time.Time     `json:"deleted_at"`
 	HasChildren    bool           `json:"has_children"`
 	CanCreateChild bool           `json:"can_create_child"`
@@ -651,9 +670,9 @@ func (m *Management) ResourceMetadata(
 			EditorTabs: tabs, SummaryFields: append([]string{}, definition.SummaryFields...), Views: views,
 		}
 	}
-	types := []ResourceType{{Code: resourcetype.Link, Label: "Ссылка"}}
-	if len(templates) > 0 {
-		types = append([]ResourceType{{Code: resourcetype.Page, Label: "Страница"}}, types...)
+	types := []ResourceType{
+		{Code: resourcetype.Page, Label: "Страница"},
+		{Code: resourcetype.Link, Label: "Ссылка"},
 	}
 	extensions := make([]resourceextension.Metadata, 0)
 	for _, moduleRuntime := range runtime.Profile().Modules() {
@@ -845,15 +864,18 @@ func (m *Management) CreateResource(
 		return ResourceTreeItem{}, validationError(err)
 	}
 	return treeItem(runtime, resource.Child{
-		ID:        created.ID,
-		SiteID:    created.SiteID,
-		ParentID:  created.ParentID,
-		Type:      created.Type,
-		Template:  created.Template,
-		Title:     created.Title,
-		MenuTitle: created.MenuTitle,
-		Sort:      created.Sort,
-		DeletedAt: created.DeletedAt,
+		ID:            created.ID,
+		SiteID:        created.SiteID,
+		ParentID:      created.ParentID,
+		Type:          created.Type,
+		Template:      created.Template,
+		Title:         created.Title,
+		MenuTitle:     created.MenuTitle,
+		Sort:          created.Sort,
+		IsPublic:      created.IsPublic,
+		PublishedAt:   created.PublishedAt,
+		UnpublishedAt: created.UnpublishedAt,
+		DeletedAt:     created.DeletedAt,
 	}, true), nil
 }
 
@@ -1329,10 +1351,20 @@ func treeItem(runtime *site.Runtime, item resource.Child, canCreate bool) Resour
 		DisplayTitle:   displayTitle,
 		Sort:           item.Sort,
 		Deleted:        item.DeletedAt != nil,
+		Published:      isPublished(item),
 		DeletedAt:      item.DeletedAt,
 		HasChildren:    item.HasChildren,
 		CanCreateChild: canCreate && item.DeletedAt == nil,
 	}
+}
+
+func isPublished(item resource.Child) bool {
+	if item.DeletedAt != nil || !item.IsPublic {
+		return false
+	}
+	now := time.Now().UTC()
+	return (item.PublishedAt == nil || !now.Before(item.PublishedAt.UTC())) &&
+		(item.UnpublishedAt == nil || now.Before(item.UnpublishedAt.UTC()))
 }
 
 func resourceDTO(item resource.Resource) ResourceDTO {

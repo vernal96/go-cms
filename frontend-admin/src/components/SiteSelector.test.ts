@@ -49,18 +49,18 @@ describe('SiteSelector', () => {
 
     remoteSearch('old')
     vi.advanceTimersByTime(299)
-    expect(requestMock).not.toHaveBeenCalled()
-    vi.advanceTimersByTime(1)
     expect(requestMock).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(1)
+    expect(requestMock).toHaveBeenCalledTimes(2)
 
     remoteSearch('new')
     vi.advanceTimersByTime(300)
-    expect(requestMock).toHaveBeenCalledTimes(2)
-    expect(requestMock.mock.calls[1]?.[0]).toContain('search=new')
+    expect(requestMock).toHaveBeenCalledTimes(3)
+    expect(requestMock.mock.calls[2]?.[0]).toContain('search=new')
 
-    pending[1]?.(response('new.example.com'))
+    pending[2]?.(response('new.example.com'))
     await flushPromises()
-    pending[0]?.(response('old.example.com'))
+    pending[1]?.(response('old.example.com'))
     await flushPromises()
 
     const labels = wrapper.findAllComponents({ name: 'ElOption' }).map((option) => option.props('label'))

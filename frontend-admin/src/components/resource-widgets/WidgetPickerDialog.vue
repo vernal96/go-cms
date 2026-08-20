@@ -39,7 +39,7 @@ watch(() => props.modelValue, (open) => {
   <el-dialog
     :model-value="modelValue"
     title="Добавить виджет"
-    width="720px"
+    width="min(920px, calc(100vw - 32px))"
     @update:model-value="emit('update:modelValue', $event)"
   >
     <el-input v-model="search" clearable placeholder="Поиск виджетов" class="widget-search" />
@@ -71,4 +71,3 @@ watch(() => props.modelValue, (open) => {
 .widget-picker-item small { color: var(--el-text-color-secondary); }
 @media (max-width: 700px) { .widget-picker-grid { grid-template-columns: 1fr; } }
 </style>
-

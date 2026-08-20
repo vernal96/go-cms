@@ -794,13 +794,17 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 		t.Fatalf("explicit false values = %#v", about)
 	}
 
-	_, err = service.Create(context.Background(), security.System(), CreateInput{
+	blank, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID: 1,
-		Title:  "Missing template",
-		Slug:   "missing-template",
+		Title:  "Blank page",
+		Slug:   "blank-page",
 	})
-	if err == nil || !strings.Contains(err.Error(), "template is required") {
-		t.Fatalf("missing template error = %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blank.Template != nil || blank.ContentType == nil ||
+		*blank.ContentType != "html" || len(blank.Settings) != 0 {
+		t.Fatalf("blank page = %#v", blank)
 	}
 
 	_, err = service.Create(context.Background(), security.System(), CreateInput{

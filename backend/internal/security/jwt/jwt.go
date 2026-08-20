@@ -24,7 +24,7 @@ type Config struct {
 	SigningKey string        `envconfig:"SIGNING_KEY"`
 	Issuer     string        `envconfig:"ISSUER" default:"go-cms"`
 	Audience   string        `envconfig:"AUDIENCE" default:"go-cms-api"`
-	AccessTTL  time.Duration `envconfig:"ACCESS_TTL" default:"15m"`
+	AccessTTL  time.Duration `envconfig:"ACCESS_TTL" default:"48h"`
 	ClockSkew  time.Duration `envconfig:"CLOCK_SKEW" default:"30s"`
 }
 

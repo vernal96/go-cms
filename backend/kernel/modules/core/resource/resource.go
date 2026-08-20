@@ -136,16 +136,19 @@ type Node struct {
 }
 
 type Child struct {
-	ID          ID
-	SiteID      site.ID
-	ParentID    *ID
-	Type        resourcetype.Code
-	Template    *template.Code
-	Title       string
-	MenuTitle   string
-	Sort        int
-	DeletedAt   *time.Time
-	HasChildren bool
+	ID            ID
+	SiteID        site.ID
+	ParentID      *ID
+	Type          resourcetype.Code
+	Template      *template.Code
+	Title         string
+	MenuTitle     string
+	Sort          int
+	IsPublic      bool
+	PublishedAt   *time.Time
+	UnpublishedAt *time.Time
+	DeletedAt     *time.Time
+	HasChildren   bool
 }
 
 type ValidateImageMedia func(context.Context, media.ID) error

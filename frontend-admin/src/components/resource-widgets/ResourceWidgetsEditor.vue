@@ -337,7 +337,7 @@ function handleError(error: unknown, fallback: string): void {
 </template>
 
 <style scoped>
-.resource-widgets-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.resource-widgets-editor { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 22px; }
 .widget-area { min-height: 240px; padding: 16px; border: 1px solid var(--el-border-color); border-radius: 8px; background: var(--el-fill-color-extra-light); transition: background-color .14s ease, border-color .14s ease, box-shadow .14s ease, opacity .14s ease; }
 .widget-area.is-drag-available { border-color: var(--el-color-primary-light-5); background: color-mix(in srgb, var(--el-color-primary) 3%, var(--el-fill-color-extra-light)); box-shadow: inset 0 0 0 1px var(--el-color-primary-light-7); }
 .widget-area.is-drop-area { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); box-shadow: inset 0 0 0 1px var(--el-color-primary); }

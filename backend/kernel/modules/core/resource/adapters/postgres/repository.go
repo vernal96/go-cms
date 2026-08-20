@@ -359,6 +359,9 @@ SELECT
     current.template,
     current.title,
     current.menu_title,
+	current.is_public,
+	current.published_at,
+	current.unpublished_at,
 	current.deleted_at,
     EXISTS (
         SELECT 1
@@ -380,6 +383,9 @@ SELECT
     children.template,
     children.title,
     children.menu_title,
+	children.is_public,
+	children.published_at,
+	children.unpublished_at,
 	children.deleted_at,
 	children.sort,
     children.has_children
@@ -394,17 +400,20 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 	items := make([]resource.Child, 0)
 	for rows.Next() {
 		var (
-			parentExists   bool
-			rawID          *int64
-			rawSiteID      *int64
-			rawParent      *int64
-			rawType        *string
-			rawTemplate    *string
-			rawTitle       *string
-			rawMenuTitle   *string
-			rawDeletedAt   *time.Time
-			rawSort        *int
-			rawHasChildren *bool
+			parentExists     bool
+			rawID            *int64
+			rawSiteID        *int64
+			rawParent        *int64
+			rawType          *string
+			rawTemplate      *string
+			rawTitle         *string
+			rawMenuTitle     *string
+			rawIsPublic      *bool
+			rawPublishedAt   *time.Time
+			rawUnpublishedAt *time.Time
+			rawDeletedAt     *time.Time
+			rawSort          *int
+			rawHasChildren   *bool
 		)
 		if err := rows.Scan(
 			&parentExists,
@@ -415,6 +424,9 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 			&rawTemplate,
 			&rawTitle,
 			&rawMenuTitle,
+			&rawIsPublic,
+			&rawPublishedAt,
+			&rawUnpublishedAt,
 			&rawDeletedAt,
 			&rawSort,
 			&rawHasChildren,
@@ -428,14 +440,17 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 			continue
 		}
 		item := resource.Child{
-			ID:          resource.ID(*rawID),
-			SiteID:      site.ID(*rawSiteID),
-			Type:        resourcetype.Code(*rawType),
-			Title:       *rawTitle,
-			MenuTitle:   *rawMenuTitle,
-			Sort:        *rawSort,
-			DeletedAt:   rawDeletedAt,
-			HasChildren: *rawHasChildren,
+			ID:            resource.ID(*rawID),
+			SiteID:        site.ID(*rawSiteID),
+			Type:          resourcetype.Code(*rawType),
+			Title:         *rawTitle,
+			MenuTitle:     *rawMenuTitle,
+			Sort:          *rawSort,
+			IsPublic:      rawIsPublic != nil && *rawIsPublic,
+			PublishedAt:   rawPublishedAt,
+			UnpublishedAt: rawUnpublishedAt,
+			DeletedAt:     rawDeletedAt,
+			HasChildren:   *rawHasChildren,
 		}
 		if rawParent != nil {
 			value := resource.ID(*rawParent)

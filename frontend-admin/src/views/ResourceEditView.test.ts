@@ -101,6 +101,7 @@ describe('ResourceEditView schema transitions', () => {
 			extensions: [],
       })
       .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ site: { id: 7, domain: 'example.com' }, permissions: { read: true, create: true, update: true, delete: true } })
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
   })
 
@@ -134,7 +135,7 @@ describe('ResourceEditView schema transitions', () => {
     selects[2]?.vm.$emit('change', 'link')
     await flushPromises()
     expect(model.type).toBe('link')
-    expect(model.template_code).toBe('')
+    expect(model.template_code).toBeNull()
     expect(model.settings).toEqual({})
     expect(ElMessageBox.confirm).toHaveBeenCalledTimes(2)
   })
@@ -166,6 +167,7 @@ describe('ResourceEditView schema transitions', () => {
 				}],
 			})
 			.mockResolvedValueOnce({ items: [] })
+			.mockResolvedValueOnce({ site: { id: 7, domain: 'example.com' }, permissions: { read: true, create: true, update: true, delete: true } })
 		const wrapper = shallowMount(ResourceEditView, {
 			props: { accessToken: 'token', permissions: new Set<string>() },
 			global: { renderStubDefaultSlot: true },

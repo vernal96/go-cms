@@ -77,7 +77,7 @@ function save(): void {
   <el-dialog
     :model-value="modelValue"
     :title="widget ? `Настройки: ${definition?.label ?? ''}` : `Новый виджет: ${definition?.label ?? ''}`"
-    width="680px"
+    width="min(840px, calc(100vw - 32px))"
     @update:model-value="emit('update:modelValue', $event)"
   >
     <el-alert v-if="unsupported.length" type="error" :closable="false" :title="`Неизвестные типы полей: ${unsupported.join(', ')}`" />
@@ -124,4 +124,3 @@ function save(): void {
 .full-width { width: 100%; }
 @media (max-width: 650px) { .widget-presentation-grid { grid-template-columns: 1fr; } }
 </style>
-

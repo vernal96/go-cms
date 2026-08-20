@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
-import { ElButton, ElEmpty, ElIcon, ElMessage, ElMessageBox, ElTree } from 'element-plus'
+import { ElButton, ElEmpty, ElIcon, ElInput, ElMessage, ElMessageBox, ElSkeleton, ElTree } from 'element-plus'
 import type Node from 'element-plus/es/components/tree/src/model/node'
 import type { LoadFunction } from 'element-plus/es/components/tree/src/tree.type'
 import { Document, Folder, Link, Plus, Tickets } from '@element-plus/icons-vue'
@@ -8,7 +8,7 @@ import { useRouter } from 'vue-router'
 
 import { adminRequest, adminRequestVoid } from '../api/admin-api'
 import { useSelectedSite } from '../composables/use-selected-site'
-import type { ResourceChildrenResponse, ResourceTreeItem } from '../types/admin'
+import type { ResourceChildrenResponse, ResourceOption, ResourceOptionsResponse, ResourceTreeItem } from '../types/admin'
 import ResourceCreateDialog from './ResourceCreateDialog.vue'
 
 const props = withDefaults(defineProps<{
@@ -27,8 +27,13 @@ const rootError = ref(false)
 const moving = ref(false)
 const expandedIDs = new Set<number>()
 const context = ref<{ item: TreeNodeData; x: number; y: number } | null>(null)
+const resourceSearch = ref('')
+const searchResults = ref<ResourceOption[]>([])
+const searchLoading = ref(false)
 const dialogRef = ref<{ open(parent: ResourceTreeItem | null): Promise<void> } | null>(null)
 let removeRouteListener: (() => void) | null = null
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+let searchRequest = 0
 
 const treeProps = { label: 'display_title', children: 'children', isLeaf: 'isLeaf' }
 type TreeNodeData = ResourceTreeItem & {
@@ -62,7 +67,7 @@ function errorNode(parentId: number): TreeNodeData {
     id: -parentId, parent_id: parentId, template_code: null, icon: 'document',
     title: 'Не удалось загрузить дочерние ресурсы', menu_title: '',
     display_title: 'Не удалось загрузить дочерние ресурсы', sort: 0,
-    deleted: false, deleted_at: null, has_children: false, can_create_child: false,
+    deleted: false, published: false, deleted_at: null, has_children: false, can_create_child: false,
     isLeaf: true, loadError: true, retryParentId: parentId,
   }
 }
@@ -107,13 +112,49 @@ function openEditor(item: TreeNodeData): void {
   void router.push(`/admin/sites/${siteId.value}/resources/${item.id}/edit`)
 }
 
+function openSearchResult(item: ResourceOption): void {
+  if (siteId.value === null) return
+  void router.push(`/admin/sites/${siteId.value}/resources/${item.id}/edit`)
+}
+
+async function loadSearchResults(): Promise<void> {
+  const query = resourceSearch.value.trim()
+  const requestID = ++searchRequest
+  if (!query || siteId.value === null) {
+    searchResults.value = []
+    searchLoading.value = false
+    return
+  }
+  searchLoading.value = true
+  try {
+    const response = await adminRequest<ResourceOptionsResponse>(
+      `/api/admin/sites/${siteId.value}/resource-options`,
+      props.accessToken,
+    )
+    if (requestID !== searchRequest) return
+    const normalized = query.toLocaleLowerCase()
+    searchResults.value = response.items.filter((item) =>
+      `${item.display_title} ${item.path ?? ''}`.toLocaleLowerCase().includes(normalized),
+    )
+  } catch (error) {
+    if (requestID === searchRequest) emit('error', error)
+  } finally {
+    if (requestID === searchRequest) searchLoading.value = false
+  }
+}
+
+function scheduleSearch(): void {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => { searchTimer = null; void loadSearchResults() }, 220)
+}
+
 function openContextMenu(event: MouseEvent, item: TreeNodeData): void {
   if (item.loadError) return
   event.preventDefault()
   context.value = {
     item,
-    x: Math.min(event.clientX, window.innerWidth - 230),
-    y: Math.min(event.clientY, window.innerHeight - 250),
+    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 228)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 248)),
   }
 }
 
@@ -250,20 +291,57 @@ onBeforeUnmount(() => {
   document.removeEventListener('scroll', closeContextMenu, true)
   window.removeEventListener('admin:resource-tree-changed', handleTreeChanged)
   removeRouteListener?.()
+  if (searchTimer) clearTimeout(searchTimer)
 })
-watch(siteId, reloadTree)
+watch(siteId, () => {
+  resourceSearch.value = ''
+  searchResults.value = []
+  reloadTree()
+})
 </script>
 
 <template>
   <section class="resource-panel">
-    <div class="sidebar-heading-row">
-      <span class="sidebar-heading">Ресурсы</span>
-      <el-button v-if="siteId && canCreate" text :icon="Plus" aria-label="Создать корневой ресурс" @click="create(null)" />
+    <div class="resource-panel-header">
+      <div class="sidebar-heading-row">
+        <span class="sidebar-heading">Ресурсы</span>
+        <el-button
+          v-if="siteId && canCreate"
+          class="resource-heading-add"
+          text
+          :icon="Plus"
+          aria-label="Создать корневой ресурс"
+          @click="create(null)"
+        />
+      </div>
+      <el-input
+        v-if="siteId"
+        v-model="resourceSearch"
+        class="resource-search"
+        clearable
+        placeholder="Поиск ресурсов"
+        aria-label="Поиск ресурсов"
+        @input="scheduleSearch"
+      />
     </div>
     <el-empty v-if="!siteId" :image-size="58" description="Сначала выберите сайт" />
     <div v-else-if="rootError" class="tree-error">
       <span>Не удалось загрузить дерево</span>
       <el-button size="small" @click="reloadTree">Повторить</el-button>
+    </div>
+    <div v-else-if="resourceSearch.trim()" class="resource-search-results">
+      <el-skeleton v-if="searchLoading" :rows="4" animated />
+      <el-empty v-else-if="!searchResults.length" :image-size="48" description="Ресурсы не найдены" />
+      <button
+        v-for="item in searchResults"
+        :key="item.id"
+        type="button"
+        class="resource-search-result"
+        @click="openSearchResult(item)"
+      >
+        <span>{{ item.display_title }}</span>
+        <small>{{ item.path || '/' }}</small>
+      </button>
     </div>
     <el-tree
       v-else
@@ -292,7 +370,7 @@ watch(siteId, reloadTree)
           <span class="resource-node-title">{{ data.display_title }}</span>
           <el-button size="small" text @click.stop="retryNode(data.retryParentId)">Повторить</el-button>
         </span>
-        <span v-else class="resource-node" :class="{ 'is-deleted': data.deleted }">
+        <span v-else class="resource-node" :class="{ 'is-deleted': data.deleted, 'is-unpublished': !data.published && !data.deleted }">
           <el-icon class="resource-node-icon"><component :is="icon(data.icon)" /></el-icon>
           <span class="resource-node-title">{{ data.display_title }} ({{ data.id }})</span>
           <el-button

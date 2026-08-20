@@ -20,12 +20,14 @@ const metadata: ResourceExtensionMetadata = {
   fields: [
     { key: 'title_template', label: 'Title', control: 'text' },
     { key: 'robots_index', label: 'Index', control: 'switch' },
+    { key: 'og_title', label: 'OpenGraph title', control: 'text' },
   ],
   variables: [{ code: '{{ resource.title }}', label: 'resource.title' }],
 }
 const settings = {
   title_template: '{{ resource.title }}',
   robots_index: true,
+  og_title: '',
 }
 
 function mountEditor(canUpdate = true) {
@@ -42,6 +44,22 @@ function mountEditor(canUpdate = true) {
 }
 
 describe('ResourceExtensionEditor', () => {
+  it('opens SEO on the main tab and keeps OpenGraph in its own tab', async () => {
+    requestMock.mockReset()
+    requestMock.mockResolvedValueOnce(settings)
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'ElTabs' }).props('modelValue')).toBe('general')
+    expect(wrapper.findAllComponents({ name: 'ElTabPane' }).map((tab) => ({
+      label: tab.props('label'),
+      name: tab.props('name'),
+    }))).toEqual([
+      { label: 'Основные', name: 'general' },
+      { label: 'OpenGraph', name: 'opengraph' },
+    ])
+  })
+
   it('loads, previews, and saves through separate extension requests', async () => {
     requestMock.mockReset()
     requestMock

@@ -10,14 +10,13 @@ import {
   ElDropdownMenu,
   ElHeader,
   ElIcon,
-  ElInput,
   ElMain,
   ElMessage,
   ElPopover,
   ElScrollbar,
   ElTooltip,
 } from 'element-plus'
-import { ArrowDown, ArrowRightBold, Brush, Check, Moon, Platform, Search, Sunny, UserFilled } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowRightBold, Brush, Check, Moon, Platform, Sunny, UserFilled } from '@element-plus/icons-vue'
 import { RouterLink, RouterView, useRouter } from 'vue-router'
 
 import { AdminAPIError, adminBlob, adminRequest } from '../api/admin-api'
@@ -253,23 +252,13 @@ async function persistPreferences(colorScheme: ColorScheme, accentColor: AccentC
 <template>
   <el-container class="admin-shell">
     <el-header class="topbar" height="64px">
-      <div class="brand-search">
-        <router-link
-          to="/admin/dashboard"
-          class="brand-mark"
-          aria-label="На главную"
-        >
-          <el-icon :size="24"><Platform /></el-icon>
-        </router-link>
-        <el-input
-          class="global-search"
-          readonly
-          placeholder="Глобальный поиск"
-          aria-label="Глобальный поиск"
-          title="Глобальный поиск появится позже"
-          :prefix-icon="Search"
-        />
-      </div>
+      <router-link
+        to="/admin/dashboard"
+        class="brand-mark"
+        aria-label="На главную"
+      >
+        <el-icon :size="24"><Platform /></el-icon>
+      </router-link>
 
       <div class="topbar-main">
         <admin-navigation :items="navigation.items.value" />

@@ -12,6 +12,8 @@ import {
   ElMessage,
   ElSkeleton,
   ElSwitch,
+  ElTabPane,
+  ElTabs,
   ElTag,
 } from 'element-plus'
 
@@ -37,6 +39,7 @@ const loadError = ref<string | null>(null)
 const actionError = ref<string | null>(null)
 const fieldErrors = ref<Record<string, string>>({})
 const preview = ref<Record<string, unknown> | null>(null)
+const activeSEOGroup = ref('general')
 type ExtensionValue = string | number | boolean | null | undefined
 
 const values = reactive<Record<string, ExtensionValue>>({})
@@ -47,6 +50,11 @@ const endpoint = computed(() =>
 const seoPreview = computed(() =>
   props.metadata.code === 'seo' ? preview.value as SEOPreview | null : null,
 )
+const isSEO = computed(() => props.metadata.code === 'seo')
+const seoFieldGroups = computed(() => [
+  { name: 'general', label: 'Основные', fields: props.metadata.fields.filter((field) => !field.key.startsWith('og_')) },
+  { name: 'opengraph', label: 'OpenGraph', fields: props.metadata.fields.filter((field) => field.key.startsWith('og_')) },
+].filter((group) => group.fields.length > 0))
 
 async function load(): Promise<void> {
   loading.value = true
@@ -127,6 +135,27 @@ function updateSwitch(key: string, value: boolean): void {
   values[key] = value
 }
 
+async function copyVariable(code: string): Promise<void> {
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(code)
+    else {
+      const input = document.createElement('textarea')
+      input.value = code
+      input.setAttribute('readonly', '')
+      input.style.position = 'fixed'
+      input.style.opacity = '0'
+      document.body.appendChild(input)
+      input.select()
+      const copied = document.execCommand('copy')
+      input.remove()
+      if (!copied) throw new Error('Clipboard API is unavailable')
+    }
+    ElMessage.success('Переменная скопирована')
+  } catch {
+    ElMessage.error('Не удалось скопировать переменную')
+  }
+}
+
 function handleError(error: unknown, fallback: string, action: boolean): void {
   if (error instanceof AdminAPIError && error.status === 401) {
     emit('unauthorized')
@@ -153,34 +182,72 @@ onMounted(() => void load())
       <el-alert v-if="!canUpdate" type="info" :closable="false" title="Настройки доступны только для чтения" show-icon />
       <el-alert v-if="actionError" type="error" :closable="false" :title="actionError" show-icon />
 
-      <el-form label-position="top" class="extension-fields">
-        <el-form-item
-          v-for="field in metadata.fields"
-          :key="field.key"
-          :label="field.label"
-          :error="fieldErrors[field.key]"
-        >
-          <el-switch
-            v-if="field.control === 'switch'"
-            :model-value="values[field.key] === true"
-            :disabled="!canUpdate"
-            @update:model-value="updateSwitch(field.key, $event === true)"
-          />
-          <el-input
-            v-else
-            :model-value="textValue(field.key)"
-            :type="field.control === 'textarea' ? 'textarea' : 'text'"
-            :rows="field.rows ?? 3"
-            :disabled="!canUpdate"
-            @update:model-value="updateText(field.key, $event)"
-          />
-        </el-form-item>
+      <el-form label-position="top">
+        <el-tabs v-if="isSEO" v-model="activeSEOGroup">
+          <el-tab-pane v-for="group in seoFieldGroups" :key="group.name" :label="group.label" :name="group.name">
+            <div class="extension-fields">
+              <el-form-item
+                v-for="field in group.fields"
+                :key="field.key"
+                :label="field.label"
+                :error="fieldErrors[field.key]"
+              >
+                <el-switch
+                  v-if="field.control === 'switch'"
+                  :model-value="values[field.key] === true"
+                  :disabled="!canUpdate"
+                  @update:model-value="updateSwitch(field.key, $event === true)"
+                />
+                <el-input
+                  v-else
+                  :model-value="textValue(field.key)"
+                  :type="field.control === 'textarea' ? 'textarea' : 'text'"
+                  :rows="field.rows ?? 3"
+                  :disabled="!canUpdate"
+                  @update:model-value="updateText(field.key, $event)"
+                />
+              </el-form-item>
+            </div>
+          </el-tab-pane>
+        </el-tabs>
+        <div v-else class="extension-fields">
+          <el-form-item
+            v-for="field in metadata.fields"
+            :key="field.key"
+            :label="field.label"
+            :error="fieldErrors[field.key]"
+          >
+            <el-switch
+              v-if="field.control === 'switch'"
+              :model-value="values[field.key] === true"
+              :disabled="!canUpdate"
+              @update:model-value="updateSwitch(field.key, $event === true)"
+            />
+            <el-input
+              v-else
+              :model-value="textValue(field.key)"
+              :type="field.control === 'textarea' ? 'textarea' : 'text'"
+              :rows="field.rows ?? 3"
+              :disabled="!canUpdate"
+              @update:model-value="updateText(field.key, $event)"
+            />
+          </el-form-item>
+        </div>
       </el-form>
 
       <el-card v-if="metadata.variables.length" shadow="never" class="extension-variables">
         <template #header>Доступные переменные</template>
         <div class="variable-list">
-          <el-tag v-for="variable in metadata.variables" :key="variable.code" effect="plain">
+          <el-tag
+            v-for="variable in metadata.variables"
+            :key="variable.code"
+            effect="plain"
+            class="extension-variable"
+            role="button"
+            tabindex="0"
+            @click="copyVariable(variable.code)"
+            @keydown.enter="copyVariable(variable.code)"
+          >
             {{ variable.code }}
           </el-tag>
         </div>
@@ -241,6 +308,19 @@ onMounted(() => void load())
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.extension-variable {
+  cursor: pointer;
+  transition: background-color .18s ease, border-color .18s ease, color .18s ease, box-shadow .18s ease;
+}
+
+.extension-variable:hover,
+.extension-variable:focus-visible {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--el-color-primary) 12%, transparent);
 }
 
 .extension-actions {

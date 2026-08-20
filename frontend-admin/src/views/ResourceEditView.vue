@@ -4,7 +4,6 @@ import {
   ElAlert,
   ElButton,
   ElDatePicker,
-  ElEmpty,
   ElForm,
   ElFormItem,
   ElIcon,
@@ -20,7 +19,7 @@ import {
   ElTabs,
 } from 'element-plus'
 import { RefreshRight } from '@element-plus/icons-vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 
 import { AdminAPIError, adminRequest, adminRequestVoid } from '../api/admin-api'
 import DynamicFieldsForm from '../components/fields/DynamicFieldsForm.vue'
@@ -42,13 +41,13 @@ import type {
   ResourceOptionsResponse,
   ResourceUpdatePayload,
   ResourceWidget,
+  SiteDetailsResponse,
 } from '../types/admin'
 import type { FieldValidationError } from '../types/auth'
 
 const props = defineProps<{ accessToken: string; permissions: ReadonlySet<string> }>()
 const emit = defineEmits<{ unauthorized: [] }>()
 const route = useRoute()
-const router = useRouter()
 const previousTitle = document.title
 
 const loading = ref(true)
@@ -67,11 +66,14 @@ const deletedAt = ref<string | null>(null)
 const serverFieldErrors = ref<FieldValidationError[]>([])
 const localFieldErrors = ref<DynamicFieldErrors>({})
 const resourceWidgets = ref<ResourceWidget[]>([])
+const resourcePath = ref<string | null>(null)
+const siteDomain = ref('')
+const noTemplateValue = null as unknown as string
 
 const form = reactive({
   parent_id: null as number | null,
   type: 'page' as 'page' | 'link',
-  template_code: '',
+  template_code: null as string | null,
   title: '',
   annotation: '',
   menu_title: '',
@@ -95,6 +97,9 @@ const selectedTemplate = computed(() =>
 )
 const showWidgetsTab = computed(() =>
   form.type === 'page' && selectedTemplate.value?.supports_resource_widgets === true,
+)
+const showFieldsTab = computed(() =>
+  form.type === 'page' && (selectedTemplate.value?.fields.length ?? 0) > 0,
 )
 const applicableExtensions = computed(() =>
   metadata.value.extensions.filter((extension) => extension.applies_to.includes(form.type)),
@@ -122,10 +127,11 @@ async function load(): Promise<void> {
   loading.value = true
   loadError.value = null
   try {
-    const [details, loadedMetadata, loadedOptions] = await Promise.all([
+    const [details, loadedMetadata, loadedOptions, loadedSite] = await Promise.all([
       adminRequest<ResourceDetailsResponse>(`/api/admin/sites/${siteId.value}/resources/${resourceId.value}`, props.accessToken),
       adminRequest<ResourceMetadata>(`/api/admin/sites/${siteId.value}/resource-metadata`, props.accessToken),
       adminRequest<ResourceOptionsResponse>(`/api/admin/sites/${siteId.value}/resource-options`, props.accessToken),
+      adminRequest<SiteDetailsResponse>(`/api/admin/sites/${siteId.value}`, props.accessToken),
     ])
     metadata.value = loadedMetadata
     options.value = loadedOptions.items
@@ -133,13 +139,15 @@ async function load(): Promise<void> {
     canDelete.value = details.permissions.delete
     canRestore.value = details.permissions.restore
     const item = details.resource
+    resourcePath.value = item.path
+    siteDomain.value = loadedSite.site.domain
     deleted.value = item.deleted
     deletedAt.value = item.deleted_at
     resourceWidgets.value = item.widgets ?? []
     Object.assign(form, {
       parent_id: item.parent_id,
       type: item.type,
-      template_code: item.template_code ?? '',
+      template_code: item.template_code,
       title: item.title,
       annotation: item.annotation,
       menu_title: item.menu_title,
@@ -183,18 +191,18 @@ async function changeType(value: 'page' | 'link'): Promise<void> {
   serverFieldErrors.value = []
   localFieldErrors.value = {}
   if (value === 'link') {
-    form.template_code = ''
+    form.template_code = null
     form.content = ''
     form.settings = {}
-		if (activeTab.value.startsWith('extension:')) activeTab.value = 'main'
+		if (activeTab.value.startsWith('extension:') || activeTab.value === 'fields') activeTab.value = 'main'
   } else {
     form.external_url = ''
-    form.template_code = metadata.value.templates[0]?.code ?? ''
-    form.settings = createFieldValues(selectedTemplate.value?.fields ?? [])
+    form.template_code = null
+    form.settings = {}
   }
 }
 
-async function changeTemplate(value: string): Promise<void> {
+async function changeTemplate(value: string | null): Promise<void> {
   if (value === form.template_code) return
   const nextTemplate = metadata.value.templates.find((item) => item.code === value)
   if (resourceWidgets.value.length && !nextTemplate?.supports_resource_widgets) {
@@ -213,6 +221,7 @@ async function changeTemplate(value: string): Promise<void> {
   serverFieldErrors.value = []
   localFieldErrors.value = {}
   if (!selectedTemplate.value?.supports_resource_widgets && activeTab.value === 'widgets') activeTab.value = 'main'
+  if (!selectedTemplate.value?.fields.length && activeTab.value === 'fields') activeTab.value = 'main'
 }
 
 function generateCode(): void {
@@ -224,17 +233,20 @@ function generateCode(): void {
   form.slug = generated
 }
 
+function viewResource(): void {
+  if (!siteDomain.value) return
+  const path = resourcePath.value?.startsWith('/')
+    ? resourcePath.value
+    : `/${resourcePath.value ?? ''}`
+  window.open(`${window.location.protocol}//${siteDomain.value}${path || '/'}`, '_blank', 'noopener,noreferrer')
+}
+
 async function submit(): Promise<void> {
   submitError.value = null
   serverFieldErrors.value = []
   localFieldErrors.value = {}
   if (!form.title.trim()) {
     submitError.value = 'Заполните заголовок ресурса.'
-    activeTab.value = 'main'
-    return
-  }
-  if (form.type === 'page' && !form.template_code) {
-    submitError.value = 'Выберите шаблон страницы.'
     activeTab.value = 'main'
     return
   }
@@ -251,12 +263,12 @@ async function submit(): Promise<void> {
   const fields = form.type === 'page' ? (selectedTemplate.value?.fields ?? []) : []
   if (unsupportedFieldTypes(fields).length) {
     submitError.value = 'Форма содержит неизвестные типы полей и не может быть отправлена.'
-    activeTab.value = 'fields'
+    activeTab.value = showFieldsTab.value ? 'fields' : 'main'
     return
   }
   localFieldErrors.value = validateFieldValues(fields, form.settings)
   if (Object.keys(localFieldErrors.value).length) {
-    activeTab.value = 'fields'
+    activeTab.value = showFieldsTab.value ? 'fields' : 'main'
     return
   }
 
@@ -384,7 +396,7 @@ watch(() => [route.params.siteId, route.params.resourceId], () => void load())
         <p v-else>Редактирование ресурса</p>
       </div>
       <div class="page-header-actions">
-        <el-button @click="router.push('/admin/sites')">К сайтам</el-button>
+        <el-button :disabled="!siteDomain" @click="viewResource">Посмотреть</el-button>
         <el-button type="primary" :loading="submitting" :disabled="!canUpdate || loading" @click="submit">
           Сохранить
         </el-button>
@@ -403,8 +415,9 @@ watch(() => [route.params.siteId, route.params.resourceId], () => void load())
               <el-form-item label="Аннотация (введение)"><el-input v-model="form.annotation" type="textarea" :rows="7" :disabled="!canUpdate" /></el-form-item>
             </div>
             <div class="resource-main-secondary">
-              <el-form-item v-if="form.type === 'page'" label="Шаблон" required>
+              <el-form-item v-if="form.type === 'page'" label="Шаблон">
                 <el-select :model-value="form.template_code" class="full-width" :disabled="!canUpdate" @change="changeTemplate">
+                  <el-option label="(без шаблона)" :value="noTemplateValue" />
                   <el-option v-for="item in metadata.templates" :key="item.code" :label="item.label" :value="item.code" />
                 </el-select>
               </el-form-item>
@@ -435,7 +448,7 @@ watch(() => [route.params.siteId, route.params.resourceId], () => void load())
             :access-token="accessToken"
             :site-id="siteId"
             :resource-id="resourceId"
-            :template="selectedTemplate"
+              :template="selectedTemplate!"
             :definitions="metadata.widgets"
             :can-update="canUpdate && !deleted"
             @unauthorized="emit('unauthorized')"
@@ -470,11 +483,9 @@ watch(() => [route.params.siteId, route.params.resourceId], () => void load())
           </div>
         </el-tab-pane>
 
-        <el-tab-pane label="Параметры полей" name="fields">
-          <el-empty v-if="form.type === 'link'" description="У ссылок нет параметров шаблона" />
-          <el-empty v-else-if="!selectedTemplate?.fields.length" description="У шаблона нет дополнительных полей" />
-          <div v-else :class="{ 'dynamic-fields-readonly': !canUpdate }">
-            <dynamic-fields-form v-model="form.settings" :fields="selectedTemplate.fields" :errors="displayedFieldErrors" />
+        <el-tab-pane v-if="showFieldsTab" label="Параметры полей" name="fields">
+          <div :class="{ 'dynamic-fields-readonly': !canUpdate }">
+            <dynamic-fields-form v-model="form.settings" :fields="selectedTemplate!.fields" :errors="displayedFieldErrors" />
           </div>
         </el-tab-pane>
 

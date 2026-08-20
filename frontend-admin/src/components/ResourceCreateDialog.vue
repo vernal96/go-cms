@@ -41,9 +41,10 @@ const serverFieldErrors = ref<FieldValidationError[]>([])
 const localFieldErrors = ref<DynamicFieldErrors>({})
 const metadata = ref<ResourceMetadata>({ types: [], templates: [], widgets: [], extensions: [] })
 const parent = ref<ResourceTreeItem | null>(null)
+const noTemplateValue = null as unknown as string
 const form = reactive({
   type: 'page' as 'page' | 'link',
-  template_code: '',
+  template_code: null as string | null,
   title: '',
   menu_title: '',
   slug: '',
@@ -72,7 +73,7 @@ async function open(parentItem: ResourceTreeItem | null): Promise<void> {
   parent.value = parentItem
   Object.assign(form, {
     type: 'page',
-    template_code: '',
+    template_code: null,
     title: '',
     menu_title: '',
     slug: '',
@@ -90,7 +91,7 @@ async function open(parentItem: ResourceTreeItem | null): Promise<void> {
       props.accessToken,
     )
     form.type = metadata.value.types[0]?.code ?? 'link'
-    form.template_code = metadata.value.templates[0]?.code ?? ''
+    form.template_code = null
     form.settings = createFieldValues(selectedTemplate.value?.fields ?? [])
   } catch (error) {
     errorMessage.value = 'Не удалось загрузить типы ресурсов.'
@@ -127,10 +128,6 @@ async function submit(): Promise<void> {
     errorMessage.value = 'Заполните заголовок ресурса.'
     return
   }
-  if (form.type === 'page' && !form.template_code) {
-    errorMessage.value = 'Выберите шаблон страницы.'
-    return
-  }
   if (form.type === 'link' && !form.external_url.trim()) {
     errorMessage.value = 'Укажите адрес ссылки.'
     return
@@ -147,13 +144,13 @@ async function submit(): Promise<void> {
   const payload: ResourceCreatePayload = {
     parent_id: parent.value?.id ?? null,
     type: form.type,
+    template_code: form.type === 'page' ? form.template_code : null,
     title: form.title.trim(),
     menu_title: form.menu_title.trim(),
     slug: form.slug.trim(),
     settings: { ...form.settings },
   }
-  if (form.type === 'page') payload.template_code = form.template_code
-  else payload.external_url = form.external_url.trim()
+  if (form.type === 'link') payload.external_url = form.external_url.trim()
 
   loading.value = true
   try {
@@ -188,7 +185,7 @@ defineExpose({ open })
       :title="errorMessage"
     />
     <el-form label-position="top" :model="form" :disabled="metadataLoading">
-      <el-form-item label="Тип">
+      <el-form-item label="Тип" required>
         <el-select v-model="form.type" class="full-width">
           <el-option
             v-for="item in metadata.types"
@@ -200,6 +197,7 @@ defineExpose({ open })
       </el-form-item>
       <el-form-item v-if="form.type === 'page'" label="Шаблон">
         <el-select v-model="form.template_code" class="full-width">
+          <el-option label="(без шаблона)" :value="noTemplateValue" />
           <el-option
             v-for="item in metadata.templates"
             :key="item.code"
@@ -208,7 +206,7 @@ defineExpose({ open })
           />
         </el-select>
       </el-form-item>
-      <el-form-item label="Название"
+      <el-form-item label="Название" required
         ><el-input v-model="form.title"
       /></el-form-item>
       <el-form-item label="Название в меню"
@@ -219,7 +217,7 @@ defineExpose({ open })
           v-model="form.slug"
           placeholder="Оставьте пустым для генерации по заголовку"
       /></el-form-item>
-      <el-form-item v-if="form.type === 'link'" label="Адрес ссылки">
+      <el-form-item v-if="form.type === 'link'" label="Адрес ссылки" required>
         <el-input
           v-model="form.external_url"
           placeholder="https://example.com"

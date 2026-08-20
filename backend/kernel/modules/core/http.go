@@ -219,26 +219,24 @@ func (h pageResourceHandler) ServeHTTP(
 			Body: []pageWidgetResponse{}, Sidebar: []pageWidgetResponse{},
 		},
 	}
-	if item.Template == nil {
-		http.Error(response, "resource template is unavailable", http.StatusInternalServerError)
-		return
+	if item.Template != nil {
+		templateRuntime, exists := siteRuntime.Profile().Template(*item.Template)
+		if !exists {
+			http.Error(response, "resource template is unavailable", http.StatusInternalServerError)
+			return
+		}
+		placements, err := template.Compose(templateRuntime, item.Widgets)
+		if err != nil {
+			h.logError(ctx, "resource widget composition failed", item, widget.Binding{}, err)
+			http.Error(response, "resource response failed", http.StatusInternalServerError)
+			return
+		}
+		result.Widgets.Body = h.renderWidgets(ctx, siteRuntime, item, placements.Body)
+		if ctx.Err() != nil {
+			return
+		}
+		result.Widgets.Sidebar = h.renderWidgets(ctx, siteRuntime, item, placements.Sidebar)
 	}
-	templateRuntime, exists := siteRuntime.Profile().Template(*item.Template)
-	if !exists {
-		http.Error(response, "resource template is unavailable", http.StatusInternalServerError)
-		return
-	}
-	placements, err := template.Compose(templateRuntime, item.Widgets)
-	if err != nil {
-		h.logError(ctx, "resource widget composition failed", item, widget.Binding{}, err)
-		http.Error(response, "resource response failed", http.StatusInternalServerError)
-		return
-	}
-	result.Widgets.Body = h.renderWidgets(ctx, siteRuntime, item, placements.Body)
-	if ctx.Err() != nil {
-		return
-	}
-	result.Widgets.Sidebar = h.renderWidgets(ctx, siteRuntime, item, placements.Sidebar)
 
 	result.Extensions = h.publicExtensions(
 		ctx,

@@ -58,8 +58,8 @@ func (pageType) PathMode() PathMode {
 }
 
 func (pageType) Normalize(payload Payload) (Payload, error) {
-	if payload.Template == nil || *payload.Template == "" {
-		return Payload{}, errors.New("page template is required")
+	if payload.Template != nil && *payload.Template == "" {
+		return Payload{}, errors.New("page template code is empty")
 	}
 	if payload.TargetResourceID != nil {
 		return Payload{}, errors.New(

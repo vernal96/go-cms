@@ -205,6 +205,7 @@ export interface ResourceTreeItem {
   display_title: string
   sort: number
   deleted: boolean
+  published: boolean
   deleted_at: string | null
   has_children: boolean
   can_create_child: boolean
@@ -298,7 +299,7 @@ export interface SEOPreview {
 export interface ResourceCreatePayload {
   parent_id: number | null
   type: 'page' | 'link'
-  template_code?: string
+  template_code?: string | null
   title: string
   menu_title: string
   slug: string

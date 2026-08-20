@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElButton, ElOption, ElPagination, ElSelect } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
@@ -74,8 +74,11 @@ function choose(value: number | null): void {
 
 watch(selected.selectedSite, (value) => {
   selectedID.value = value?.id ?? null
-})
+  if (value && !options.value.some((item) => item.id === value.id)) options.value.unshift(value)
+}, { immediate: true })
 watch(selected.selectorRevision, () => void load())
+
+onMounted(() => void load())
 
 onBeforeUnmount(() => {
   controller?.abort()
