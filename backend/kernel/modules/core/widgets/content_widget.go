@@ -7,13 +7,13 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 )
 
-const ContentWidgetCode widget.Code = "content"
+var Content = widget.NewRef("content")
 
 type contentWidget struct{}
 
 func (contentWidget) Definition() widget.Definition {
 	return widget.Definition{
-		Code:        ContentWidgetCode,
+		Reference:   Content,
 		Label:       "Content",
 		Description: "Returns the resource content",
 	}

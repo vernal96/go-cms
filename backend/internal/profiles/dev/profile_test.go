@@ -4,11 +4,12 @@ import (
 	"testing"
 
 	"github.com/vernal96/go-cms/internal/profiles/dev"
+	"github.com/vernal96/go-cms/internal/profiles/dev/widgetviews"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
-	"github.com/vernal96/go-cms/kernel/modules/core/widget"
+	corewidgets "github.com/vernal96/go-cms/kernel/modules/core/widgets"
 	"github.com/vernal96/go-cms/kernel/modules/seo"
 )
 
@@ -59,12 +60,19 @@ func TestProfileExposesDynamicParamsAndTemplateFields(t *testing.T) {
 		t.Fatalf("templates = %#v", dev.Profile.Templates)
 	}
 	page := dev.Profile.Templates[0]
-	if len(page.Layout.Body) != 2 || page.Layout.Body[0].Kind != template.ItemWidget ||
-		page.Layout.Body[0].Widget != "core_content" || page.Layout.Body[1].Kind != template.ItemResourceSlot ||
-		len(page.Layout.Sidebar) != 1 || page.Layout.Sidebar[0].Kind != template.ItemResourceSlot {
+	if len(page.Layout.Body) != 2 || len(page.Layout.Sidebar) != 1 {
 		t.Fatalf("page widget layout = %#v", page.Layout)
 	}
-	if len(dev.Profile.WidgetViews) != 2 || dev.Profile.WidgetViews[0].Widget != widget.Code("core_content") {
+	content, contentOK := page.Layout.Body[0].(template.Widget)
+	_, bodySlotOK := page.Layout.Body[1].(template.ResourceWidgets)
+	_, sidebarSlotOK := page.Layout.Sidebar[0].(template.ResourceWidgets)
+	if !contentOK || content.Widget != corewidgets.Content || !content.View.IsZero() ||
+		!bodySlotOK || !sidebarSlotOK {
+		t.Fatalf("page widget layout = %#v", page.Layout)
+	}
+	if len(dev.Profile.WidgetViews) != 2 ||
+		dev.Profile.WidgetViews[0] != widgetviews.ContentCompact ||
+		dev.Profile.WidgetViews[1] != widgetviews.ContentArticle {
 		t.Fatalf("widget views = %#v", dev.Profile.WidgetViews)
 	}
 }

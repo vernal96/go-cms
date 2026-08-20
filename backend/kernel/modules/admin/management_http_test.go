@@ -218,8 +218,8 @@ func managementHTTPWidgetFixture(t *testing.T) (*Management, *extensionTestResou
 		Templates: []template.Definition{{
 			Code: "page", Label: "Page",
 			Layout: template.Layout{
-				Body:    []template.LayoutItem{{Kind: template.ItemResourceSlot}},
-				Sidebar: []template.LayoutItem{{Kind: template.ItemResourceSlot}},
+				Body:    []template.Item{template.ResourceWidgets{}},
+				Sidebar: []template.Item{template.ResourceWidgets{}},
 			},
 		}},
 	}

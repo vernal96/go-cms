@@ -14,7 +14,9 @@ func TestContentWidgetReturnsResourceContent(t *testing.T) {
 	}
 
 	definition := declared[0].Definition()
-	if definition.Code != ContentWidgetCode ||
+	if definition.Reference != Content ||
+		definition.Reference.Code() != "content" ||
+		definition.Code != "" ||
 		definition.Label == "" ||
 		definition.Description == "" ||
 		len(definition.Fields) != 0 {

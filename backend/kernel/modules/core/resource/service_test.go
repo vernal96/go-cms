@@ -84,10 +84,12 @@ func (testModuleRuntime) Widgets() []widget.Widget {
 
 type testWidget struct{}
 
+var testWidgetRef = widget.NewRef("summary")
+
 func (testWidget) Definition() widget.Definition {
 	required := true
 	return widget.Definition{
-		Code:        "summary",
+		Reference:   testWidgetRef,
 		Label:       "Summary",
 		Description: "Resource summary",
 		Fields: []field.Definition{
@@ -680,8 +682,8 @@ func newTestService(
 					Code:  "article",
 					Label: "Article",
 					Layout: template.Layout{
-						Body:    []template.LayoutItem{{Kind: template.ItemResourceSlot}},
-						Sidebar: []template.LayoutItem{{Kind: template.ItemResourceSlot}},
+						Body:    []template.Item{template.ResourceWidgets{}},
+						Sidebar: []template.Item{template.ResourceWidgets{}},
 					},
 					Fields: []field.Definition{{
 						Key:      "headline",
@@ -695,8 +697,8 @@ func newTestService(
 					Code:  "empty",
 					Label: "Empty",
 					Layout: template.Layout{
-						Body:    []template.LayoutItem{{Kind: template.ItemResourceSlot}},
-						Sidebar: []template.LayoutItem{{Kind: template.ItemResourceSlot}},
+						Body:    []template.Item{template.ResourceWidgets{}},
+						Sidebar: []template.Item{template.ResourceWidgets{}},
 					},
 				},
 			},

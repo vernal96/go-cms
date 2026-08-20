@@ -62,12 +62,13 @@ func testModule(code string) ModuleDescriptor {
 
 func TestCatalogQualifiesCompilesAndClonesWidgets(t *testing.T) {
 	var received map[string]any
+	summary := NewRef("summary")
 	catalog, err := Compile(
 		[]Source{{
 			Module: testModule("content"),
 			Widgets: []Widget{&testWidget{
 				definition: Definition{
-					Code:        "summary",
+					Reference:   summary,
 					Label:       "Summary",
 					Description: "Article summary",
 					Fields: []field.Definition{{
@@ -93,6 +94,10 @@ func TestCatalogQualifiesCompilesAndClonesWidgets(t *testing.T) {
 	runtime, exists := catalog.Widget("content_summary")
 	if !exists {
 		t.Fatal("qualified widget is unavailable")
+	}
+	resolved, code, exists := catalog.Resolve(summary)
+	if !exists || resolved != runtime || code != "content_summary" {
+		t.Fatalf("resolved widget = %#v, %q, %t", resolved, code, exists)
 	}
 	instance, err := runtime.New(map[string]any{
 		"count": json.Number("3"),
@@ -127,7 +132,7 @@ func TestRuntimeClassifiesParamsAndInstanceFailures(t *testing.T) {
 			Module: testModule("content"),
 			Widgets: []Widget{&testWidget{
 				definition: Definition{
-					Code:        "summary",
+					Reference:   NewRef("summary"),
 					Label:       "Summary",
 					Description: "Article summary",
 					Fields: []field.Definition{{
@@ -167,7 +172,7 @@ func TestCatalogRejectsInvalidAndDuplicateWidgets(t *testing.T) {
 	valid := func(code Code) Widget {
 		return &testWidget{
 			definition: Definition{
-				Code:        code,
+				Reference:   NewRef(code),
 				Label:       "Widget",
 				Description: "Description",
 			},
@@ -215,8 +220,8 @@ func TestCatalogRejectsInvalidAndDuplicateWidgets(t *testing.T) {
 				Module: testModule("content"),
 				Widgets: []Widget{&testWidget{
 					definition: Definition{
-						Code:  "summary",
-						Label: "Summary",
+						Reference: NewRef("summary"),
+						Label:     "Summary",
 					},
 				}},
 			}},
@@ -228,7 +233,7 @@ func TestCatalogRejectsInvalidAndDuplicateWidgets(t *testing.T) {
 				Module: testModule("content"),
 				Widgets: []Widget{&testWidget{
 					definition: Definition{
-						Code:        "summary",
+						Reference:   NewRef("summary"),
 						Label:       "Summary",
 						Description: "Description",
 						Fields: []field.Definition{{
@@ -246,7 +251,7 @@ func TestCatalogRejectsInvalidAndDuplicateWidgets(t *testing.T) {
 			sources: []Source{{
 				Module: testModule("content"),
 				Widgets: []Widget{&testWidget{definition: Definition{
-					Code: "summary", Label: "Summary", Description: "Description",
+					Reference: NewRef("summary"), Label: "Summary", Description: "Description",
 					EditorTabs: []EditorTab{{Code: "main", Label: "Main", Fields: []string{"missing"}}},
 				}}},
 			}},
@@ -257,7 +262,7 @@ func TestCatalogRejectsInvalidAndDuplicateWidgets(t *testing.T) {
 			sources: []Source{{
 				Module: testModule("content"),
 				Widgets: []Widget{&testWidget{definition: Definition{
-					Code: "summary", Label: "Summary", Description: "Description",
+					Reference: NewRef("summary"), Label: "Summary", Description: "Description",
 					Fields:     []field.Definition{{Key: "title", Type: field.TypeString, Label: "Title"}},
 					EditorTabs: []EditorTab{{Code: "main", Label: "Main"}},
 				}}},
@@ -277,15 +282,17 @@ func TestCatalogRejectsInvalidAndDuplicateWidgets(t *testing.T) {
 }
 
 func TestZeroFieldWidgetAndImplicitDefaultView(t *testing.T) {
+	empty := NewRef("empty")
+	compact := NewView(empty, "compact", "Compact")
 	catalog, err := Compile([]Source{{
 		Module: testModule("content"),
 		Widgets: []Widget{&testWidget{
-			definition: Definition{Code: "empty", Label: "Empty", Description: "No params"},
+			definition: Definition{Reference: empty, Label: "Empty", Description: "No params"},
 			new: func(values map[string]any) (Instance, error) {
 				return testInstance{data: values}, nil
 			},
 		}},
-	}}, []ViewDeclaration{{Widget: "content_empty", Code: "compact", Label: "Compact"}}, standardResolver())
+	}}, []View{compact}, standardResolver())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +301,7 @@ func TestZeroFieldWidgetAndImplicitDefaultView(t *testing.T) {
 		t.Fatalf("empty params: %v", err)
 	}
 	definition := runtime.Definition()
-	if len(definition.Views) != 1 || definition.Views[0].Code != "compact" {
+	if len(definition.Views) != 1 || definition.Views[0] != compact {
 		t.Fatalf("custom views = %#v", definition.Views)
 	}
 	if err := runtime.ValidatePresentation(DefaultPresentation()); err != nil {

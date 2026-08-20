@@ -15,6 +15,36 @@ type ViewCode string
 type AreaCode string
 type BindingID int64
 
+type reference struct {
+	code Code
+}
+
+// Ref is an immutable widget declaration reference. Its code is local to the
+// module that provides the associated widget implementation; Catalog owns
+// qualification into the compiled code used by runtimes, persistence and APIs.
+type Ref struct {
+	reference *reference
+}
+
+func NewRef(code Code) Ref {
+	return Ref{reference: &reference{code: code}}
+}
+
+func (r Ref) Code() Code {
+	if r.reference == nil {
+		return ""
+	}
+	return r.reference.code
+}
+
+func (r Ref) IsZero() bool {
+	return r.reference == nil
+}
+
+func (r Ref) String() string {
+	return string(r.Code())
+}
+
 const (
 	AreaBody    AreaCode = "body"
 	AreaSidebar AreaCode = "sidebar"
@@ -39,20 +69,36 @@ type EditorTab struct {
 	Fields []string
 }
 
+// View is a typed profile declaration associated with one widget reference.
+// The zero value means the implicit default view in template declarations.
 type View struct {
-	Code  ViewCode
-	Label string
+	widget Ref
+	code   ViewCode
+	label  string
 }
 
-// ViewDeclaration adds one profile-specific frontend view to a globally
-// qualified widget code. The built-in default view is implicit.
-type ViewDeclaration struct {
-	Widget Code
-	Code   ViewCode
-	Label  string
+func NewView(widget Ref, code ViewCode, label string) View {
+	return View{widget: widget, code: code, label: label}
+}
+
+func (v View) Widget() Ref {
+	return v.widget
+}
+
+func (v View) Code() ViewCode {
+	return v.code
+}
+
+func (v View) Label() string {
+	return v.label
+}
+
+func (v View) IsZero() bool {
+	return v.widget.IsZero() && v.code == "" && v.label == ""
 }
 
 type Definition struct {
+	Reference     Ref
 	Code          Code
 	Module        ModuleDescriptor
 	Label         string
@@ -63,8 +109,9 @@ type Definition struct {
 	Views         []View
 }
 
-// Widget is a module-owned widget definition. Definition.Code is local to
-// the owning module; Catalog qualifies it before exposing it to a profile.
+// Widget is a module-owned widget definition. Definition.Reference is the
+// stable module-local identity. Catalog generates Definition.Code when it
+// compiles the site/profile widget runtime.
 type Widget interface {
 	Definition() Definition
 	New(map[string]any) (Instance, error)
@@ -238,11 +285,42 @@ func (r *Runtime) ValidatePresentation(presentation Presentation) error {
 		return nil
 	}
 	for _, view := range r.definition.Views {
-		if view.Code == presentation.View {
+		if view.Code() == presentation.View {
 			return nil
 		}
 	}
 	return fmt.Errorf("%w: widget %q has no view %q", ErrInvalidPresentation, r.definition.Code, presentation.View)
+}
+
+// ValidateView verifies a typed template view against the final profile
+// catalog. Persisted/API presentation validation remains code-based.
+func (r *Runtime) ValidateView(view View) error {
+	if r == nil {
+		return errors.New("widget runtime is nil")
+	}
+	if view.IsZero() {
+		return nil
+	}
+	if view.Widget() != r.definition.Reference {
+		return fmt.Errorf(
+			"%w: view %q belongs to widget %q, not %q",
+			ErrInvalidPresentation,
+			view.Code(),
+			view.Widget(),
+			r.definition.Reference,
+		)
+	}
+	for _, available := range r.definition.Views {
+		if available == view {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"%w: widget %q has no declared view %q",
+		ErrInvalidPresentation,
+		r.definition.Code,
+		view.Code(),
+	)
 }
 
 func (r *Runtime) New(values map[string]any) (Instance, error) {
@@ -261,15 +339,19 @@ func (r *Runtime) New(values map[string]any) (Instance, error) {
 }
 
 type Catalog struct {
-	order    []Code
-	runtimes map[Code]*Runtime
+	order      []Code
+	runtimes   map[Code]*Runtime
+	references map[Ref]*Runtime
 }
 
-func Compile(sources []Source, views []ViewDeclaration, resolver field.TypeResolver) (*Catalog, error) {
+func Compile(sources []Source, views []View, resolver field.TypeResolver) (*Catalog, error) {
 	if resolver == nil {
 		return nil, errors.New("widget field type resolver is nil")
 	}
-	catalog := &Catalog{runtimes: make(map[Code]*Runtime)}
+	catalog := &Catalog{
+		runtimes:   make(map[Code]*Runtime),
+		references: make(map[Ref]*Runtime),
+	}
 	for sourceIndex, source := range sources {
 		if err := validateModuleDescriptor(source.Module); err != nil {
 			return nil, fmt.Errorf("widget source at index %d: %w", sourceIndex, err)
@@ -280,9 +362,20 @@ func Compile(sources []Source, views []ViewDeclaration, resolver field.TypeResol
 				return nil, fmt.Errorf("module %q widget at index %d is nil", source.Module.Code, widgetIndex)
 			}
 			declaration := CloneDefinition(current.Definition())
-			localCode := declaration.Code
+			if declaration.Code != "" {
+				return nil, fmt.Errorf(
+					"module %q widget at index %d declares compiled code %q; use Reference",
+					source.Module.Code,
+					widgetIndex,
+					declaration.Code,
+				)
+			}
+			if declaration.Reference.IsZero() {
+				return nil, fmt.Errorf("module %q widget at index %d has empty reference", source.Module.Code, widgetIndex)
+			}
+			localCode := declaration.Reference.Code()
 			if localCode == "" || strings.TrimSpace(string(localCode)) != string(localCode) {
-				return nil, fmt.Errorf("module %q widget at index %d has invalid code %q", source.Module.Code, widgetIndex, localCode)
+				return nil, fmt.Errorf("module %q widget at index %d has invalid reference code %q", source.Module.Code, widgetIndex, localCode)
 			}
 			if declaration.Label == "" || strings.TrimSpace(declaration.Label) != declaration.Label {
 				return nil, fmt.Errorf("module %q widget %q has invalid label %q", source.Module.Code, localCode, declaration.Label)
@@ -298,6 +391,9 @@ func Compile(sources []Source, views []ViewDeclaration, resolver field.TypeResol
 			if _, exists := catalog.runtimes[globalCode]; exists {
 				return nil, fmt.Errorf("duplicate global widget code %q", globalCode)
 			}
+			if _, exists := catalog.references[declaration.Reference]; exists {
+				return nil, fmt.Errorf("widget reference %q is provided more than once", declaration.Reference)
+			}
 			schema, err := field.Compile(declaration.Fields, resolver)
 			if err != nil {
 				return nil, fmt.Errorf("compile widget %q fields: %w", globalCode, err)
@@ -309,7 +405,9 @@ func Compile(sources []Source, views []ViewDeclaration, resolver field.TypeResol
 			declaration.Module = source.Module
 			declaration.Views = nil
 			catalog.order = append(catalog.order, globalCode)
-			catalog.runtimes[globalCode] = &Runtime{definition: declaration, schema: schema, widget: current}
+			runtime := &Runtime{definition: declaration, schema: schema, widget: current}
+			catalog.runtimes[globalCode] = runtime
+			catalog.references[declaration.Reference] = runtime
 		}
 	}
 	if err := catalog.addViews(views); err != nil {
@@ -376,28 +474,35 @@ func validateEditorMetadata(definition Definition) error {
 	return nil
 }
 
-func (c *Catalog) addViews(views []ViewDeclaration) error {
-	seen := make(map[string]struct{}, len(views))
+func (c *Catalog) addViews(views []View) error {
+	seen := make(map[Ref]map[ViewCode]struct{}, len(views))
 	for index, declaration := range views {
-		if declaration.Widget == "" {
-			return fmt.Errorf("widget view at index %d has empty widget code", index)
+		if declaration.IsZero() {
+			return fmt.Errorf("widget view at index %d is empty", index)
 		}
-		if declaration.Code == "" || declaration.Code == DefaultView || strings.TrimSpace(string(declaration.Code)) != string(declaration.Code) {
-			return fmt.Errorf("widget %q has invalid custom view code %q", declaration.Widget, declaration.Code)
+		if declaration.Widget().IsZero() {
+			return fmt.Errorf("widget view at index %d has empty widget reference", index)
 		}
-		if declaration.Label == "" || strings.TrimSpace(declaration.Label) != declaration.Label {
-			return fmt.Errorf("widget %q view %q has invalid label %q", declaration.Widget, declaration.Code, declaration.Label)
+		if declaration.Code() == "" || declaration.Code() == DefaultView || strings.TrimSpace(string(declaration.Code())) != string(declaration.Code()) {
+			return fmt.Errorf("widget %q has invalid custom view code %q", declaration.Widget(), declaration.Code())
 		}
-		runtime, exists := c.runtimes[declaration.Widget]
+		if declaration.Label() == "" || strings.TrimSpace(declaration.Label()) != declaration.Label() {
+			return fmt.Errorf("widget %q view %q has invalid label %q", declaration.Widget(), declaration.Code(), declaration.Label())
+		}
+		runtime, exists := c.references[declaration.Widget()]
 		if !exists {
-			return fmt.Errorf("custom view references unknown widget %q", declaration.Widget)
+			return fmt.Errorf("custom view references unavailable widget %q", declaration.Widget())
 		}
-		key := string(declaration.Widget) + "\x00" + string(declaration.Code)
-		if _, exists := seen[key]; exists {
-			return fmt.Errorf("widget %q has duplicate custom view %q", declaration.Widget, declaration.Code)
+		byCode := seen[declaration.Widget()]
+		if byCode == nil {
+			byCode = make(map[ViewCode]struct{})
+			seen[declaration.Widget()] = byCode
 		}
-		seen[key] = struct{}{}
-		runtime.definition.Views = append(runtime.definition.Views, View{Code: declaration.Code, Label: declaration.Label})
+		if _, exists := byCode[declaration.Code()]; exists {
+			return fmt.Errorf("widget %q has duplicate custom view %q", declaration.Widget(), declaration.Code())
+		}
+		byCode[declaration.Code()] = struct{}{}
+		runtime.definition.Views = append(runtime.definition.Views, declaration)
 	}
 	return nil
 }
@@ -408,6 +513,19 @@ func (c *Catalog) Widget(code Code) (*Runtime, bool) {
 	}
 	runtime, exists := c.runtimes[code]
 	return runtime, exists
+}
+
+// Resolve translates a typed declaration reference into its final compiled
+// widget runtime and globally qualified code.
+func (c *Catalog) Resolve(reference Ref) (*Runtime, Code, bool) {
+	if c == nil {
+		return nil, "", false
+	}
+	runtime, exists := c.references[reference]
+	if !exists {
+		return nil, "", false
+	}
+	return runtime, runtime.definition.Code, true
 }
 
 func (c *Catalog) Definitions() []Definition {
@@ -440,8 +558,8 @@ func CloneDefinitions(source []Definition) []Definition {
 	return result
 }
 
-func CloneViewDeclarations(source []ViewDeclaration) []ViewDeclaration {
-	return append([]ViewDeclaration(nil), source...)
+func CloneViews(source []View) []View {
+	return append([]View(nil), source...)
 }
 
 func cloneEditorTabs(source []EditorTab) []EditorTab {

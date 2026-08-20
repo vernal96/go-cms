@@ -26,7 +26,7 @@ type Profile struct {
 	Modules     []ProfileModule
 	Params      []field.Definition
 	Templates   []template.Definition
-	WidgetViews []widget.ViewDeclaration
+	WidgetViews []widget.View
 }
 
 type ProfileModule struct {
@@ -484,6 +484,7 @@ type ProfileRuntime struct {
 	blueprint *ProfileBlueprint
 	registry  Registry
 	widgets   *widget.Catalog
+	templates *template.Catalog
 }
 
 // ProfileBlueprint is the immutable, reusable part of a compiled profile.
@@ -568,17 +569,17 @@ func (r *ProfileRuntime) ParamSchema() *field.Schema {
 func (r *ProfileRuntime) Template(
 	code template.Code,
 ) (*template.Runtime, bool) {
-	if r == nil || r.blueprint == nil {
+	if r == nil || r.templates == nil {
 		return nil, false
 	}
-	return r.blueprint.Template(code)
+	return r.templates.Template(code)
 }
 
 func (r *ProfileRuntime) Templates() []template.Definition {
-	if r == nil || r.blueprint == nil {
+	if r == nil || r.templates == nil {
 		return nil
 	}
-	return r.blueprint.Templates()
+	return r.templates.Definitions()
 }
 
 func (r *ProfileRuntime) Widget(
@@ -926,9 +927,10 @@ func (b *ProfileBlueprint) Build(
 			err,
 		)
 	}
-	if err := b.templates.ValidateWidgets(widgets); err != nil {
+	templates, err := b.templates.CompileWidgets(widgets)
+	if err != nil {
 		return nil, fmt.Errorf(
-			"validate template widgets for profile %q: %w",
+			"compile template widgets for profile %q: %w",
 			profile.Code,
 			err,
 		)
@@ -937,6 +939,7 @@ func (b *ProfileBlueprint) Build(
 		blueprint: b,
 		registry:  registry,
 		widgets:   widgets,
+		templates: templates,
 	}, nil
 }
 
@@ -1035,7 +1038,7 @@ func cloneProfile(profile Profile) Profile {
 	}
 	profile.Params = field.CloneDefinitions(profile.Params)
 	profile.Templates = template.CloneDefinitions(profile.Templates)
-	profile.WidgetViews = widget.CloneViewDeclarations(profile.WidgetViews)
+	profile.WidgetViews = widget.CloneViews(profile.WidgetViews)
 
 	return profile
 }

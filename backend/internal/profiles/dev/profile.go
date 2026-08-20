@@ -5,6 +5,7 @@ import (
 
 	"github.com/vernal96/go-cms/internal/connectors/corecache"
 	devtemplates "github.com/vernal96/go-cms/internal/profiles/dev/templates"
+	"github.com/vernal96/go-cms/internal/profiles/dev/widgetviews"
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
@@ -20,9 +21,9 @@ var Profile = kernel.Profile{
 	Name:      "Разработка",
 	Params:    Params(),
 	Templates: devtemplates.All(),
-	WidgetViews: []widget.ViewDeclaration{
-		{Widget: "core_content", Code: "compact", Label: "Компактный"},
-		{Widget: "core_content", Code: "article", Label: "Статья"},
+	WidgetViews: []widget.View{
+		widgetviews.ContentCompact,
+		widgetviews.ContentArticle,
 	},
 	Modules: []kernel.ProfileModule{
 		{

@@ -948,19 +948,19 @@ func TestProfileRuntimeCollectsOnlyProfileModuleWidgets(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	summary := widget.NewRef("summary")
+	compact := widget.NewView(summary, "compact", "Compact")
 	current, err := buildProfileRuntime(factory,
 		context.Background(),
 		kernel.Profile{
-			Code: "with-widgets",
-			WidgetViews: []widget.ViewDeclaration{{
-				Widget: "content_summary", Code: "compact", Label: "Compact",
-			}},
+			Code:        "with-widgets",
+			WidgetViews: []widget.View{compact},
 			Modules: []kernel.ProfileModule{{
 				Module: widgetProviderModule{
 					code: "content",
 					widgets: []widget.Widget{runtimeWidget{
 						definition: widget.Definition{
-							Code:        "summary",
+							Reference:   summary,
 							Label:       "Summary",
 							Description: "Article summary",
 						},
@@ -979,7 +979,7 @@ func TestProfileRuntimeCollectsOnlyProfileModuleWidgets(t *testing.T) {
 	if len(definitions) != 1 ||
 		definitions[0].Code != "content_summary" ||
 		definitions[0].Module.Code != "content" ||
-		len(definitions[0].Views) != 1 || definitions[0].Views[0].Code != "compact" {
+		len(definitions[0].Views) != 1 || definitions[0].Views[0] != compact {
 		t.Fatalf("profile widgets = %#v", definitions)
 	}
 	definitions[0].Label = "Changed"

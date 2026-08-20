@@ -70,9 +70,13 @@ const previewVisible = ref(false)
 const uploadInput = ref<HTMLInputElement | null>(null)
 const folderInput = ref<HTMLInputElement | null>(null)
 const contextMenu = ref<{ item: FilesystemItem; x: number; y: number } | null>(null)
-const dropActive = ref(false)
+const dragMode = ref<'internal' | 'external' | null>(null)
+const draggingKeys = ref(new Set<string>())
+const dropTarget = ref<{ kind: 'current' | 'folder'; id: number | null } | null>(null)
 const moveVisible = ref(false)
 const moveItems = ref<FilesystemItem[]>([])
+
+const internalDragType = 'application/x-go-cms-files'
 
 const visibleDisks = computed(() => props.allowedStorages.length
   ? disks.value.filter((item) => props.allowedStorages.includes(item.code))
@@ -244,25 +248,94 @@ async function move(items: FilesystemItem[], folderID: number | null): Promise<v
   } catch (caught) { ElMessage.error(message(caught, 'Не удалось переместить объекты.')) }
 }
 
-function startInternalDrag(event: DragEvent, item: FilesystemItem): void {
+function startInternalDrag(event: DragEvent, item: FilesystemItem, index: number): void {
   if (!permissions.value.update || !event.dataTransfer) return
   const items = selected.value.has(itemKey(item)) ? selectedItems.value : [item]
-  event.dataTransfer.setData('application/x-cms-files', JSON.stringify(items.map(reference)))
+  if (!selected.value.has(itemKey(item))) {
+    selected.value = new Set([itemKey(item)])
+    anchorIndex.value = index
+  }
+  dragMode.value = 'internal'
+  draggingKeys.value = new Set(items.map(itemKey))
+  event.dataTransfer.setData(internalDragType, JSON.stringify(items.map(reference)))
   event.dataTransfer.effectAllowed = 'move'
 }
 
-async function handleDrop(event: DragEvent, targetFolderID = listing.value?.folder?.id ?? null): Promise<void> {
-  event.preventDefault()
-  dropActive.value = false
-  const internal = event.dataTransfer?.getData('application/x-cms-files')
-  if (internal) {
-    const refs = JSON.parse(internal) as Array<{ kind: 'file' | 'folder'; id: number }>
-    const items = sortedItems.value.filter((item) => refs.some((ref) => ref.kind === item.kind && ref.id === item.id))
-    await move(items, targetFolderID)
+function activateDropTarget(
+  event: DragEvent,
+  kind: 'current' | 'folder',
+  targetFolderID: number | null,
+): void {
+  const mode = transferMode(event.dataTransfer)
+  if (!mode || !canDrop(mode, targetFolderID)) {
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'
+    if (sameDropTarget(kind, targetFolderID)) dropTarget.value = null
     return
   }
-  if (!permissions.value.create || !event.dataTransfer) return
-  await uploadTransfer(event.dataTransfer, targetFolderID)
+  event.preventDefault()
+  dragMode.value = mode
+  dropTarget.value = { kind, id: targetFolderID }
+  if (event.dataTransfer) event.dataTransfer.dropEffect = mode === 'internal' ? 'move' : 'copy'
+}
+
+function leaveDropTarget(
+  event: DragEvent,
+  kind: 'current' | 'folder',
+  targetFolderID: number | null,
+): void {
+  const current = event.currentTarget as HTMLElement | null
+  const related = event.relatedTarget as Node | null
+  if (current && related && current.contains(related)) return
+  if (sameDropTarget(kind, targetFolderID)) dropTarget.value = null
+  if (current?.classList.contains('file-grid') && dragMode.value === 'external') finishDrag()
+}
+
+async function handleDrop(event: DragEvent, targetFolderID: number | null): Promise<void> {
+  const mode = transferMode(event.dataTransfer)
+  if (!mode || !canDrop(mode, targetFolderID)) {
+    finishDrag()
+    return
+  }
+  event.preventDefault()
+  try {
+    if (mode === 'internal') {
+      const internal = event.dataTransfer?.getData(internalDragType)
+      if (!internal) return
+      const refs = JSON.parse(internal) as Array<{ kind: 'file' | 'folder'; id: number }>
+      const items = sortedItems.value.filter((item) => refs.some((ref) => ref.kind === item.kind && ref.id === item.id))
+      await move(items, targetFolderID)
+      return
+    }
+    if (event.dataTransfer) await uploadTransfer(event.dataTransfer, targetFolderID)
+  } finally {
+    finishDrag()
+  }
+}
+
+function transferMode(transfer: DataTransfer | null | undefined): 'internal' | 'external' | null {
+  if (!transfer) return null
+  const types = Array.from(transfer.types ?? [])
+  if (dragMode.value === 'internal' || types.includes(internalDragType)) return 'internal'
+  return types.includes('Files') ? 'external' : null
+}
+
+function canDrop(mode: 'internal' | 'external', targetFolderID: number | null): boolean {
+  if (mode === 'external') return permissions.value.create
+  if (!permissions.value.update || draggingKeys.value.size === 0) return false
+  const items = sortedItems.value.filter((item) => draggingKeys.value.has(itemKey(item)))
+  if (!items.length) return false
+  if (items.some((item) => item.kind === 'folder' && item.id === targetFolderID)) return false
+  return !items.every((item) => item.parent_id === targetFolderID)
+}
+
+function sameDropTarget(kind: 'current' | 'folder', id: number | null): boolean {
+  return dropTarget.value?.kind === kind && dropTarget.value.id === id
+}
+
+function finishDrag(): void {
+  dragMode.value = null
+  draggingKeys.value = new Set()
+  dropTarget.value = null
 }
 
 async function uploadTransfer(transfer: DataTransfer, parentID: number | null): Promise<void> {
@@ -410,7 +483,7 @@ async function readEntries(entry: FileSystemDirectoryEntry): Promise<FileSystemE
 </script>
 
 <template>
-  <div class="file-explorer" @dragover.prevent="dropActive = true" @dragleave.self="dropActive = false" @drop="handleDrop($event)">
+  <div class="file-explorer">
     <div class="file-toolbar">
       <el-select v-model="disk" aria-label="Диск" class="disk-select" @change="changeDisk">
         <el-option v-for="item in visibleDisks" :key="item.code" :label="`${item.code} · ${item.visibility === 'public' ? 'публичный' : 'приватный'}`" :value="item.code" />
@@ -441,15 +514,45 @@ async function readEntries(entry: FileSystemDirectoryEntry): Promise<FileSystemE
 
     <el-alert v-if="error" type="error" :closable="false" :title="error" />
     <el-skeleton v-else-if="loading" :rows="6" animated />
-    <el-empty v-else-if="!sortedItems.length" description="Папка пуста" />
-    <div v-else class="file-grid" :class="{ 'is-drop-target': dropActive }">
+    <div
+      v-else
+      class="file-grid"
+      :class="{
+        'has-active-drag': dragMode !== null,
+        'is-drop-target': sameDropTarget('current', listing?.folder?.id ?? null),
+      }"
+      @dragenter="activateDropTarget($event, 'current', listing?.folder?.id ?? null)"
+      @dragover="activateDropTarget($event, 'current', listing?.folder?.id ?? null)"
+      @dragleave="leaveDropTarget($event, 'current', listing?.folder?.id ?? null)"
+      @drop="handleDrop($event, listing?.folder?.id ?? null)"
+    >
+      <el-empty v-if="!sortedItems.length" class="file-grid-empty" description="Папка пуста" />
       <button
         v-for="(item, index) in sortedItems" :key="itemKey(item)" type="button"
-        class="file-tile" :class="{ 'is-selected': selected.has(itemKey(item)), 'is-disabled': picker && item.kind === 'file' && !matchesPicker(item) }"
-        draggable="true" @click="choose(item, $event, index)" @dblclick="activate(item)"
-        @contextmenu="showContext($event, item)" @dragstart="startInternalDrag($event, item)"
-        @dragover.prevent @drop.stop="handleDrop($event, item.kind === 'folder' ? item.id : (listing?.folder?.id ?? null))"
+        class="file-tile"
+        :class="{
+          'is-selected': selected.has(itemKey(item)),
+          'is-disabled': picker && item.kind === 'file' && !matchesPicker(item),
+          'is-drag-source': draggingKeys.has(itemKey(item)),
+          'is-drop-target': item.kind === 'folder' && sameDropTarget('folder', item.id),
+        }"
+        @click="choose(item, $event, index)"
+        @dblclick="activate(item)"
+        @contextmenu="showContext($event, item)"
+        @dragenter.stop="activateDropTarget($event, item.kind === 'folder' ? 'folder' : 'current', item.kind === 'folder' ? item.id : (listing?.folder?.id ?? null))"
+        @dragover.stop="activateDropTarget($event, item.kind === 'folder' ? 'folder' : 'current', item.kind === 'folder' ? item.id : (listing?.folder?.id ?? null))"
+        @dragleave.stop="leaveDropTarget($event, item.kind === 'folder' ? 'folder' : 'current', item.kind === 'folder' ? item.id : (listing?.folder?.id ?? null))"
+        @drop.stop="handleDrop($event, item.kind === 'folder' ? item.id : (listing?.folder?.id ?? null))"
       >
+        <span
+          v-if="permissions.update"
+          class="file-drag-handle"
+          draggable="true"
+          :title="`Перетащить «${item.name}»`"
+          @click.stop
+          @dragstart.stop="startInternalDrag($event, item, index)"
+          @dragend.stop="finishDrag"
+        ><Rank /></span>
         <component :is="item.kind === 'folder' ? Folder : isImage(item) ? Picture : Document" class="file-tile-icon" />
         <span class="file-tile-name" :title="item.name">{{ item.name }}</span>
         <span class="file-tile-extra">{{ item.kind === 'folder' ? `${item.item_count ?? 0} эл.` : formatSize(item.size ?? 0) }}</span>

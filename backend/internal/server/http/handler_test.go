@@ -37,6 +37,7 @@ import (
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/modules/core/user/adapters/argon2id"
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
+	corewidgets "github.com/vernal96/go-cms/kernel/modules/core/widgets"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
@@ -1186,8 +1187,8 @@ func newTransportTestApp(
 			Profiles: []kernel.Profile{{
 				Code: "dev",
 				Templates: []template.Definition{
-					{Code: "widgets", Label: "Widgets", Layout: template.Layout{Body: []template.LayoutItem{{Kind: template.ItemResourceSlot}}}},
-					{Code: "content", Label: "Content", Layout: template.Layout{Body: []template.LayoutItem{{Kind: template.ItemWidget, Key: "content", Widget: "core_content", Presentation: widget.DefaultPresentation()}}}},
+					{Code: "widgets", Label: "Widgets", Layout: template.Layout{Body: []template.Item{template.ResourceWidgets{}}}},
+					{Code: "content", Label: "Content", Layout: template.Layout{Body: []template.Item{template.Widget{Widget: corewidgets.Content}}}},
 					{Code: "empty", Label: "Empty"},
 				},
 				Modules: []kernel.ProfileModule{
@@ -1443,7 +1444,7 @@ func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 	required := true
 	success := handlerWidget{
 		definition: widget.Definition{
-			Code:        "success",
+			Reference:   widget.NewRef("success"),
 			Label:       "Success",
 			Description: "Successful widget",
 		},
@@ -1460,7 +1461,7 @@ func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 	}
 	invalidParams := handlerWidget{
 		definition: widget.Definition{
-			Code:        "params",
+			Reference:   widget.NewRef("params"),
 			Label:       "Params",
 			Description: "Widget with required params",
 			Fields: []field.Definition{{
@@ -1476,7 +1477,7 @@ func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 	}
 	instanceFailed := handlerWidget{
 		definition: widget.Definition{
-			Code:        "instance",
+			Reference:   widget.NewRef("instance"),
 			Label:       "Instance",
 			Description: "Widget with a failed constructor",
 		},
@@ -1486,7 +1487,7 @@ func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 	}
 	renderFailed := handlerWidget{
 		definition: widget.Definition{
-			Code:        "render",
+			Reference:   widget.NewRef("render"),
 			Label:       "Render",
 			Description: "Widget with a failed renderer",
 		},
@@ -1503,7 +1504,7 @@ func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 	}
 	invalidResult := handlerWidget{
 		definition: widget.Definition{
-			Code:        "result",
+			Reference:   widget.NewRef("result"),
 			Label:       "Result",
 			Description: "Widget with invalid JSON data",
 		},

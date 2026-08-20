@@ -338,21 +338,21 @@ func TestResourceMetadataHasNoExtensionsWithoutProfileProvider(t *testing.T) {
 }
 
 func TestResourceMetadataDescribesTemplateSlotsAndProfileWidgets(t *testing.T) {
-	presentation := widget.DefaultPresentation()
+	compact := widget.NewView(corewidgets.Content, "compact", "Compact")
 	profile := kernel.Profile{
 		Code:    "widgets",
 		Modules: []kernel.ProfileModule{{Module: widgetMetadataModule{}}},
 		Templates: []template.Definition{{
 			Code: "page", Label: "Page",
 			Layout: template.Layout{
-				Body: []template.LayoutItem{
-					{Kind: template.ItemWidget, Key: "content", Widget: "feature_content", Presentation: presentation},
-					{Kind: template.ItemResourceSlot},
+				Body: []template.Item{
+					template.Widget{Widget: corewidgets.Content},
+					template.ResourceWidgets{},
 				},
-				Sidebar: []template.LayoutItem{{Kind: template.ItemResourceSlot}},
+				Sidebar: []template.Item{template.ResourceWidgets{}},
 			},
 		}},
-		WidgetViews: []widget.ViewDeclaration{{Widget: "feature_content", Code: "compact", Label: "Compact"}},
+		WidgetViews: []widget.View{compact},
 	}
 	factory, err := kernel.NewProfileRuntimeFactory(extensionTestDatabaseResolver{}, kernel.RuntimeServices{
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), EventBus: extensionTestBus{},
@@ -385,6 +385,7 @@ func TestResourceMetadataDescribesTemplateSlotsAndProfileWidgets(t *testing.T) {
 	}
 	if len(metadata.Widgets) != 1 || metadata.Widgets[0].Code != "feature_content" ||
 		metadata.Widgets[0].ModuleCode != "feature" || metadata.Widgets[0].ModuleLabel != "Feature widgets" ||
+		metadata.Widgets[0].SummaryFields == nil ||
 		len(metadata.Widgets[0].Views) != 1 || metadata.Widgets[0].Views[0].Code != "compact" {
 		t.Fatalf("widgets = %#v", metadata.Widgets)
 	}

@@ -591,13 +591,13 @@ func (m *Management) ResourceMetadata(
 		}
 		views := make([]WidgetView, len(definition.Views))
 		for viewIndex, view := range definition.Views {
-			views[viewIndex] = WidgetView{Code: view.Code, Label: view.Label}
+			views[viewIndex] = WidgetView{Code: view.Code(), Label: view.Label()}
 		}
 		widgets[index] = WidgetDefinition{
 			Code: definition.Code, ModuleCode: definition.Module.Code,
 			ModuleLabel: definition.Module.Label, ModuleDescription: definition.Module.Description,
 			Label: definition.Label, Description: definition.Description, Fields: fields,
-			EditorTabs: tabs, SummaryFields: append([]string(nil), definition.SummaryFields...), Views: views,
+			EditorTabs: tabs, SummaryFields: append([]string{}, definition.SummaryFields...), Views: views,
 		}
 	}
 	types := []ResourceType{{Code: resourcetype.Link, Label: "Ссылка"}}
