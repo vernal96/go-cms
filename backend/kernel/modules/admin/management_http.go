@@ -34,6 +34,7 @@ func registerManagementRoutes(router chi.Router, management *Management) {
 	registerProfileRoutes(router, handler)
 	registerIdentityRoutes(router, handler)
 	registerFilesystemRoutes(router, handler)
+	router.Get("/navigation", handler.navigation)
 	router.Get("/dashboard", handler.dashboard)
 	router.Get("/sites/options", handler.listSiteOptions)
 	router.Get("/sites", handler.listSites)
@@ -59,6 +60,28 @@ func registerManagementRoutes(router chi.Router, management *Management) {
 	router.Delete("/sites/{siteID}/resources/{resourceID}", handler.deleteResource)
 	router.Post("/sites/{siteID}/resources/{resourceID}/restore", handler.restoreResource)
 	router.Delete("/sites/{siteID}/resources/{resourceID}/permanent", handler.deleteResourcePermanent)
+}
+
+func (h *managementHTTP) navigation(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	var selectedSiteID *site.ID
+	if raw := request.URL.Query().Get("site_id"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 {
+			writeBadRequest(response, "site_id is invalid")
+			return
+		}
+		value := site.ID(parsed)
+		selectedSiteID = &value
+	}
+	result, err := h.management.Navigation(
+		request.Context(),
+		actor(request),
+		selectedSiteID,
+	)
+	writeResult(response, http.StatusOK, result, err)
 }
 
 func (h *managementHTTP) dashboard(response http.ResponseWriter, request *http.Request) {

@@ -155,6 +155,7 @@ func (a *App) boot(ctx context.Context) error {
 		Resources:          resourceService,
 		ResourceRepository: resourceManagementRepository,
 		Authorizer:         coreServices.Authorization,
+		Permissions:        a.permissions,
 		SiteAccessPolicy:   a.definition.SiteAccessPolicy,
 		Users:              coreServices.Users,
 		UserRepository:     userManagementRepository,

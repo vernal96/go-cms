@@ -4,6 +4,22 @@ export interface Pagination {
   total: number
 }
 
+export type AdminNavigationScope = 'global' | 'site'
+
+export interface AdminNavigationItem {
+  code: string
+  label: string
+  route?: string
+  icon?: string
+  order: number
+  scope: AdminNavigationScope
+  children?: AdminNavigationItem[]
+}
+
+export interface AdminNavigationResponse {
+  items: AdminNavigationItem[]
+}
+
 export interface PermissionSet {
   read: boolean
   create: boolean

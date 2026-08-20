@@ -57,6 +57,10 @@ describe('AdminDashboard', () => {
       removeEventListener: vi.fn(),
     })))
     applyAppearance('system', 'blue')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })))
   })
 
   afterEach(() => {
@@ -74,7 +78,8 @@ describe('AdminDashboard', () => {
 
     const wrapper = await mountDashboard(['admin.panel.read', 'core.resource.read'])
 
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledWith('/api/admin/navigation', expect.any(Object))
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/admin/sites/'))).toBe(false)
     expect(wrapper.findComponent({ name: 'SiteSelector' }).exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'ResourceTree' }).exists()).toBe(false)
     expect(wrapper.find('.resource-sidebar').exists()).toBe(true)
@@ -129,17 +134,25 @@ describe('AdminDashboard', () => {
     },
   )
 
-  it('shows the filesystem menu only with file read permission', async () => {
-    const allowed = await mountDashboard(['admin.panel.read', 'core.file.read'])
-    expect(allowed.text()).toContain('Файловая система')
-    const denied = await mountDashboard(['admin.panel.read', 'core.file.create'])
-    expect(denied.text()).not.toContain('Файловая система')
+  it('passes backend navigation through without hard-coded built-in permission branches', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      items: [{
+        code: 'custom-label', label: 'Название сервера', route: 'core.files',
+        icon: 'files', order: 100, scope: 'global',
+      }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+
+    const wrapper = await mountDashboard(['admin.panel.read'])
+    const rendered = wrapper.findComponent({ name: 'AdminNavigation' })
+    expect(rendered.props('items')).toEqual([
+      expect.objectContaining({ code: 'custom-label', label: 'Название сервера', route: 'core.files' }),
+    ])
   })
 
   it('persists the icon-only sidebar theme toggle', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
       user: { color_scheme: 'dark', accent_color: 'blue' },
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountDashboard(['admin.panel.read'])
     const toggle = wrapper.find('.sidebar-theme-toggle')
@@ -174,9 +187,9 @@ describe('AdminDashboard', () => {
   })
 
   it('shows the accent picker before the theme toggle and persists a selected color', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({
       user: { color_scheme: 'system', accent_color: 'violet' },
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountDashboard(['admin.panel.read'])
     const footerHTML = wrapper.find('.sidebar-theme-footer').html()

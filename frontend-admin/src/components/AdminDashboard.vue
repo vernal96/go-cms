@@ -18,10 +18,12 @@ import {
   ElTooltip,
 } from 'element-plus'
 import { ArrowDown, ArrowRightBold, Brush, Check, Moon, Platform, Search, Sunny, UserFilled } from '@element-plus/icons-vue'
-import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
+import { RouterLink, RouterView, useRouter } from 'vue-router'
 
 import { AdminAPIError, adminBlob, adminRequest } from '../api/admin-api'
 import { useSelectedSite } from '../composables/use-selected-site'
+import { useAdminNavigation } from '../composables/use-admin-navigation'
+import AdminNavigation from './AdminNavigation.vue'
 import ResourceTree from './ResourceTree.vue'
 import SiteSelector from './SiteSelector.vue'
 import { adminAccessTokenKey, adminPermissionsKey } from '../admin-context'
@@ -36,11 +38,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{ logout: []; profileUpdated: [] }>()
 const selected = useSelectedSite()
-const route = useRoute()
+const navigation = useAdminNavigation()
 const router = useRouter()
 provide(adminAccessTokenKey, toRef(props, 'accessToken'))
 provide(adminPermissionsKey, toRef(props, 'permissions'))
-const isIdentityRoute = computed(() => route.path.startsWith('/admin/users') || route.path.startsWith('/admin/groups'))
 const avatarURL = ref('')
 const darkTheme = ref(document.documentElement.dataset.theme === 'dark')
 const selectedScheme = ref<ColorScheme>(props.user.color_scheme)
@@ -132,16 +133,19 @@ function handleUserCommand(command: string): void {
   if (command === 'profile') void router.push('/admin/profile')
 }
 
-function handleManagementCommand(command: string): void {
-  if (command === 'users') void router.push('/admin/users')
-  if (command === 'groups') void router.push('/admin/groups')
-}
-
 function handleAPIError(error: unknown): void {
   if (!(error instanceof AdminAPIError)) return
   if (error.status === 401) emit('logout')
   else if (error.status === 403 || error.status === 404) selected.clearSelected()
 }
+
+watch(
+  () => [props.accessToken, selected.selectedSite.value?.id ?? null] as const,
+  ([accessToken, siteID]) => {
+    void navigation.refresh(accessToken, siteID).catch(handleAPIError)
+  },
+  { immediate: true },
+)
 
 onMounted(() => {
   loadSidebarState()
@@ -177,6 +181,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointermove', resizeSidebar)
   window.removeEventListener('pointerup', finishSidebarResize)
   selected.reset()
+  navigation.dispose()
   revokeAvatar()
 })
 
@@ -267,30 +272,7 @@ async function persistPreferences(colorScheme: ColorScheme, accentColor: AccentC
       </div>
 
       <div class="topbar-main">
-        <nav class="topbar-menu" aria-label="Главное меню">
-          <router-link v-if="can('core.site.read')" to="/admin/sites" class="topbar-link">
-            Сайты
-          </router-link>
-          <router-link v-if="can('core.file.read')" to="/admin/files" class="topbar-link">
-            Файловая система
-          </router-link>
-          <el-dropdown
-            v-if="can('core.user.read') || can('core.group.read')"
-            trigger="click"
-            @command="handleManagementCommand"
-          >
-            <el-button text class="topbar-link management-menu-trigger" :class="{ 'is-active': isIdentityRoute }">
-              Пользователи
-              <el-icon><ArrowDown /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item v-if="can('core.user.read')" command="users">Пользователи</el-dropdown-item>
-                <el-dropdown-item v-if="can('core.group.read')" command="groups">Группы</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </nav>
+        <admin-navigation :items="navigation.items.value" />
         <el-dropdown placement="bottom-end" trigger="click" @command="handleUserCommand">
           <el-button class="user-control" text aria-label="Открыть меню пользователя">
             <el-avatar :size="34" :src="avatarURL" :icon="avatarURL ? undefined : UserFilled" />

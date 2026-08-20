@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/adminui"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
@@ -121,6 +122,7 @@ type Management struct {
 	uploadTimeout time.Duration
 	avatarStorage filesystem.Code
 	avatarMaxSize int64
+	navigation    *navigationComposer
 }
 
 type ManagementDependencies struct {
@@ -143,6 +145,7 @@ type ManagementDependencies struct {
 	UploadTimeout      time.Duration
 	AvatarStorage      filesystem.Code
 	AvatarMaxSize      int64
+	Permissions        adminui.PermissionValidator
 }
 
 func NewManagement(dependencies ManagementDependencies) (*Management, error) {
@@ -157,6 +160,9 @@ func NewManagement(dependencies ManagementDependencies) (*Management, error) {
 	}
 	if dependencies.Authorizer == nil {
 		return nil, errors.New("admin authorizer is nil")
+	}
+	if dependencies.Permissions == nil {
+		return nil, errors.New("admin permission catalog is nil")
 	}
 	if dependencies.SiteAccessPolicy == nil {
 		return nil, errors.New("admin site access policy is nil")
@@ -188,6 +194,14 @@ func NewManagement(dependencies ManagementDependencies) (*Management, error) {
 	if dependencies.AvatarMaxSize <= 0 {
 		dependencies.AvatarMaxSize = 5 << 20
 	}
+	navigation, err := newNavigationComposer(
+		dependencies.Profiles,
+		dependencies.Authorizer,
+		dependencies.Permissions,
+	)
+	if err != nil {
+		return nil, err
+	}
 	profiles := make([]kernel.Profile, len(dependencies.Profiles))
 	copy(profiles, dependencies.Profiles)
 	return &Management{
@@ -210,6 +224,7 @@ func NewManagement(dependencies ManagementDependencies) (*Management, error) {
 		uploadTimeout: dependencies.UploadTimeout,
 		avatarStorage: dependencies.AvatarStorage,
 		avatarMaxSize: dependencies.AvatarMaxSize,
+		navigation:    navigation,
 	}, nil
 }
 
@@ -264,6 +279,42 @@ type SiteProfile struct {
 
 type SiteProfiles struct {
 	Items []SiteProfile `json:"items"`
+}
+
+func (m *Management) Navigation(
+	ctx context.Context,
+	actor security.Actor,
+	selectedSiteID *site.ID,
+) (Navigation, error) {
+	if m == nil || m.navigation == nil {
+		return Navigation{}, errors.New("admin navigation is unavailable")
+	}
+	var runtime *site.Runtime
+	if selectedSiteID != nil {
+		if err := m.requireSite(
+			ctx,
+			actor,
+			*selectedSiteID,
+			SiteReadPermission,
+		); err != nil {
+			return Navigation{}, err
+		}
+		var exists bool
+		runtime, exists = m.sites.RuntimeByID(*selectedSiteID)
+		if !exists {
+			return Navigation{}, site.ErrNotFound
+		}
+	}
+
+	items, err := m.navigation.compose(
+		ctx,
+		actor,
+		runtime,
+	)
+	if err != nil {
+		return Navigation{}, err
+	}
+	return Navigation{Items: navigationDTO(items)}, nil
 }
 
 type SiteCreateInput struct {
