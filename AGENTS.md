@@ -34,7 +34,7 @@ Keep discovery proportional to the task.
 - Final runtime state is site-scoped. Build/rebuild it on boot/create/update/reload and keep it in process memory; never rebuild a full `SiteRuntime` per request and never use a mutable global active-site singleton.
 - Immutable profile definitions/blueprints may be shared; final site registries/module runtimes must have the correct site scope.
 - `core` and `admin` are mandatory profile modules; `core` is first. Dependency order must be deterministic.
-- Cache/filesystem bindings are named by semantic purpose (`repository`, `resources`, `templates`, `runtime`, `media`), not technology. Cache coherence is correctness: every supported mutation path must invalidate/update affected cached reads.
+- Cache stores are application-owned physical infrastructure; module cache aliases describe module-local storage policy/capability, not a concrete technology and not necessarily a domain component. One domain component may use several aliases/stores at once. Cache keys identify cached data; cache tags identify dependencies. Cache coherence is correctness: every supported mutation path must invalidate/update all affected cached reads, including dependencies spanning aliases/stores.
 - Extension precedence is `core < package < project < site`; accidental duplicates are errors and intentional replacement must be explicit/deterministic.
 - Prefer explicit constructors, factories, interfaces and registries over reflection DI/service locators. Avoid mutable global state and unnecessary `any`.
 
@@ -61,8 +61,13 @@ Load a skill only when its scope matches:
 
 - `go-cms-development`: cross-package backend architecture or reusable extension/composition work.
 - `go-cms-runtime-integrity`: SiteRuntime/ProfileBlueprint/reload/publication/runtime cache-coherence work.
+- `go-cms-cache`: cache contracts, stores, module cache aliases, cache keys/tags, TTL, invalidation/coherence, Remember/result caching, cache connectors or cache maintenance.
 - `go-cms-architecture-review`: architecture/refactor/PR/commit review.
 - `go-cms-admin-ui`: backend-driven admin extensibility/navigation/frontend plugin work.
 - `go-cms-widgets`: widget definitions, layouts, persistence, editing or rendering.
 
 For a focused local bug fix or routine CRUD change, root/backend instructions plus the affected code are normally enough.
+
+## Human-facing Codex prompts
+
+When asked to draft a Codex implementation prompt for this repository, also recommend the currently optimal available model and reasoning-effort/acceleration setting for that specific task. Do not hardcode a model recommendation in repository instructions; model availability changes over time.
