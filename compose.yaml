@@ -12,6 +12,7 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       EVENT_BUS_KAFKA_BROKERS: kafka:29092
+      CACHE_REDIS_ADDRS: redis:6379
       EVENT_BUS_RABBITMQ_URL: amqp://cms:${RABBITMQ_PASSWORD:-change-me}@rabbitmq:5672/cms
       LOGGER_LOKI_ENDPOINT: http://loki:3100
     ports:
@@ -30,6 +31,8 @@ services:
       kafka:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       loki:
         condition: service_healthy
@@ -116,6 +119,20 @@ services:
       retries: 20
       start_period: 15s
 
+  redis:
+    image: redis:8-alpine
+    container_name: go-cms-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   rabbitmq:
     image: rabbitmq:4.3.4-management
     container_name: go-cms-rabbitmq
@@ -174,6 +191,7 @@ volumes:
   admin_node_modules:
   postgres_data:
   kafka_data:
+  redis_data:
   rabbitmq_data:
   loki_data:
   grafana_data:
