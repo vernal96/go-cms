@@ -80,6 +80,7 @@ func (a *App) boot(ctx context.Context) error {
 		a.permissions,
 		a.filesystems,
 		a.definition.PasswordHasher,
+		a.caches,
 	)
 	if err != nil {
 		return err

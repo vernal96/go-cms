@@ -3,7 +3,7 @@ package dev
 import (
 	"time"
 
-	"github.com/vernal96/go-cms/internal/connectors/corecache"
+	"github.com/vernal96/go-cms/internal/connectors/projectcache"
 	devtemplates "github.com/vernal96/go-cms/internal/profiles/dev/templates"
 	"github.com/vernal96/go-cms/internal/profiles/dev/widgetviews"
 	"github.com/vernal96/go-cms/kernel"
@@ -33,9 +33,12 @@ var Profile = kernel.Profile{
 			},
 			Caches: []cache.Binding{
 				{
-					Alias:     core.RepositoryCacheAlias,
-					Code:      corecache.Code,
-					Namespace: "core/repository",
+					Alias: core.DurableCacheAlias,
+					Code:  projectcache.FilesystemCode,
+				},
+				{
+					Alias: core.HotCacheAlias,
+					Code:  projectcache.RedisCode,
 				},
 			},
 		},

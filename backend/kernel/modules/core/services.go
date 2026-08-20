@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
@@ -39,8 +40,9 @@ func NewServices(
 	permissions *permission.Catalog,
 	filesystems filesystem.Catalog,
 	passwordHashers user.PasswordHasherFactory,
+	cacheInvalidator cache.Invalidator,
 ) (*Services, error) {
-	coherent, err := newCoherentDatabase(database)
+	coherent, err := newCoherentDatabase(database, cacheInvalidator)
 	if err != nil {
 		return nil, err
 	}

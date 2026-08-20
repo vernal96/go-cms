@@ -273,6 +273,49 @@ func (c *Connector) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+func (c *Connector) WalkPrefix(
+	ctx context.Context,
+	prefix string,
+	visit func(string) error,
+) error {
+	if ctx == nil {
+		return errors.New("localstorage walk context is nil")
+	}
+	if visit == nil {
+		return errors.New("localstorage walk visitor is nil")
+	}
+	root, err := c.resolve(strings.Trim(prefix, "/"))
+	if err != nil {
+		return err
+	}
+	err = filepath.WalkDir(root, func(pathValue string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if errors.Is(walkErr, os.ErrNotExist) {
+				return nil
+			}
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(c.root, pathValue)
+		if err != nil {
+			return err
+		}
+		return visit(filepath.ToSlash(relative))
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("walk localstorage prefix: %w", err)
+	}
+	return nil
+}
+
 func (c *Connector) URL(
 	_ context.Context,
 	reference filesystem.Reference,
@@ -416,6 +459,7 @@ func (r *contextReader) Read(target []byte) (int, error) {
 
 var _ filesystem.Disk = (*Connector)(nil)
 var _ filesystem.OverwriteDisk = (*Connector)(nil)
+var _ filesystem.PrefixWalker = (*Connector)(nil)
 var _ filesystem.KeyDistributionProvider = (*Connector)(nil)
 var _ filesystem.Factory = Factory{}
 var _ filesystem.TemporaryURLVerifier = (*Connector)(nil)

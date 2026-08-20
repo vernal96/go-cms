@@ -1,14 +1,11 @@
 package core
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/vernal96/go-cms/kernel/cache"
@@ -19,8 +16,8 @@ import (
 )
 
 const (
-	sitesListCacheKey = "core:site:list:v1"
-	sitesTag          = cache.Tag("core.sites")
+	sitesListCacheKey = "site:list:v1"
+	sitesTag          = cache.Tag("sites")
 )
 
 type cachedDatabase struct {
@@ -70,28 +67,16 @@ type cachedSiteRepository struct {
 func (r *cachedSiteRepository) List(
 	ctx context.Context,
 ) ([]site.Site, error) {
-	return withRepositoryCacheRead(r.policy, func() ([]site.Site, error) {
-		if result, ok := cacheRead[[]site.Site](
+	return withRepositoryCacheRead(r.policy, []cache.Tag{sitesTag}, func() ([]site.Site, error) {
+		return cache.RememberJSON(
 			ctx,
 			r.store,
 			sitesListCacheKey,
-		); ok {
-			return result, nil
-		}
-
-		result, err := r.base.List(ctx)
-		if err != nil {
-			return nil, err
-		}
-		cacheWrite(
-			ctx,
-			r.store,
-			sitesListCacheKey,
-			result,
-			r.ttl,
-			[]cache.Tag{sitesTag},
+			cache.SetOptions{TTL: r.ttl, Tags: []cache.Tag{sitesTag}},
+			func(ctx context.Context) ([]site.Site, error) {
+				return r.base.List(ctx)
+			},
 		)
-		return result, nil
 	})
 }
 
@@ -205,28 +190,26 @@ func (r *cachedResourceRepository) ByID(
 	ctx context.Context,
 	id resource.ID,
 ) (resource.Resource, error) {
-	return withRepositoryCacheRead(r.policy, func() (resource.Resource, error) {
-		key := fmt.Sprintf("core:resource:id:v2:%d", id)
-		if result, ok := cacheRead[resource.Resource](
+	return withRepositoryCacheRead(r.policy, []cache.Tag{resourceTag(id)}, func() (resource.Resource, error) {
+		key := fmt.Sprintf("resource:id:v2:%d", id)
+		return cache.RememberJSONWithOptions(
 			ctx,
 			r.store,
 			key,
-		); ok {
-			return result, nil
-		}
-		result, err := r.base.ByID(ctx, id)
-		if err != nil {
-			return resource.Resource{}, err
-		}
-		cacheWrite(
-			ctx,
-			r.store,
-			key,
-			result,
-			r.ttl,
-			resourceTags(result),
+			func(result resource.Resource) cache.SetOptions {
+				return cache.SetOptions{
+					TTL:  r.ttl,
+					Tags: resourceDependencies(result),
+				}
+			},
+			func(ctx context.Context) (resource.Resource, error) {
+				result, err := r.base.ByID(ctx, id)
+				if err != nil {
+					return resource.Resource{}, err
+				}
+				return result, nil
+			},
 		)
-		return result, nil
 	})
 }
 
@@ -235,33 +218,33 @@ func (r *cachedResourceRepository) ByPath(
 	siteID site.ID,
 	pathValue string,
 ) (resource.Resource, error) {
-	return withRepositoryCacheRead(r.policy, func() (resource.Resource, error) {
+	return withRepositoryCacheRead(r.policy, []cache.Tag{siteResourcesTag(siteID)}, func() (resource.Resource, error) {
 		sum := sha256.Sum256([]byte(pathValue))
 		key := fmt.Sprintf(
-			"core:resource:path:v2:%d:%s",
+			"resource:path:v2:%d:%s",
 			siteID,
 			hex.EncodeToString(sum[:]),
 		)
-		if result, ok := cacheRead[resource.Resource](
+		return cache.RememberJSON(
 			ctx,
 			r.store,
 			key,
-		); ok {
-			return result, nil
-		}
-		result, err := r.base.ByPath(ctx, siteID, pathValue)
-		if err != nil {
-			return resource.Resource{}, err
-		}
-		cacheWrite(
-			ctx,
-			r.store,
-			key,
-			result,
-			r.ttl,
-			resourceTags(result),
+			cache.SetOptions{
+				TTL: r.ttl,
+				Tags: []cache.Tag{
+					siteTag(siteID),
+					siteResourcesTag(siteID),
+					resourcePathTag(siteID, pathValue),
+				},
+			},
+			func(ctx context.Context) (resource.Resource, error) {
+				result, err := r.base.ByPath(ctx, siteID, pathValue)
+				if err != nil {
+					return resource.Resource{}, err
+				}
+				return result, nil
+			},
 		)
-		return result, nil
 	})
 }
 
@@ -269,28 +252,23 @@ func (r *cachedResourceRepository) ListBySite(
 	ctx context.Context,
 	siteID site.ID,
 ) ([]resource.Resource, error) {
-	return withRepositoryCacheRead(r.policy, func() ([]resource.Resource, error) {
-		key := fmt.Sprintf("core:resource:list:v2:%d", siteID)
-		if result, ok := cacheRead[[]resource.Resource](
+	return withRepositoryCacheRead(r.policy, []cache.Tag{siteResourcesTag(siteID)}, func() ([]resource.Resource, error) {
+		key := fmt.Sprintf("resource:list:v2:%d", siteID)
+		return cache.RememberJSON(
 			ctx,
 			r.store,
 			key,
-		); ok {
-			return result, nil
-		}
-		result, err := r.base.ListBySite(ctx, siteID)
-		if err != nil {
-			return nil, err
-		}
-		cacheWrite(
-			ctx,
-			r.store,
-			key,
-			result,
-			r.ttl,
-			[]cache.Tag{siteTag(siteID)},
+			cache.SetOptions{
+				TTL: r.ttl,
+				Tags: []cache.Tag{
+					siteTag(siteID),
+					siteResourcesTag(siteID),
+				},
+			},
+			func(ctx context.Context) ([]resource.Resource, error) {
+				return r.base.ListBySite(ctx, siteID)
+			},
 		)
-		return result, nil
 	})
 }
 
@@ -422,76 +400,38 @@ func (r *cachedResourceRepository) Restore(
 	return nil
 }
 
-func cacheRead[T any](
-	ctx context.Context,
-	store cache.Store,
-	key string,
-) (T, bool) {
-	var result T
-	raw, err := store.Get(ctx, key)
-	if err != nil {
-		return result, false
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if err := decoder.Decode(&result); err != nil {
-		_ = store.Delete(ctx, key)
-		return result, false
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		_ = store.Delete(ctx, key)
-		return result, false
-	}
-	return result, true
-}
-
-func cacheWrite(
-	ctx context.Context,
-	store cache.Store,
-	key string,
-	value any,
-	ttl time.Duration,
-	tags []cache.Tag,
-) {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return
-	}
-	_ = store.Set(ctx, key, raw, cache.SetOptions{
-		TTL:  ttl,
-		Tags: tags,
-	})
-}
-
-func invalidateTags(
-	ctx context.Context,
-	store cache.Store,
-	tags ...cache.Tag,
-) {
-	seen := make(map[cache.Tag]struct{}, len(tags))
-	for _, tag := range tags {
-		if tag == "" {
-			continue
-		}
-		if _, exists := seen[tag]; exists {
-			continue
-		}
-		seen[tag] = struct{}{}
-		_ = store.InvalidateTag(ctx, tag)
-	}
-}
-
 func siteTag(id site.ID) cache.Tag {
-	return cache.Tag(fmt.Sprintf("core.site:%d", id))
+	return cache.Tag(fmt.Sprintf("site:%d", id))
 }
 
 func resourceTag(id resource.ID) cache.Tag {
-	return cache.Tag(fmt.Sprintf("core.resource:%d", id))
+	return cache.Tag(fmt.Sprintf("resource:%d", id))
+}
+
+func siteResourcesTag(id site.ID) cache.Tag {
+	return cache.Tag(fmt.Sprintf("site:%d:resources", id))
+}
+
+func resourcePathTag(siteID site.ID, value string) cache.Tag {
+	sum := sha256.Sum256([]byte(value))
+	return cache.Tag(fmt.Sprintf(
+		"site:%d:resource-path:%s",
+		siteID,
+		hex.EncodeToString(sum[:]),
+	))
 }
 
 func resourceTags(item resource.Resource) []cache.Tag {
 	return []cache.Tag{
+		siteResourcesTag(item.SiteID),
+		resourceTag(item.ID),
+	}
+}
+
+func resourceDependencies(item resource.Resource) []cache.Tag {
+	return []cache.Tag{
 		siteTag(item.SiteID),
+		siteResourcesTag(item.SiteID),
 		resourceTag(item.ID),
 	}
 }

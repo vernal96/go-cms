@@ -5,8 +5,8 @@ import (
 	"time"
 
 	projectconfig "github.com/vernal96/go-cms/internal/config"
-	"github.com/vernal96/go-cms/internal/connectors/corecache"
 	"github.com/vernal96/go-cms/internal/connectors/mainpostgres"
+	"github.com/vernal96/go-cms/internal/connectors/projectcache"
 	configloader "github.com/vernal96/go-cms/kernel/config"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
@@ -37,9 +37,9 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	t.Setenv("FILES_UPLOAD_TIMEOUT", "12m")
 	t.Setenv("FILES_AVATAR_STORAGE", "private")
 	t.Setenv("FILES_AVATAR_MAX_SIZE", "4194304")
-	t.Setenv("CORE_CACHE_DRIVER", "redis")
-	t.Setenv("CORE_CACHE_REDIS_ADDRS", "redis-one:6379,redis-two:6379")
-	t.Setenv("CORE_CACHE_REDIS_MASTER_NAME", "cms-primary")
+	t.Setenv("CACHE_FILESYSTEM_STORAGE", "private")
+	t.Setenv("CACHE_REDIS_ADDRS", "redis-one:6379,redis-two:6379")
+	t.Setenv("CACHE_REDIS_MASTER_NAME", "cms-primary")
 	t.Setenv(
 		"JWT_SIGNING_KEY",
 		"0123456789abcdef0123456789abcdef",
@@ -65,10 +65,10 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	if config.Postgres.Host != "database" || config.Postgres.Database != "cms" {
 		t.Fatalf("postgres config = %#v", config.Postgres)
 	}
-	if config.CoreCache.Driver != "redis" ||
-		len(config.CoreCache.Redis.Addrs) != 2 ||
-		config.CoreCache.Redis.MasterName != "cms-primary" {
-		t.Fatalf("core cache config = %#v", config.CoreCache)
+	if config.Caches.Filesystem.Storage != "private" ||
+		len(config.Caches.Redis.Addrs) != 2 ||
+		config.Caches.Redis.MasterName != "cms-primary" {
+		t.Fatalf("cache config = %#v", config.Caches)
 	}
 	if config.Files.MaxUploadSize != 209715200 || config.Files.UploadTimeout != 12*time.Minute ||
 		config.Files.AvatarStorage != "private" || config.Files.AvatarMaxSize != 4194304 {
@@ -106,16 +106,20 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		definition.Filesystems[1].Code() != filesystem.Code("private") {
 		t.Fatalf("filesystem factories = %#v", definition.Filesystems)
 	}
-	if len(definition.Caches) != 1 ||
-		definition.Caches[0].Code() != corecache.Code {
+	if len(definition.Caches) != 2 ||
+		definition.Caches[0].Code() != projectcache.FilesystemCode ||
+		definition.Caches[1].Code() != projectcache.RedisCode {
 		t.Fatalf("cache factories = %#v", definition.Caches)
 	}
 	if len(definition.Profiles[0].Modules) != 3 ||
 		definition.Profiles[0].Modules[0].Module.Code() != core.ModuleCode ||
 		definition.Profiles[0].Modules[1].Module.Code() != "seo" ||
 		definition.Profiles[0].Modules[2].Module.Code() != admin.ModuleCode ||
-		len(definition.Profiles[0].Modules[0].Caches) != 1 ||
-		definition.Profiles[0].Modules[0].Caches[0].Code != corecache.Code {
+		len(definition.Profiles[0].Modules[0].Caches) != 2 ||
+		definition.Profiles[0].Modules[0].Caches[0].Alias != core.DurableCacheAlias ||
+		definition.Profiles[0].Modules[0].Caches[0].Code != projectcache.FilesystemCode ||
+		definition.Profiles[0].Modules[0].Caches[1].Alias != core.HotCacheAlias ||
+		definition.Profiles[0].Modules[0].Caches[1].Code != projectcache.RedisCode {
 		t.Fatalf(
 			"core cache bindings = %#v",
 			definition.Profiles[0].Modules,

@@ -1,6 +1,11 @@
 package app
 
 import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/console"
 )
 
@@ -55,4 +60,47 @@ func providerIdentity(provider console.Provider) string {
 		return keyed.key
 	}
 	return ""
+}
+
+type cacheMaintenanceProvider struct {
+	manager *cache.Manager
+}
+
+func (p cacheMaintenanceProvider) Commands() []console.Command {
+	if p.manager == nil {
+		return nil
+	}
+	return []console.Command{cacheMaintenanceCommand{manager: p.manager}}
+}
+
+type cacheMaintenanceCommand struct {
+	manager *cache.Manager
+}
+
+func (cacheMaintenanceCommand) Name() string { return "cache" }
+
+func (cacheMaintenanceCommand) Description() string {
+	return "prune or clear application cache stores"
+}
+
+func (c cacheMaintenanceCommand) Run(
+	ctx context.Context,
+	args []string,
+	streams console.IO,
+) error {
+	if len(args) == 0 || args[0] == "help" {
+		_, err := fmt.Fprintln(streams.Out, "Usage: console cache <prune|clear>")
+		return err
+	}
+	if len(args) != 1 {
+		return errors.New("cache command accepts one subcommand")
+	}
+	switch args[0] {
+	case "prune":
+		return c.manager.Prune(ctx)
+	case "clear":
+		return c.manager.Flush(ctx)
+	default:
+		return fmt.Errorf("unknown cache subcommand %q", args[0])
+	}
 }

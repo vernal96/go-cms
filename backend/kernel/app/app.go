@@ -184,7 +184,10 @@ func New(
 	caches, err := cache.NewManager(
 		ctx,
 		definition.Caches,
-		cache.Dependencies{Filesystems: filesystems},
+		cache.Dependencies{
+			Filesystems: filesystems,
+			Observer:    cache.NewSlogObserver(application.logger),
+		},
 	)
 	if err != nil {
 		return nil, err
@@ -235,6 +238,10 @@ func New(
 	application.permissions = permissionCatalog
 
 	application.collectModuleCommandProviders()
+	application.addProvider(
+		"cache:maintenance",
+		cacheMaintenanceProvider{manager: application.caches},
+	)
 	application.addProvider(
 		"core:identity-commands",
 		corecommands.New(application),

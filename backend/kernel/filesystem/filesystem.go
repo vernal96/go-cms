@@ -55,6 +55,12 @@ type OverwriteDisk interface {
 	Put(context.Context, string, io.Reader, string) error
 }
 
+// PrefixWalker is an optional maintenance capability. Hot-path cache
+// invalidation must not depend on it.
+type PrefixWalker interface {
+	WalkPrefix(context.Context, string, func(string) error) error
+}
+
 type KeyDistribution string
 
 const (

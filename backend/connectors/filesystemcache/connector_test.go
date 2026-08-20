@@ -172,11 +172,65 @@ func TestFilesystemCacheTreatsCorruptEntryAsMiss(t *testing.T) {
 	if err := os.WriteFile(objectPath, []byte("bad"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Get(
-		context.Background(),
-		"corrupt",
-	); !errors.Is(err, cache.ErrMiss) {
+	if _, err := store.Get(context.Background(), "corrupt"); !errors.Is(err, cache.ErrMiss) || !errors.Is(err, cache.ErrCorrupt) {
 		t.Fatalf("corrupt entry error = %v", err)
+	}
+}
+
+func TestFilesystemCachePruneAndFlush(t *testing.T) {
+	disk, err := localstorage.New(
+		context.Background(),
+		localstorage.Config{
+			Code:       "private",
+			Visibility: filesystem.VisibilityPrivate,
+			Root:       t.TempDir(),
+			BaseURL:    "http://localhost:8080",
+			SigningKey: strings.Repeat("k", 32),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	store, err := New(context.Background(), Config{
+		Code:   "files",
+		Disk:   "private",
+		Prefix: "cache/maintenance",
+		Now:    func() time.Time { return now },
+		Random: bytes.NewReader(bytes.Repeat([]byte{4}, 128)),
+	}, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set(context.Background(), "keep", []byte("value"), cache.SetOptions{TTL: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set(context.Background(), "expired", []byte("value"), cache.SetOptions{TTL: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set(context.Background(), "stale", []byte("value"), cache.SetOptions{Tags: []cache.Tag{"resource:7"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.InvalidateTag(context.Background(), "resource:7"); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if err := store.Prune(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := store.Get(context.Background(), "keep"); err != nil || string(value) != "value" {
+		t.Fatalf("kept value = %q, error = %v", value, err)
+	}
+	for _, key := range []string{"expired", "stale"} {
+		if _, err := store.Get(context.Background(), key); !errors.Is(err, cache.ErrMiss) {
+			t.Fatalf("pruned key %q error = %v", key, err)
+		}
+	}
+	if err := store.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(context.Background(), "keep"); !errors.Is(err, cache.ErrMiss) {
+		t.Fatalf("flushed value error = %v", err)
 	}
 }
 

@@ -29,11 +29,7 @@ func TestCachedSiteRepositoryUsesCacheAndInvalidatesUpdate(t *testing.T) {
 			},
 		}},
 	}
-	policy := newRepositoryCachePolicy()
-	policy.register(
-		RepositoryCacheDescriptor{Code: store.Code(), Namespace: "test"},
-		store,
-	)
+	policy := newTestRepositoryCachePolicy(store)
 	repository := &cachedSiteRepository{
 		base:   &invalidatingSiteRepository{base: base, policy: policy},
 		store:  store,
@@ -114,11 +110,7 @@ func TestCachedRepositoriesFailOpen(t *testing.T) {
 	base := &siteRepositoryStub{
 		items: []site.Site{{ID: 1, Settings: map[string]any{}}},
 	}
-	policy := newRepositoryCachePolicy()
-	policy.register(
-		RepositoryCacheDescriptor{Code: store.Code(), Namespace: "test"},
-		store,
-	)
+	policy := newTestRepositoryCachePolicy(store)
 	repository := &cachedSiteRepository{
 		base:   &invalidatingSiteRepository{base: base, policy: policy},
 		store:  store,
@@ -144,11 +136,7 @@ func TestCachedSiteRepositoryDoesNotInvalidateFailedMutation(t *testing.T) {
 	store := newMemoryCacheStore()
 	updateErr := errors.New("database unavailable")
 	base := &siteRepositoryStub{updateErr: updateErr}
-	policy := newRepositoryCachePolicy()
-	policy.register(
-		RepositoryCacheDescriptor{Code: store.Code(), Namespace: "test"},
-		store,
-	)
+	policy := newTestRepositoryCachePolicy(store)
 	repository := &cachedSiteRepository{
 		base:   &invalidatingSiteRepository{base: base, policy: policy},
 		store:  store,
@@ -187,11 +175,7 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 			}},
 		},
 	}
-	policy := newRepositoryCachePolicy()
-	policy.register(
-		RepositoryCacheDescriptor{Code: store.Code(), Namespace: "test"},
-		store,
-	)
+	policy := newTestRepositoryCachePolicy(store)
 	repository := &cachedResourceRepository{
 		base: &invalidatingResourceRepository{
 			base: base, policy: policy,
@@ -221,10 +205,10 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 		value.String() != "3" {
 		t.Fatalf("cached widget params = %#v", second.Widgets[0].Params)
 	}
-	key := "core:resource:id:v2:7"
+	key := "resource:id:v2:7"
 	if !reflect.DeepEqual(
 		store.options[key].Tags,
-		[]cache.Tag{siteTag(3), resourceTag(7)},
+		[]cache.Tag{siteTag(3), siteResourcesTag(3), resourceTag(7)},
 	) {
 		t.Fatalf("resource tags = %v", store.options[key].Tags)
 	}
@@ -244,7 +228,7 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(
 		store.invalidated,
-		[]cache.Tag{siteTag(3), resourceTag(7)},
+		[]cache.Tag{siteResourcesTag(3), resourceTag(7)},
 	) {
 		t.Fatalf("create invalidated = %v", store.invalidated)
 	}
@@ -264,7 +248,11 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(
 		store.invalidated,
-		[]cache.Tag{siteTag(3), siteTag(4), resourceTag(7)},
+		[]cache.Tag{
+			siteResourcesTag(3),
+			siteResourcesTag(4),
+			resourceTag(7),
+		},
 	) {
 		t.Fatalf("update invalidated = %v", store.invalidated)
 	}
@@ -282,7 +270,7 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 	if _, err := repository.UpdateWidget(context.Background(), updated.ID, changedWidget); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(store.invalidated, []cache.Tag{siteTag(4), resourceTag(7)}) {
+	if !reflect.DeepEqual(store.invalidated, []cache.Tag{siteResourcesTag(4), resourceTag(7)}) {
 		t.Fatalf("widget update invalidated = %v", store.invalidated)
 	}
 	freshAfterWidgetUpdate, err := repository.ByID(context.Background(), updated.ID)
@@ -299,7 +287,7 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(
 		store.invalidated,
-		[]cache.Tag{siteTag(4), resourceTag(7)},
+		[]cache.Tag{siteResourcesTag(4), resourceTag(7)},
 	) {
 		t.Fatalf("soft delete invalidated = %v", store.invalidated)
 	}
@@ -310,7 +298,7 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(
 		store.invalidated,
-		[]cache.Tag{siteTag(4), resourceTag(7)},
+		[]cache.Tag{siteResourcesTag(4), resourceTag(7)},
 	) {
 		t.Fatalf("restore invalidated = %v", store.invalidated)
 	}
@@ -321,7 +309,7 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(
 		store.invalidated,
-		[]cache.Tag{siteTag(4), resourceTag(7)},
+		[]cache.Tag{siteResourcesTag(4), resourceTag(7)},
 	) {
 		t.Fatalf("delete invalidated = %v", store.invalidated)
 	}
@@ -336,11 +324,7 @@ func TestRepositoryCacheCoherencePreventsStaleReadFillAfterWrite(t *testing.T) {
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	policy := newRepositoryCachePolicy()
-	policy.register(
-		RepositoryCacheDescriptor{Code: store.Code(), Namespace: "test"},
-		store,
-	)
+	policy := newTestRepositoryCachePolicy(store)
 	repository := &cachedResourceRepository{
 		base: &invalidatingResourceRepository{
 			base: base, policy: policy,
@@ -358,8 +342,9 @@ func TestRepositoryCacheCoherencePreventsStaleReadFillAfterWrite(t *testing.T) {
 		readErr <- err
 	}()
 	<-base.started
-	if policy.coherenceMu.TryLock() {
-		policy.coherenceMu.Unlock()
+	lock := policy.lockIndexes([]cache.Tag{resourceTag(7)})[0]
+	if policy.coherence[lock].TryLock() {
+		policy.coherence[lock].Unlock()
 		t.Fatal("cache fill did not hold the coherence read barrier")
 	}
 
@@ -394,6 +379,38 @@ func TestRepositoryCacheCoherencePreventsStaleReadFillAfterWrite(t *testing.T) {
 	}
 }
 
+func TestRepositoryCacheCoherenceDoesNotSerializeUnrelatedDependencies(t *testing.T) {
+	policy := newRepositoryCachePolicy(nil)
+	first := resourceTag(1)
+	firstLock := policy.lockIndexes([]cache.Tag{first})[0]
+	var second cache.Tag
+	for id := resource.ID(2); id < 100; id++ {
+		candidate := resourceTag(id)
+		if policy.lockIndexes([]cache.Tag{candidate})[0] != firstLock {
+			second = candidate
+			break
+		}
+	}
+	if second == "" {
+		t.Fatal("could not find an independent coherence stripe")
+	}
+
+	policy.coherence[firstLock].RLock()
+	defer policy.coherence[firstLock].RUnlock()
+	done := make(chan struct{})
+	go func() {
+		_ = withRepositoryCacheWrite(policy, []cache.Tag{second}, func() error {
+			close(done)
+			return nil
+		})
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("unrelated dependency write was serialized")
+	}
+}
+
 type memoryCacheStore struct {
 	values        map[string][]byte
 	options       map[string]cache.SetOptions
@@ -401,6 +418,29 @@ type memoryCacheStore struct {
 	getErr        error
 	setErr        error
 	invalidateErr error
+}
+
+func newTestRepositoryCachePolicy(store cache.Store) *repositoryCachePolicy {
+	return newRepositoryCachePolicy(cache.InvalidatorFunc(func(
+		ctx context.Context,
+		tags ...cache.Tag,
+	) error {
+		seen := make(map[cache.Tag]struct{}, len(tags))
+		var result []error
+		for _, tag := range tags {
+			if tag == "" {
+				continue
+			}
+			if _, exists := seen[tag]; exists {
+				continue
+			}
+			seen[tag] = struct{}{}
+			if err := store.InvalidateTag(ctx, tag); err != nil {
+				result = append(result, err)
+			}
+		}
+		return errors.Join(result...)
+	}))
 }
 
 func newMemoryCacheStore() *memoryCacheStore {

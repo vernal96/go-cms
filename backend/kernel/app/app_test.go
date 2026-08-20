@@ -2145,7 +2145,7 @@ func TestAppResourceWriteInvalidatesSiteRuntimeRepositoryCache(t *testing.T) {
 				{
 					Module: core.Module{},
 					Caches: []cache.Binding{{
-						Alias: core.RepositoryCacheAlias,
+						Alias: core.DurableCacheAlias,
 						Code:  cacheStore.Code(),
 					}},
 				},
@@ -2642,7 +2642,7 @@ func TestAppBootAllowsDifferentCoreRepositoryCachesAcrossProfiles(
 								RepositoryCacheTTL: time.Minute,
 							},
 							Caches: []cache.Binding{{
-								Alias:     core.RepositoryCacheAlias,
+								Alias:     core.DurableCacheAlias,
 								Code:      cacheStore.code,
 								Namespace: "core/first",
 							}},
@@ -2659,7 +2659,7 @@ func TestAppBootAllowsDifferentCoreRepositoryCachesAcrossProfiles(
 								RepositoryCacheTTL: time.Minute,
 							},
 							Caches: []cache.Binding{{
-								Alias:     core.RepositoryCacheAlias,
+								Alias:     core.DurableCacheAlias,
 								Code:      cacheStore.code,
 								Namespace: "core/second",
 							}},

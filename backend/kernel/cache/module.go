@@ -38,6 +38,13 @@ func NewRuntimeModuleManager(
 	moduleCode string,
 	bindings []Binding,
 ) (ModuleManager, error) {
+	var coordinator *Coordinator
+	if owner, ok := resolver.(*Manager); ok {
+		if owner.coordinator == nil {
+			owner.coordinator = NewCoordinator()
+		}
+		coordinator = owner.coordinator
+	}
 	manager := &scopedManager{
 		stores:   make(map[Alias]Store, len(bindings)),
 		bindings: make(map[Alias]Binding, len(bindings)),
@@ -80,17 +87,17 @@ func NewRuntimeModuleManager(
 			)
 		}
 
-		namespace := strings.TrimSpace(binding.Namespace)
-		if namespace == "" {
+		keyNamespace := strings.TrimSpace(binding.Namespace)
+		if keyNamespace == "" {
 			if scope.Site == "" {
-				namespace = fmt.Sprintf(
+				keyNamespace = fmt.Sprintf(
 					"profiles/%s/modules/%s/caches/%s",
 					scope.Profile,
 					moduleCode,
 					binding.Alias,
 				)
 			} else {
-				namespace = fmt.Sprintf(
+				keyNamespace = fmt.Sprintf(
 					"sites/%s/profiles/%s/modules/%s/caches/%s",
 					scope.Site,
 					scope.Profile,
@@ -99,19 +106,32 @@ func NewRuntimeModuleManager(
 				)
 			}
 		}
-		if err := validateNamespace(namespace); err != nil {
+		if err := validateNamespace(keyNamespace); err != nil {
 			return nil, fmt.Errorf(
 				"cache alias %q namespace: %w",
 				binding.Alias,
 				err,
 			)
 		}
+		dependencyNamespace := dependencyScope(scope)
+		if err := validateNamespace(dependencyNamespace); err != nil {
+			return nil, fmt.Errorf(
+				"cache alias %q dependency namespace: %w",
+				binding.Alias,
+				err,
+			)
+		}
 
-		binding.Namespace = namespace
+		binding.Namespace = keyNamespace
 		manager.bindings[binding.Alias] = binding
 		manager.stores[binding.Alias] = &scopedStore{
-			store:     store,
-			namespace: namespace,
+			store:               store,
+			keyNamespace:        keyNamespace,
+			dependencyNamespace: dependencyNamespace,
+			coordinator:         coordinator,
+		}
+		if coordinator != nil {
+			coordinator.register(dependencyNamespace, store)
 		}
 	}
 
@@ -135,8 +155,10 @@ func (m *scopedManager) Binding(alias Alias) (Binding, bool) {
 }
 
 type scopedStore struct {
-	store     Store
-	namespace string
+	store               Store
+	keyNamespace        string
+	dependencyNamespace string
+	coordinator         *Coordinator
 }
 
 func (s *scopedStore) Code() Code {
@@ -154,7 +176,7 @@ func (s *scopedStore) Get(
 	if key == "" {
 		return nil, errors.New("cache key is empty")
 	}
-	return s.store.Get(ctx, scopedValue(s.namespace, key))
+	return s.store.Get(ctx, scopedValue(s.keyNamespace, key))
 }
 
 func (s *scopedStore) Set(
@@ -171,12 +193,12 @@ func (s *scopedStore) Set(
 		if tag == "" {
 			return errors.New("cache tag is empty")
 		}
-		tags[index] = Tag(scopedValue(s.namespace, string(tag)))
+		tags[index] = Tag(scopedValue(s.dependencyNamespace, string(tag)))
 	}
 	options.Tags = tags
 	return s.store.Set(
 		ctx,
-		scopedValue(s.namespace, key),
+		scopedValue(s.keyNamespace, key),
 		value,
 		options,
 	)
@@ -189,7 +211,7 @@ func (s *scopedStore) Exists(
 	if key == "" {
 		return false, errors.New("cache key is empty")
 	}
-	return s.store.Exists(ctx, scopedValue(s.namespace, key))
+	return s.store.Exists(ctx, scopedValue(s.keyNamespace, key))
 }
 
 func (s *scopedStore) Delete(
@@ -199,7 +221,7 @@ func (s *scopedStore) Delete(
 	if key == "" {
 		return errors.New("cache key is empty")
 	}
-	return s.store.Delete(ctx, scopedValue(s.namespace, key))
+	return s.store.Delete(ctx, scopedValue(s.keyNamespace, key))
 }
 
 func (s *scopedStore) InvalidateTag(
@@ -209,10 +231,17 @@ func (s *scopedStore) InvalidateTag(
 	if tag == "" {
 		return errors.New("cache tag is empty")
 	}
-	return s.store.InvalidateTag(
-		ctx,
-		Tag(scopedValue(s.namespace, string(tag))),
-	)
+	if s.coordinator != nil {
+		return s.coordinator.invalidateScope(
+			ctx,
+			s.dependencyNamespace,
+			tag,
+		)
+	}
+	return s.store.InvalidateTag(ctx, Tag(scopedValue(
+		s.dependencyNamespace,
+		string(tag),
+	)))
 }
 
 // A module-scoped store borrows the global store. Module code must not be
@@ -230,6 +259,17 @@ func validateNamespace(value string) error {
 
 func scopedValue(namespace, value string) string {
 	return strconv.Itoa(len(namespace)) + ":" + namespace + value
+}
+
+func dependencyScope(scope RuntimeScope) string {
+	if scope.Site != "" {
+		return fmt.Sprintf("sites/%s/dependencies", scope.Site)
+	}
+	return fmt.Sprintf("profiles/%s/dependencies", scope.Profile)
+}
+
+func (s *scopedStore) report(ctx context.Context, event Event) {
+	report(ctx, s.store, event)
 }
 
 var _ ModuleManager = (*scopedManager)(nil)

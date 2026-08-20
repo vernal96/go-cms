@@ -108,6 +108,40 @@ func TestRedisCacheMissErrorsAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestRedisCacheTreatsCorruptEntryAsObservableMiss(t *testing.T) {
+	backend := &memoryClient{values: make(map[string][]byte)}
+	store := newConnector(Config{Code: "redis", Prefix: "test"}, backend)
+	backend.values[store.entryKey("corrupt")] = []byte("bad")
+	if _, err := store.Get(context.Background(), "corrupt"); !errors.Is(err, cache.ErrMiss) || !errors.Is(err, cache.ErrCorrupt) {
+		t.Fatalf("corrupt entry error = %v", err)
+	}
+}
+
+func TestRedisCacheRepairsCorruptTagToken(t *testing.T) {
+	backend := &memoryClient{values: make(map[string][]byte)}
+	store := newConnector(
+		Config{
+			Code:   "redis",
+			Prefix: "test",
+			Random: bytes.NewReader(bytes.Repeat([]byte{3}, 64)),
+		},
+		backend,
+	)
+	backend.values[store.tagKey("resource:7")] = []byte("bad")
+	if err := store.Set(
+		context.Background(),
+		"resource:7",
+		[]byte("value"),
+		cache.SetOptions{Tags: []cache.Tag{"resource:7"}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	value, err := store.Get(context.Background(), "resource:7")
+	if err != nil || string(value) != "value" {
+		t.Fatalf("value = %q, error = %v", value, err)
+	}
+}
+
 func TestUniversalOptionsCoverStandaloneSentinelAndCluster(t *testing.T) {
 	standalone, err := universalOptions(Config{
 		Code:  "standalone",

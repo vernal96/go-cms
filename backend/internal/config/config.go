@@ -5,16 +5,15 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/vernal96/go-cms/internal/connectors/corecache"
 	"github.com/vernal96/go-cms/internal/connectors/corefiles"
 	"github.com/vernal96/go-cms/internal/connectors/maineventbus"
 	"github.com/vernal96/go-cms/internal/connectors/mainlogger"
 	"github.com/vernal96/go-cms/internal/connectors/mainpostgres"
+	"github.com/vernal96/go-cms/internal/connectors/projectcache"
 	"github.com/vernal96/go-cms/internal/profiles/dev"
 	jwtsecurity "github.com/vernal96/go-cms/internal/security/jwt"
 	"github.com/vernal96/go-cms/kernel"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
-	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	corepostgres "github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres"
@@ -23,13 +22,13 @@ import (
 )
 
 type Config struct {
-	Logger    mainlogger.Config   `envconfig:"LOGGER"`
-	EventBus  maineventbus.Config `envconfig:"EVENT_BUS"`
-	Server    ServerConfig        `envconfig:"SERVER"`
-	Postgres  mainpostgres.Config `envconfig:"POSTGRES"`
-	Files     FilesConfig         `envconfig:"FILES"`
-	CoreCache corecache.Config    `envconfig:"CORE_CACHE"`
-	JWT       jwtsecurity.Config  `envconfig:"JWT"`
+	Logger   mainlogger.Config   `envconfig:"LOGGER"`
+	EventBus maineventbus.Config `envconfig:"EVENT_BUS"`
+	Server   ServerConfig        `envconfig:"SERVER"`
+	Postgres mainpostgres.Config `envconfig:"POSTGRES"`
+	Files    FilesConfig         `envconfig:"FILES"`
+	Caches   projectcache.Config `envconfig:"CACHE"`
+	JWT      jwtsecurity.Config  `envconfig:"JWT"`
 }
 
 type FilesConfig struct {
@@ -70,9 +69,7 @@ func (c Config) Application() appkernel.Definition {
 			corefiles.PublicFactory(c.Files.Public),
 			corefiles.PrivateFactory(c.Files.Private),
 		},
-		Caches: []cache.Factory{
-			corecache.NewFactory(c.CoreCache),
-		},
+		Caches:           c.Caches.Factories(),
 		Profiles:         []kernel.Profile{dev.Profile},
 		PasswordHasher:   argon2id.Factory{},
 		SiteAccessPolicy: admin.AllowAllSitesPolicy{},

@@ -193,25 +193,14 @@ func (c *Connector) Get(
 	if err != nil {
 		return nil, err
 	}
-	entry, err := cacheentry.Decode(raw)
+	entry, valid, err := c.validEntry(ctx, raw)
 	if err != nil {
 		_ = c.disk.Delete(ctx, objectKey)
-		return nil, cache.ErrMiss
+		return nil, err
 	}
-	if entry.ExpiresAt > 0 &&
-		!c.now().Before(time.Unix(0, entry.ExpiresAt)) {
+	if !valid {
 		_ = c.disk.Delete(ctx, objectKey)
 		return nil, cache.ErrMiss
-	}
-	for tag, expected := range entry.Tags {
-		current, err := c.tagToken(ctx, cache.Tag(tag))
-		if err != nil {
-			return nil, err
-		}
-		if current != expected {
-			_ = c.disk.Delete(ctx, objectKey)
-			return nil, cache.ErrMiss
-		}
 	}
 	return append([]byte(nil), entry.Value...), nil
 }
@@ -307,6 +296,83 @@ func (c *Connector) InvalidateTag(
 // The filesystem manager owns the disk lifecycle.
 func (*Connector) Close() error {
 	return nil
+}
+
+func (c *Connector) Prune(ctx context.Context) error {
+	walker, ok := c.disk.(filesystem.PrefixWalker)
+	if !ok {
+		return filesystem.ErrUnsupported
+	}
+	return walker.WalkPrefix(ctx, path.Join(c.prefix, "entries"), func(key string) error {
+		raw, err := c.read(ctx, key)
+		if errors.Is(err, cache.ErrMiss) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		_, valid, err := c.validEntry(ctx, raw)
+		if errors.Is(err, cache.ErrCorrupt) {
+			return c.disk.Delete(ctx, key)
+		}
+		if err != nil {
+			return err
+		}
+		if valid {
+			return nil
+		}
+		return c.disk.Delete(ctx, key)
+	})
+}
+
+func (c *Connector) Flush(ctx context.Context) error {
+	walker, ok := c.disk.(filesystem.PrefixWalker)
+	if !ok {
+		return filesystem.ErrUnsupported
+	}
+	var keys []string
+	if err := walker.WalkPrefix(ctx, c.prefix, func(key string) error {
+		keys = append(keys, key)
+		return nil
+	}); err != nil {
+		return err
+	}
+	var result []error
+	for _, key := range keys {
+		if err := c.disk.Delete(ctx, key); err != nil {
+			result = append(result, err)
+		}
+	}
+	return errors.Join(result...)
+}
+
+func (c *Connector) validEntry(
+	ctx context.Context,
+	raw []byte,
+) (cacheentry.Entry, bool, error) {
+	entry, err := cacheentry.Decode(raw)
+	if err != nil {
+		return cacheentry.Entry{}, false, fmt.Errorf(
+			"%w: %w: %v",
+			cache.ErrMiss,
+			cache.ErrCorrupt,
+			err,
+		)
+	}
+	if entry.ExpiresAt > 0 &&
+		!c.now().Before(time.Unix(0, entry.ExpiresAt)) {
+		return cacheentry.Entry{}, false, nil
+	}
+	for tag, expected := range entry.Tags {
+		current, err := c.tagToken(ctx, cache.Tag(tag))
+		if err != nil {
+			return cacheentry.Entry{}, false, err
+		}
+		if current != expected {
+			return cacheentry.Entry{}, false, nil
+		}
+	}
+	return entry, true, nil
 }
 
 func (c *Connector) tagTokens(
@@ -432,3 +498,5 @@ func validatePrefix(prefix string) error {
 
 var _ cache.Factory = Factory{}
 var _ cache.Store = (*Connector)(nil)
+var _ cache.Pruner = (*Connector)(nil)
+var _ cache.Flusher = (*Connector)(nil)

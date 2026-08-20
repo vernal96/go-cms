@@ -244,7 +244,12 @@ func (c *Connector) Get(
 	entry, err := cacheentry.Decode(raw)
 	if err != nil {
 		_ = c.client.Delete(ctx, physicalKey)
-		return nil, cache.ErrMiss
+		return nil, fmt.Errorf(
+			"%w: %w: %v",
+			cache.ErrMiss,
+			cache.ErrCorrupt,
+			err,
+		)
 	}
 	if entry.ExpiresAt > 0 &&
 		!c.now().Before(time.Unix(0, entry.ExpiresAt)) {

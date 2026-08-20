@@ -3,6 +3,8 @@ package core
 import (
 	"context"
 	"errors"
+	"hash/fnv"
+	"sort"
 	"sync"
 	"time"
 
@@ -14,57 +16,28 @@ import (
 )
 
 const repositoryCacheInvalidationTimeout = 5 * time.Second
+const repositoryCacheLockStripes = 64
 
-type repositoryCacheTarget struct {
-	code      cache.Code
-	namespace string
-}
-
-// repositoryCachePolicy owns cache coherence for all runtime-scoped core
-// repository caches in this application. Targets are keyed by their physical
-// store and namespace so rebuilding the same site runtime is idempotent. A
-// target remains registered for the application lifetime: a retired runtime
-// may still serve an in-flight read and must not retain stale data.
+// repositoryCachePolicy owns core domain cache coherence. Physical target
+// registration and cross-store fan-out belong to cache.Manager's coordinator.
 type repositoryCachePolicy struct {
-	coherenceMu sync.RWMutex
-	targetMu    sync.RWMutex
-	targets     map[repositoryCacheTarget]cache.Store
+	coherence   [repositoryCacheLockStripes]sync.RWMutex
+	invalidator cache.Invalidator
 }
 
-func newRepositoryCachePolicy() *repositoryCachePolicy {
-	return &repositoryCachePolicy{
-		targets: make(map[repositoryCacheTarget]cache.Store),
-	}
-}
-
-func (p *repositoryCachePolicy) register(
-	descriptor RepositoryCacheDescriptor,
-	store cache.Store,
-) {
-	if p == nil || store == nil {
-		return
-	}
-	p.targetMu.Lock()
-	p.targets[repositoryCacheTarget{
-		code:      descriptor.Code,
-		namespace: descriptor.Namespace,
-	}] = store
-	p.targetMu.Unlock()
+func newRepositoryCachePolicy(
+	invalidator cache.Invalidator,
+) *repositoryCachePolicy {
+	return &repositoryCachePolicy{invalidator: invalidator}
 }
 
 func (p *repositoryCachePolicy) invalidate(
 	ctx context.Context,
 	tags ...cache.Tag,
 ) {
-	if p == nil {
+	if p == nil || p.invalidator == nil {
 		return
 	}
-	p.targetMu.RLock()
-	targets := make([]cache.Store, 0, len(p.targets))
-	for _, store := range p.targets {
-		targets = append(targets, store)
-	}
-	p.targetMu.RUnlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -73,33 +46,64 @@ func (p *repositoryCachePolicy) invalidate(
 		repositoryCacheInvalidationTimeout,
 	)
 	defer cancel()
-	for _, store := range targets {
-		invalidateTags(invalidationCtx, store, tags...)
-	}
+	// Cache invalidation remains fail-open for the authoritative mutation;
+	// application cache stores report failures through their observer.
+	_ = p.invalidator.Invalidate(invalidationCtx, tags...)
 }
 
 func withRepositoryCacheRead[T any](
 	policy *repositoryCachePolicy,
+	tags []cache.Tag,
 	read func() (T, error),
 ) (T, error) {
 	if policy == nil {
 		return read()
 	}
-	policy.coherenceMu.RLock()
-	defer policy.coherenceMu.RUnlock()
+	locks := policy.lockIndexes(tags)
+	for _, index := range locks {
+		policy.coherence[index].RLock()
+	}
+	defer func() {
+		for index := len(locks) - 1; index >= 0; index-- {
+			policy.coherence[locks[index]].RUnlock()
+		}
+	}()
 	return read()
 }
 
 func withRepositoryCacheWrite(
 	policy *repositoryCachePolicy,
+	tags []cache.Tag,
 	write func() error,
 ) error {
 	if policy == nil {
 		return write()
 	}
-	policy.coherenceMu.Lock()
-	defer policy.coherenceMu.Unlock()
+	locks := policy.lockIndexes(tags)
+	for _, index := range locks {
+		policy.coherence[index].Lock()
+	}
+	defer func() {
+		for index := len(locks) - 1; index >= 0; index-- {
+			policy.coherence[locks[index]].Unlock()
+		}
+	}()
 	return write()
+}
+
+func (*repositoryCachePolicy) lockIndexes(tags []cache.Tag) []int {
+	unique := make(map[int]struct{}, len(tags))
+	for _, tag := range tags {
+		hash := fnv.New32a()
+		_, _ = hash.Write([]byte(tag))
+		unique[int(hash.Sum32()%repositoryCacheLockStripes)] = struct{}{}
+	}
+	result := make([]int, 0, len(unique))
+	for index := range unique {
+		result = append(result, index)
+	}
+	sort.Ints(result)
+	return result
 }
 
 type coherentDatabase struct {
@@ -111,11 +115,12 @@ type coherentDatabase struct {
 
 func newCoherentDatabase(
 	database Database,
+	invalidator cache.Invalidator,
 ) (*coherentDatabase, error) {
 	if err := validateDatabase(database); err != nil {
 		return nil, err
 	}
-	policy := newRepositoryCachePolicy()
+	policy := newRepositoryCachePolicy(invalidator)
 	return &coherentDatabase{
 		Database: database,
 		sites: &invalidatingSiteRepository{
@@ -201,7 +206,7 @@ func (r *invalidatingSiteRepository) Create(
 		return site.Site{}, errors.New("site management repository is unavailable")
 	}
 	var result site.Site
-	err := withRepositoryCacheWrite(r.policy, func() error {
+	err := withRepositoryCacheWrite(r.policy, []cache.Tag{sitesTag}, func() error {
 		var err error
 		result, err = management.Create(ctx, actorID, item)
 		if err != nil {
@@ -219,15 +224,19 @@ func (r *invalidatingSiteRepository) Update(
 	item site.Site,
 ) (site.Site, error) {
 	var result site.Site
-	err := withRepositoryCacheWrite(r.policy, func() error {
-		var err error
-		result, err = r.base.Update(ctx, actorID, item)
-		if err != nil {
-			return err
-		}
-		r.policy.invalidate(ctx, sitesTag, siteTag(result.ID))
-		return nil
-	})
+	err := withRepositoryCacheWrite(
+		r.policy,
+		[]cache.Tag{sitesTag, siteTag(item.ID)},
+		func() error {
+			var err error
+			result, err = r.base.Update(ctx, actorID, item)
+			if err != nil {
+				return err
+			}
+			r.policy.invalidate(ctx, sitesTag, siteTag(result.ID))
+			return nil
+		},
+	)
 	return result, err
 }
 
@@ -239,13 +248,17 @@ func (r *invalidatingSiteRepository) Delete(
 	if !ok {
 		return errors.New("site management repository is unavailable")
 	}
-	return withRepositoryCacheWrite(r.policy, func() error {
-		if err := management.Delete(ctx, id); err != nil {
-			return err
-		}
-		r.policy.invalidate(ctx, sitesTag, siteTag(id))
-		return nil
-	})
+	return withRepositoryCacheWrite(
+		r.policy,
+		[]cache.Tag{sitesTag, siteTag(id)},
+		func() error {
+			if err := management.Delete(ctx, id); err != nil {
+				return err
+			}
+			r.policy.invalidate(ctx, sitesTag, siteTag(id))
+			return nil
+		},
+	)
 }
 
 type invalidatingResourceRepository struct {
@@ -260,15 +273,19 @@ func (r *invalidatingResourceRepository) Create(
 	validate resource.ValidateImageMedia,
 ) (resource.Resource, error) {
 	var result resource.Resource
-	err := withRepositoryCacheWrite(r.policy, func() error {
-		var err error
-		result, err = r.base.Create(ctx, actorID, item, validate)
-		if err != nil {
-			return err
-		}
-		r.policy.invalidate(ctx, resourceTags(result)...)
-		return nil
-	})
+	err := withRepositoryCacheWrite(
+		r.policy,
+		[]cache.Tag{siteResourcesTag(item.SiteID)},
+		func() error {
+			var err error
+			result, err = r.base.Create(ctx, actorID, item, validate)
+			if err != nil {
+				return err
+			}
+			r.policy.invalidate(ctx, resourceTags(result)...)
+			return nil
+		},
+	)
 	return result, err
 }
 
@@ -337,21 +354,29 @@ func (r *invalidatingResourceRepository) Update(
 	validate resource.ValidateImageMedia,
 ) (resource.Resource, error) {
 	var result resource.Resource
-	err := withRepositoryCacheWrite(r.policy, func() error {
-		var err error
-		result, err = r.base.Update(ctx, actorID, current, item, validate)
-		if err != nil {
-			return err
-		}
-		r.policy.invalidate(
-			ctx,
-			siteTag(current.SiteID),
-			siteTag(result.SiteID),
+	err := withRepositoryCacheWrite(
+		r.policy,
+		[]cache.Tag{
+			siteResourcesTag(current.SiteID),
+			siteResourcesTag(item.SiteID),
 			resourceTag(current.ID),
-			resourceTag(result.ID),
-		)
-		return nil
-	})
+		},
+		func() error {
+			var err error
+			result, err = r.base.Update(ctx, actorID, current, item, validate)
+			if err != nil {
+				return err
+			}
+			r.policy.invalidate(
+				ctx,
+				siteResourcesTag(current.SiteID),
+				siteResourcesTag(result.SiteID),
+				resourceTag(current.ID),
+				resourceTag(result.ID),
+			)
+			return nil
+		},
+	)
 	return result, err
 }
 
@@ -408,11 +433,11 @@ func (r *invalidatingResourceRepository) ReorderWidgets(ctx context.Context, id 
 }
 
 func (r *invalidatingResourceRepository) mutateWidgets(ctx context.Context, id resource.ID, mutate func() error) error {
-	return withRepositoryCacheWrite(r.policy, func() error {
-		current, err := r.base.ByID(ctx, id)
-		if err != nil {
-			return err
-		}
+	current, err := r.base.ByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	return withRepositoryCacheWrite(r.policy, resourceTags(current), func() error {
 		if err := mutate(); err != nil {
 			return err
 		}
@@ -425,11 +450,11 @@ func (r *invalidatingResourceRepository) Delete(
 	ctx context.Context,
 	id resource.ID,
 ) error {
-	return withRepositoryCacheWrite(r.policy, func() error {
-		current, err := r.base.ByID(ctx, id)
-		if err != nil {
-			return err
-		}
+	current, err := r.base.ByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	return withRepositoryCacheWrite(r.policy, resourceTags(current), func() error {
 		if err := r.base.Delete(ctx, id); err != nil {
 			return err
 		}
@@ -447,11 +472,11 @@ func (r *invalidatingResourceRepository) SoftDelete(
 	if !ok {
 		return errors.New("resource lifecycle repository is unavailable")
 	}
-	return withRepositoryCacheWrite(r.policy, func() error {
-		current, err := r.base.ByID(ctx, id)
-		if err != nil {
-			return err
-		}
+	current, err := r.base.ByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	return withRepositoryCacheWrite(r.policy, resourceTags(current), func() error {
 		if err := lifecycle.SoftDelete(ctx, actorID, id); err != nil {
 			return err
 		}
@@ -470,11 +495,11 @@ func (r *invalidatingResourceRepository) Restore(
 	if !ok {
 		return errors.New("resource lifecycle repository is unavailable")
 	}
-	return withRepositoryCacheWrite(r.policy, func() error {
-		current, err := r.base.ByID(ctx, id)
-		if err != nil {
-			return err
-		}
+	current, err := r.base.ByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	return withRepositoryCacheWrite(r.policy, resourceTags(current), func() error {
 		if err := lifecycle.Restore(ctx, actorID, id, withDescendants); err != nil {
 			return err
 		}

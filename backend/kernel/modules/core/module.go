@@ -24,7 +24,10 @@ import (
 
 const ModuleCode kernel.ModuleCode = "core"
 
-const RepositoryCacheAlias cache.Alias = "repository"
+const (
+	DurableCacheAlias cache.Alias = "durable"
+	HotCacheAlias     cache.Alias = "hot"
+)
 
 const defaultRepositoryCacheTTL = 5 * time.Minute
 
@@ -150,9 +153,9 @@ func (m Module) Build(
 
 	var descriptor *RepositoryCacheDescriptor
 	if caches := ctx.Caches(); caches != nil {
-		store, exists := caches.Store(RepositoryCacheAlias)
+		store, exists := caches.Store(DurableCacheAlias)
 		if exists {
-			binding, bindingExists := caches.Binding(RepositoryCacheAlias)
+			binding, bindingExists := caches.Binding(DurableCacheAlias)
 			if !bindingExists {
 				return nil, errors.New(
 					"core repository cache binding is unavailable",
@@ -163,7 +166,6 @@ func (m Module) Build(
 				Namespace: binding.Namespace,
 				TTL:       config.RepositoryCacheTTL,
 			}
-			m.services.cachePolicy.register(*descriptor, store)
 			database = newCachedDatabase(
 				database,
 				store,
