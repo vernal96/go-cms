@@ -6,9 +6,9 @@ SHELL := /bin/sh
 DOCKER_COMPOSE ?= docker compose
 COMPOSE := $(DOCKER_COMPOSE) --env-file .env
 WAIT_TIMEOUT ?= 180
-INFRA_SERVICES := postgres kafka rabbitmq loki grafana
+INFRA_SERVICES := postgres kafka rabbitmq redis loki grafana
 
-.PHONY: up env doctor config build down logs ps help
+.PHONY: up restart env doctor config build down logs ps help
 
 up: build
 	@printf '\nRemoving application containers before database initialization...\n'
@@ -32,7 +32,11 @@ up: build
 	printf '  API:     http://localhost:%s\n' "$$server_port"; \
 	printf '  Grafana: http://localhost:3000\n'; \
 	printf '  Login:   admin\n'; \
-	printf '  Password: admin-dev-only-2026\n\n'
+		printf '  Password: admin-dev-only-2026\n\n'
+
+restart: config
+	$(COMPOSE) up --detach --build --force-recreate --wait --wait-timeout $(WAIT_TIMEOUT) server admin
+	@printf '\nBackend and admin frontend restarted.\n'
 
 env:
 	@if [ -f .env ]; then \
@@ -66,6 +70,7 @@ ps: config
 help:
 	@printf 'Go CMS development commands:\n'
 	@printf '  make, make up  Build, initialize, and start the complete project\n'
+	@printf '  make restart   Rebuild and restart backend and admin frontend\n'
 	@printf '  make env       Create .env from .env.example when it is missing\n'
 	@printf '  make build     Build the server and admin images\n'
 	@printf '  make down      Stop containers without deleting persistent volumes\n'

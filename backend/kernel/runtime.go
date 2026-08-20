@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"sort"
 
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/eventbus"
@@ -130,6 +131,7 @@ func cloneRuntimeSettingValue(value any) any {
 type DefinitionRegistry interface {
 	FieldType(field.TypeCode) (field.Type, bool)
 	ResourceType(resourcetype.Code) (resourcetype.Type, bool)
+	ResourceTypes() []resourcetype.Code
 	Permission(permission.Code) (permission.Definition, bool)
 	Permissions() []permission.Code
 }
@@ -195,6 +197,15 @@ func (r *RuntimeRegistry) ResourceType(
 ) (resourcetype.Type, bool) {
 	resourceType, exists := r.resourceTypes[code]
 	return resourceType, exists
+}
+
+func (r *RuntimeRegistry) ResourceTypes() []resourcetype.Code {
+	result := make([]resourcetype.Code, 0, len(r.resourceTypes))
+	for code := range r.resourceTypes {
+		result = append(result, code)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
 }
 
 func (r *RuntimeRegistry) Permission(

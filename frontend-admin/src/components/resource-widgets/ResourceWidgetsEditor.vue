@@ -330,6 +330,8 @@ function handleError(error: unknown, fallback: string): void {
       v-model="settingsOpen"
       :definition="selectedDefinition"
       :widget="editingWidget"
+			:site-id="siteId"
+			:access-token="accessToken"
       :saving="saving"
       @save="save"
     />

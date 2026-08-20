@@ -154,6 +154,8 @@ export interface FieldDefinition {
   required: boolean
   rules: string[]
   options?: FieldOptions
+	editor?: string
+	visible_when?: { field: string; value: unknown }
 }
 
 export interface SiteProfilesResponse {
@@ -348,6 +350,11 @@ export interface ResourceOption {
 
 export interface ResourceOptionsResponse {
   items: ResourceOption[]
+}
+
+export interface ResourceLookupResponse {
+  items: ResourceOption[]
+  pagination: Pagination
 }
 
 export interface ResourceUpdatePayload {

@@ -473,6 +473,9 @@ func (s *Service) CreateWidget(
 	if err != nil {
 		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
+	if _, err := runtime.New(params); err != nil {
+		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	position := 0
 	for _, binding := range current.Widgets {
 		if binding.Area == input.Area {
@@ -518,6 +521,9 @@ func (s *Service) UpdateWidget(
 	}
 	binding.Params, err = runtime.NormalizeParams(input.Params)
 	if err != nil {
+		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if _, err := runtime.New(binding.Params); err != nil {
 		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	updated, err := s.widgets.UpdateWidget(ctx, resourceID, binding)

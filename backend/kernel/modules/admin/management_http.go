@@ -47,6 +47,7 @@ func registerManagementRoutes(router chi.Router, management *Management) {
 	router.Post("/sites/{siteID}/resources", handler.createResource)
 	router.Get("/sites/{siteID}/resource-metadata", handler.resourceMetadata)
 	router.Get("/sites/{siteID}/resource-options", handler.resourceOptions)
+	router.Get("/sites/{siteID}/resource-lookup", handler.resourceLookup)
 	router.Get("/sites/{siteID}/resources/{resourceID}", handler.getResource)
 	router.Patch("/sites/{siteID}/resources/{resourceID}", handler.updateResource)
 	router.Post("/sites/{siteID}/resources/{resourceID}/widgets", handler.createResourceWidget)
@@ -269,6 +270,19 @@ func (h *managementHTTP) resourceOptions(response http.ResponseWriter, request *
 		return
 	}
 	result, err := h.management.ResourceOptions(request.Context(), actor(request), siteID)
+	writeResult(response, http.StatusOK, result, err)
+}
+
+func (h *managementHTTP) resourceLookup(response http.ResponseWriter, request *http.Request) {
+	siteID, ok := siteID(response, request)
+	if !ok {
+		return
+	}
+	page, perPage, ok := parsePagination(response, request)
+	if !ok {
+		return
+	}
+	result, err := h.management.ResourceLookup(request.Context(), actor(request), siteID, request.URL.Query().Get("search"), page, perPage)
 	writeResult(response, http.StatusOK, result, err)
 }
 

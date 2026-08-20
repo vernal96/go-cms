@@ -311,6 +311,14 @@ func (r *invalidatingResourceRepository) ListBySite(
 	return r.base.ListBySite(ctx, siteID)
 }
 
+func (r *invalidatingResourceRepository) Query(ctx context.Context, query resource.Query) (resource.Page, error) {
+	repository, ok := r.base.(resource.QueryRepository)
+	if !ok {
+		return resource.Page{}, errors.New("resource query repository is unavailable")
+	}
+	return repository.Query(ctx, query)
+}
+
 func (r *invalidatingResourceRepository) ExistsInSite(
 	ctx context.Context,
 	siteID site.ID,
@@ -515,3 +523,4 @@ var _ resource.ManagementRepository = (*invalidatingResourceRepository)(nil)
 var _ resource.WidgetRepository = (*invalidatingResourceRepository)(nil)
 var _ resource.LifecycleRepository = (*invalidatingResourceRepository)(nil)
 var _ resource.StatisticsRepository = (*invalidatingResourceRepository)(nil)
+var _ resource.QueryRepository = (*invalidatingResourceRepository)(nil)

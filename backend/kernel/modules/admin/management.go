@@ -1237,6 +1237,50 @@ type ResourceOptions struct {
 	Items []ResourceOption `json:"items"`
 }
 
+type ResourceLookup struct {
+	Items      []ResourceOption `json:"items"`
+	Pagination Pagination       `json:"pagination"`
+}
+
+// ResourceLookup is a bounded, site-scoped picker source. It intentionally
+// differs from the legacy tree options endpoint: callers never receive an
+// entire site as static field choices.
+func (m *Management) ResourceLookup(ctx context.Context, actor security.Actor, siteID site.ID, search string, page, perPage int) (ResourceLookup, error) {
+	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission); err != nil {
+		return ResourceLookup{}, err
+	}
+	page, perPage, err := normalizePagination(page, perPage)
+	if err != nil {
+		return ResourceLookup{}, err
+	}
+	items, err := m.resourceRepo.ListBySite(ctx, siteID)
+	if err != nil {
+		return ResourceLookup{}, fmt.Errorf("list resource lookup: %w", err)
+	}
+	query := strings.ToLower(strings.TrimSpace(search))
+	options := make([]ResourceOption, 0, len(items))
+	for _, item := range items {
+		if query != "" && !strings.Contains(strings.ToLower(item.Title), query) && !strings.Contains(strings.ToLower(item.MenuTitle), query) && (item.Path == nil || !strings.Contains(strings.ToLower(*item.Path), query)) {
+			continue
+		}
+		title := strings.TrimSpace(item.MenuTitle)
+		if title == "" {
+			title = item.Title
+		}
+		options = append(options, ResourceOption{ID: item.ID, ParentID: item.ParentID, DisplayTitle: title, Path: item.Path})
+	}
+	total := len(options)
+	start := (page - 1) * perPage
+	if start > total {
+		start = total
+	}
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	return ResourceLookup{Items: options[start:end], Pagination: Pagination{Page: page, PerPage: perPage, Total: total}}, nil
+}
+
 func (m *Management) ResourceOptions(
 	ctx context.Context,
 	actor security.Actor,

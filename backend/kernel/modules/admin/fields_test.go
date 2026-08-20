@@ -23,6 +23,7 @@ func TestFieldDefinitionsSerializeAllOptions(t *testing.T) {
 		{Key: "email", Type: field.TypeEmail, Label: "Email"},
 		{Key: "phone", Type: field.TypePhone, Label: "Phone", Options: field.PhoneOptions{}},
 		{Key: "asset", Type: field.TypeFile, Label: "Asset", Options: field.FileOptions{Storages: []filesystem.Code{"public"}, MIMETypes: []string{"image/*"}}},
+		{Key: "html", Type: field.TypeString, Label: "HTML", Editor: "html", VisibleWhen: &field.VisibleWhen{Field: "enabled", Value: true}},
 	}
 
 	result, err := fieldDefinitions(definitions)
@@ -49,6 +50,9 @@ func TestFieldDefinitionsSerializeAllOptions(t *testing.T) {
 		selectOptions["multiple"] != true || phoneOptions["pattern"] != e164Pattern ||
 		fileOptions["storages"].([]any)[0] != "public" || fileOptions["mime_types"].([]any)[0] != "image/*" {
 		t.Fatalf("serialized options = %#v %#v %#v %#v %#v", integerOptions, floatOptions, selectOptions, phoneOptions, fileOptions)
+	}
+	if decoded[10]["editor"] != "html" || decoded[10]["visible_when"].(map[string]any)["field"] != "enabled" {
+		t.Fatalf("editor metadata = %#v", decoded[10])
 	}
 }
 

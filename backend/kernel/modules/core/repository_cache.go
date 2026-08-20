@@ -272,6 +272,16 @@ func (r *cachedResourceRepository) ListBySite(
 	})
 }
 
+func (r *cachedResourceRepository) Query(ctx context.Context, query resource.Query) (resource.Page, error) {
+	repository, ok := r.base.(resource.QueryRepository)
+	if !ok {
+		return resource.Page{}, errors.New("resource query repository is unavailable")
+	}
+	// Collection results are cached by the widget result layer, where their
+	// complete normalized identity and dependencies are known.
+	return repository.Query(ctx, query)
+}
+
 func (r *cachedResourceRepository) ExistsInSite(
 	ctx context.Context,
 	siteID site.ID,
@@ -444,3 +454,4 @@ var _ resource.Repository = (*cachedResourceRepository)(nil)
 var _ resource.WidgetRepository = (*cachedResourceRepository)(nil)
 var _ resource.ManagementRepository = (*cachedResourceRepository)(nil)
 var _ resource.StatisticsRepository = (*cachedResourceRepository)(nil)
+var _ resource.QueryRepository = (*cachedResourceRepository)(nil)

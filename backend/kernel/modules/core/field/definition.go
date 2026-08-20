@@ -20,15 +20,29 @@ const (
 	TypeEmail    TypeCode = "email"
 	TypePhone    TypeCode = "phone"
 	TypeFile     TypeCode = "file"
+	TypeJSON     TypeCode = "json"
 )
 
 type Definition struct {
-	Key      string
-	Type     TypeCode
-	Label    string
-	Required *bool
-	Rules    []string
-	Options  any
+	Key         string
+	Type        TypeCode
+	Label       string
+	Required    *bool
+	Rules       []string
+	Options     any
+	Editor      EditorCode
+	VisibleWhen *VisibleWhen
+}
+
+// EditorCode is optional admin presentation metadata. It deliberately does
+// not change how a value is persisted or validated by a field Type.
+type EditorCode string
+
+// VisibleWhen is a small declarative condition for dynamic forms. It is not
+// an expression language: a field is shown when another field equals Value.
+type VisibleWhen struct {
+	Field string
+	Value any
 }
 
 type IntegerOptions struct {
@@ -132,6 +146,11 @@ func CloneDefinitions(source []Definition) []Definition {
 		result[index] = definition
 		result[index].Rules = append([]string(nil), definition.Rules...)
 		result[index].Options = cloneOptions(definition.Options)
+		if definition.VisibleWhen != nil {
+			condition := *definition.VisibleWhen
+			condition.Value = cloneEditorValue(condition.Value)
+			result[index].VisibleWhen = &condition
+		}
 
 		if definition.Required != nil {
 			required := *definition.Required
@@ -140,6 +159,27 @@ func CloneDefinitions(source []Definition) []Definition {
 	}
 
 	return result
+}
+
+func cloneEditorValue(value any) any {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		result := make([]any, len(typed))
+		for index, item := range typed {
+			result[index] = cloneEditorValue(item)
+		}
+		return result
+	case map[string]any:
+		result := make(map[string]any, len(typed))
+		for key, item := range typed {
+			result[key] = cloneEditorValue(item)
+		}
+		return result
+	default:
+		return typed
+	}
 }
 
 func cloneOptions(options any) any {

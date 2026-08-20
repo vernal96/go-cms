@@ -1353,7 +1353,7 @@ func TestProfileRuntimeRejectsInvalidTemplates(t *testing.T) {
 
 func TestCoreModuleRegistersAllStandardFieldTypes(t *testing.T) {
 	registry := core.Module{}.Registry()
-	if len(registry.FieldTypes) != 10 {
+	if len(registry.FieldTypes) != 11 {
 		t.Fatalf("standard field types = %d", len(registry.FieldTypes))
 	}
 
@@ -1371,6 +1371,7 @@ func TestCoreModuleRegistersAllStandardFieldTypes(t *testing.T) {
 		field.TypeTextarea,
 		field.TypeEmail,
 		field.TypePhone,
+		field.TypeJSON,
 	} {
 		if !found[code] {
 			t.Fatalf("standard field type %q is missing", code)

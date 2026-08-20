@@ -25,6 +25,62 @@ func StandardTypes() []Type {
 		stringType{code: TypeEmail, rules: []string{"email"}},
 		phoneType{},
 		fileType{},
+		jsonType{},
+	}
+}
+
+// jsonType represents structured widget configuration. Its editor is chosen
+// independently through Definition.Editor.
+type jsonType struct{}
+
+func (jsonType) Code() TypeCode { return TypeJSON }
+func (jsonType) Compile(options any) (ValueType, error) {
+	if options != nil {
+		return nil, errors.New("json field does not support options")
+	}
+	return jsonValue{}, nil
+}
+
+type jsonValue struct{}
+
+func (jsonValue) Normalize(value any) (any, error) {
+	switch typed := value.(type) {
+	case []any, map[string]any:
+		return cloneJSONValue(typed), nil
+	default:
+		return nil, fmt.Errorf("expected JSON object or array, got %T", value)
+	}
+}
+func (jsonValue) Empty(value any) bool {
+	switch typed := value.(type) {
+	case []any:
+		return len(typed) == 0
+	case map[string]any:
+		return len(typed) == 0
+	default:
+		return false
+	}
+}
+func (jsonValue) Validate(any) error { return nil }
+func (jsonValue) Rules() []string    { return nil }
+func (jsonValue) Example() any       { return []any{} }
+
+func cloneJSONValue(value any) any {
+	switch typed := value.(type) {
+	case []any:
+		result := make([]any, len(typed))
+		for index, item := range typed {
+			result[index] = cloneJSONValue(item)
+		}
+		return result
+	case map[string]any:
+		result := make(map[string]any, len(typed))
+		for key, item := range typed {
+			result[key] = cloneJSONValue(item)
+		}
+		return result
+	default:
+		return typed
 	}
 }
 

@@ -14,6 +14,7 @@ const supportedTypes = new Set([
   'email',
   'phone',
   'file',
+	'json',
 ])
 
 export function unsupportedFieldTypes(fields: FieldDefinition[]): string[] {
@@ -38,6 +39,8 @@ export function createFieldValues(
       result[field.key] = null
     } else if (field.type === 'file') {
       result[field.key] = null
+		} else if (field.type === 'json') {
+			result[field.key] = []
     } else {
       result[field.key] = ''
     }
@@ -94,6 +97,10 @@ export function validateFieldValues(
       errors[field.key] = 'Выберите файл.'
       continue
     }
+		if (field.type === 'json' && !Array.isArray(value) && (typeof value !== 'object' || value === null)) {
+			errors[field.key] = 'Введите JSON-массив или объект.'
+			continue
+		}
 
     for (const rule of field.rules) {
       const [name, param = ''] = rule.split('=', 2)

@@ -39,6 +39,8 @@ describe('DynamicField', () => {
         props: {
           field: definition(type),
           modelValue: type === 'select' ? [] : '',
+			siteId: 0,
+			accessToken: '',
         },
       })
       const rendered = wrapper.findComponent({ name: component })
@@ -58,7 +60,7 @@ describe('DynamicField', () => {
 
   it('renders an explicit error instead of a fallback input', () => {
     const wrapper = shallowMount(DynamicField, {
-      props: { field: definition('future') },
+		props: { field: definition('future'), siteId: 0, accessToken: '' },
     })
     expect(wrapper.findComponent({ name: 'ElAlert' }).exists()).toBe(true)
     expect(wrapper.findComponent({ name: 'ElInput' }).exists()).toBe(false)

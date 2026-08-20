@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgerrcode"
@@ -22,6 +25,249 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/security"
 )
+
+// Query translates the neutral resource.Query contract into parameterized
+// PostgreSQL. Field paths are mapped from a fixed allow-list; no caller input
+// is ever interpolated as SQL.
+func (r *Repository) Query(ctx context.Context, query resource.Query) (resource.Page, error) {
+	if ctx == nil {
+		return resource.Page{}, errors.New("query resources context is nil")
+	}
+	if err := query.Validate(); err != nil {
+		return resource.Page{}, err
+	}
+	where, args, err := resourceQueryWhere(query)
+	if err != nil {
+		return resource.Page{}, err
+	}
+	order, err := resourceQueryOrder(query.Sort)
+	if err != nil {
+		return resource.Page{}, err
+	}
+	limitArg := append(args, query.Limit)
+	limit := "$" + strconv.Itoa(len(limitArg))
+	offset := ""
+	if query.PerPage > 0 {
+		limitArg[len(limitArg)-1] = query.PerPage
+		limit = "$" + strconv.Itoa(len(limitArg))
+		limitArg = append(limitArg, (query.Page-1)*query.PerPage)
+		offset = " OFFSET $" + strconv.Itoa(len(limitArg))
+	}
+	rows, err := r.connector.Pool().Query(ctx, `
+SELECT id, site_id, parent_id, type, template, content_type,
+       title, menu_title, slug, path, annotation, content, image_media_id,
+       target_resource_id, external_url, is_public, is_searchable, in_menu,
+       in_sitemap, sort, published_at, unpublished_at, settings, created_at,
+       updated_at, created_by, updated_by, deleted_at, deleted_by
+FROM core.resources r
+WHERE `+where+`
+ORDER BY `+order+`
+LIMIT `+limit+offset+`;`, limitArg...)
+	if err != nil {
+		return resource.Page{}, fmt.Errorf("query resources: %w", err)
+	}
+	defer rows.Close()
+	items := make([]resource.Resource, 0)
+	for rows.Next() {
+		item, scanErr := scanResource(rows)
+		if scanErr != nil {
+			return resource.Page{}, scanErr
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return resource.Page{}, fmt.Errorf("iterate resources: %w", err)
+	}
+	result := resource.Page{Items: items}
+	if query.PerPage > 0 {
+		if err := r.connector.Pool().QueryRow(ctx, `SELECT count(*) FROM core.resources r WHERE `+where+`;`, args...).Scan(&result.Total); err != nil {
+			return resource.Page{}, fmt.Errorf("count resources: %w", err)
+		}
+	}
+	return result, nil
+}
+
+func resourceQueryWhere(query resource.Query) (string, []any, error) {
+	args := []any{query.SiteID}
+	where := []string{"r.site_id = $1"}
+	add := func(value any) string { args = append(args, value); return "$" + strconv.Itoa(len(args)) }
+	if len(query.IDs) > 0 {
+		where = append(where, "r.id = ANY("+add(query.IDs)+"::bigint[])")
+	} else if query.FilterByParent {
+		where = append(where, "r.parent_id IS NOT DISTINCT FROM "+add(query.Parent)+"::bigint")
+	}
+	if len(query.ExcludeIDs) > 0 {
+		where = append(where, "NOT (r.id = ANY("+add(query.ExcludeIDs)+"::bigint[]))")
+	}
+	if len(query.Types) > 0 {
+		where = append(where, "r.type = ANY("+add(query.Types)+"::text[])")
+	}
+	if query.PublicOnly {
+		where = append(where, "r.deleted_at IS NULL", "r.is_public", "(r.published_at IS NULL OR r.published_at <= now())", "(r.unpublished_at IS NULL OR now() < r.unpublished_at)")
+	}
+	for _, condition := range query.Filters {
+		fragment, err := resourceQueryFilter(condition, add)
+		if err != nil {
+			return "", nil, err
+		}
+		where = append(where, fragment)
+	}
+	return strings.Join(where, " AND "), args, nil
+}
+
+func resourceQueryFilter(condition resource.FilterCondition, add func(any) string) (string, error) {
+	if err := condition.Validate(); err != nil {
+		return "", err
+	}
+	column, custom := resourceQueryColumn(condition.Field)
+	if custom {
+		key := strings.TrimPrefix(string(condition.Field), "resource.field.")
+		value, err := json.Marshal(condition.Value)
+		if err != nil {
+			return "", fmt.Errorf("encode custom filter: %w", err)
+		}
+		if condition.Operator == resource.FilterGreaterThan || condition.Operator == resource.FilterGreaterThanOrEqual || condition.Operator == resource.FilterLessThan || condition.Operator == resource.FilterLessThanOrEqual {
+			return "jsonb_typeof(r.settings -> " + add(key) + ") = 'number' AND (r.settings ->> " + add(key) + ")::numeric " + filterOperatorSQL(condition.Operator) + " " + add(string(value)) + "::numeric", nil
+		}
+		if condition.Operator == resource.FilterIn {
+			return "EXISTS (SELECT 1 FROM jsonb_array_elements(" + add(string(value)) + "::jsonb) candidate WHERE r.settings -> " + add(key) + " = candidate)", nil
+		}
+		if condition.Operator == resource.FilterNotIn {
+			return "NOT EXISTS (SELECT 1 FROM jsonb_array_elements(" + add(string(value)) + "::jsonb) candidate WHERE r.settings -> " + add(key) + " = candidate)", nil
+		}
+		return "r.settings -> " + add(key) + " " + filterOperatorSQL(condition.Operator) + " " + add(string(value)) + "::jsonb", nil
+	}
+	operator := filterOperatorSQL(condition.Operator)
+	if condition.Operator == resource.FilterIn || condition.Operator == resource.FilterNotIn {
+		if condition.Field == resource.FieldID || condition.Field == resource.FieldSort {
+			values, ok := integerValues(condition.Value)
+			if !ok {
+				return "", errors.New("resource query numeric set filter value is invalid")
+			}
+			return column + " " + operator + " (" + add(values) + "::bigint[])", nil
+		}
+		values, ok := textValues(condition.Value)
+		if !ok {
+			return "", errors.New("resource query set filter value is invalid")
+		}
+		return column + " " + operator + " (" + add(values) + "::text[])", nil
+	}
+	return column + " " + operator + " " + add(condition.Value), nil
+}
+
+func resourceQueryColumn(field resource.FieldPath) (string, bool) {
+	switch field {
+	case resource.FieldID:
+		return "r.id", false
+	case resource.FieldTitle:
+		return "r.title", false
+	case resource.FieldMenuTitle:
+		return "r.menu_title", false
+	case resource.FieldSlug:
+		return "r.slug", false
+	case resource.FieldPathValue:
+		return "r.path", false
+	case resource.FieldAnnotation:
+		return "r.annotation", false
+	case resource.FieldType:
+		return "r.type", false
+	case resource.FieldTemplate:
+		return "r.template", false
+	case resource.FieldSort:
+		return "r.sort", false
+	default:
+		return "", true
+	}
+}
+func filterOperatorSQL(operator resource.FilterOperator) string {
+	switch operator {
+	case resource.FilterEqual:
+		return "="
+	case resource.FilterNotEqual:
+		return "<>"
+	case resource.FilterIn:
+		return "= ANY"
+	case resource.FilterNotIn:
+		return "<> ALL"
+	case resource.FilterGreaterThan:
+		return ">"
+	case resource.FilterGreaterThanOrEqual:
+		return ">="
+	case resource.FilterLessThan:
+		return "<"
+	case resource.FilterLessThanOrEqual:
+		return "<="
+	}
+	return ""
+}
+func textValues(value any) ([]string, bool) {
+	switch typed := value.(type) {
+	case []string:
+		return typed, true
+	case []any:
+		result := make([]string, len(typed))
+		for i, item := range typed {
+			v, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			result[i] = v
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func integerValues(value any) ([]int64, bool) {
+	items, ok := value.([]any)
+	if !ok {
+		return nil, false
+	}
+	result := make([]int64, len(items))
+	for index, item := range items {
+		switch number := item.(type) {
+		case float64:
+			if number != math.Trunc(number) {
+				return nil, false
+			}
+			result[index] = int64(number)
+		case int64:
+			result[index] = number
+		case json.Number:
+			parsed, err := number.Int64()
+			if err != nil {
+				return nil, false
+			}
+			result[index] = parsed
+		default:
+			return nil, false
+		}
+	}
+	return result, true
+}
+func resourceQueryOrder(sorts []resource.Sort) (string, error) {
+	parts := make([]string, 0, len(sorts)+1)
+	seenID := false
+	for _, sort := range sorts {
+		if !resource.SortableField(sort.Field) {
+			return "", errors.New("resource query sort field is invalid")
+		}
+		column, _ := resourceQueryColumn(sort.Field)
+		direction := "ASC"
+		if sort.Direction == resource.SortDescending {
+			direction = "DESC"
+		}
+		parts = append(parts, column+" "+direction)
+		if sort.Field == resource.FieldID {
+			seenID = true
+		}
+	}
+	if !seenID {
+		parts = append(parts, "r.id ASC")
+	}
+	return strings.Join(parts, ", "), nil
+}
 
 type Repository struct {
 	connector *connectorpostgres.Connector
@@ -1842,3 +2088,4 @@ var _ resource.Repository = (*Repository)(nil)
 var _ resource.WidgetRepository = (*Repository)(nil)
 var _ resource.ManagementRepository = (*Repository)(nil)
 var _ resource.StatisticsRepository = (*Repository)(nil)
+var _ resource.QueryRepository = (*Repository)(nil)

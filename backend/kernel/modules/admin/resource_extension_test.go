@@ -79,7 +79,7 @@ func (widgetMetadataModule) Build(context.Context, kernel.ModuleContext) (kernel
 type widgetMetadataRuntime struct{}
 
 func (widgetMetadataRuntime) ModuleCode() kernel.ModuleCode { return "feature" }
-func (widgetMetadataRuntime) Widgets() []widget.Widget      { return corewidgets.All() }
+func (widgetMetadataRuntime) Widgets() []widget.Widget      { return corewidgets.All()[:1] }
 
 type extensionTestEditor struct {
 	saved bool

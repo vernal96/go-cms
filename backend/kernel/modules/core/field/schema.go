@@ -60,6 +60,12 @@ func Compile(
 				definition.Key,
 			)
 		}
+		if definition.Editor != "" && strings.TrimSpace(string(definition.Editor)) != string(definition.Editor) {
+			return nil, fmt.Errorf("field %q has invalid editor %q", definition.Key, definition.Editor)
+		}
+		if definition.VisibleWhen != nil && (definition.VisibleWhen.Field == "" || strings.TrimSpace(definition.VisibleWhen.Field) != definition.VisibleWhen.Field) {
+			return nil, fmt.Errorf("field %q has invalid visibility condition", definition.Key)
+		}
 		if _, exists := schema.fields[definition.Key]; exists {
 			return nil, fmt.Errorf(
 				"duplicate field key %q",

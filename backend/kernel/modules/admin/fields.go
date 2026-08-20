@@ -23,13 +23,20 @@ type FieldOptions struct {
 	MIMETypes []string          `json:"mime_types,omitempty"`
 }
 
+type FieldVisibleWhen struct {
+	Field string `json:"field"`
+	Value any    `json:"value"`
+}
+
 type FieldDefinition struct {
-	Key      string         `json:"key"`
-	Type     field.TypeCode `json:"type"`
-	Label    string         `json:"label"`
-	Required bool           `json:"required"`
-	Rules    []string       `json:"rules"`
-	Options  *FieldOptions  `json:"options,omitempty"`
+	Key         string            `json:"key"`
+	Type        field.TypeCode    `json:"type"`
+	Label       string            `json:"label"`
+	Required    bool              `json:"required"`
+	Rules       []string          `json:"rules"`
+	Options     *FieldOptions     `json:"options,omitempty"`
+	Editor      field.EditorCode  `json:"editor,omitempty"`
+	VisibleWhen *FieldVisibleWhen `json:"visible_when,omitempty"`
 }
 
 type FieldValidationError struct {
@@ -70,6 +77,10 @@ func fieldDefinition(definition field.Definition) (FieldDefinition, error) {
 		Label:    definition.Label,
 		Required: definition.Required != nil && *definition.Required,
 		Rules:    append([]string(nil), definition.Rules...),
+		Editor:   definition.Editor,
+	}
+	if definition.VisibleWhen != nil {
+		result.VisibleWhen = &FieldVisibleWhen{Field: definition.VisibleWhen.Field, Value: definition.VisibleWhen.Value}
 	}
 
 	if result.Rules == nil {
@@ -77,7 +88,7 @@ func fieldDefinition(definition field.Definition) (FieldDefinition, error) {
 	}
 
 	switch definition.Type {
-	case field.TypeString, field.TypeCheckbox, field.TypeTextarea, field.TypeEmail:
+	case field.TypeString, field.TypeCheckbox, field.TypeTextarea, field.TypeEmail, field.TypeJSON:
 		if definition.Options != nil {
 			return FieldDefinition{}, fmt.Errorf(
 				"admin field %q type %q has unsupported options %T",

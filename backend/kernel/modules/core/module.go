@@ -18,6 +18,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -152,9 +153,11 @@ func (m Module) Build(
 	}
 
 	var descriptor *RepositoryCacheDescriptor
+	var durableStore cache.Store
 	if caches := ctx.Caches(); caches != nil {
 		store, exists := caches.Store(DurableCacheAlias)
 		if exists {
+			durableStore = store
 			binding, bindingExists := caches.Binding(DurableCacheAlias)
 			if !bindingExists {
 				return nil, errors.New(
@@ -175,14 +178,18 @@ func (m Module) Build(
 		}
 	}
 
-	return &Runtime{
+	runtime := &Runtime{
 		database:        database,
 		repositoryCache: descriptor,
 		services:        m.services,
 		authorization:   m.services.Authorization,
 		resourcePreview: config.ResourcePreview,
 		logger:          ctx.Logger(),
-	}, nil
+	}
+	if err := buildWidgets(runtime, durableStore, ctx.Registry().ResourceTypes(), ctx.Profile().Templates); err != nil {
+		return nil, fmt.Errorf("build core widgets: %w", err)
+	}
+	return runtime, nil
 }
 
 type Runtime struct {
@@ -192,6 +199,7 @@ type Runtime struct {
 	authorization   security.Authorizer
 	resourcePreview resource.PreviewPolicy
 	logger          *slog.Logger
+	widgets         []widget.Widget
 }
 
 func (r *Runtime) ModuleCode() kernel.ModuleCode {

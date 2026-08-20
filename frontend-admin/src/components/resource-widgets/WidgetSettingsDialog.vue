@@ -24,6 +24,8 @@ const props = defineProps<{
   modelValue: boolean
   definition: WidgetDefinition | null
   widget: ResourceWidget | null
+		siteId: number
+		accessToken: string
   saving?: boolean
 }>()
 const emit = defineEmits<{
@@ -107,10 +109,10 @@ function save(): void {
 
       <el-tabs v-if="tabs.length">
         <el-tab-pane v-for="tab in tabs" :key="tab.code" :label="tab.label" :name="tab.code">
-          <dynamic-fields-form v-model="form.params" :fields="fieldsForTab(tab.fields)" :errors="errors" />
+				<dynamic-fields-form v-model="form.params" :fields="fieldsForTab(tab.fields)" :errors="errors" :site-id="siteId" :access-token="accessToken" />
         </el-tab-pane>
       </el-tabs>
-      <dynamic-fields-form v-else v-model="form.params" :fields="definition.fields" :errors="errors" />
+			<dynamic-fields-form v-else v-model="form.params" :fields="definition.fields" :errors="errors" :site-id="siteId" :access-token="accessToken" />
     </el-form>
     <template #footer>
       <el-button @click="emit('update:modelValue', false)">Отмена</el-button>
