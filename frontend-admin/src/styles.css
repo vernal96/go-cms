@@ -995,6 +995,25 @@ input {
   width: 100%;
 }
 
+.group-permission-tabs {
+  margin-top: 18px;
+}
+
+.site-create-permission {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--admin-border-color);
+  border-radius: 8px;
+}
+
+.site-access-search {
+  width: min(420px, 100%);
+  margin-bottom: 14px;
+}
+
 .form-submit {
   display: flex;
   justify-content: flex-end;

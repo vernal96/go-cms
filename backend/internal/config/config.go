@@ -15,7 +15,6 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
 	"github.com/vernal96/go-cms/kernel/filesystem"
-	"github.com/vernal96/go-cms/kernel/modules/admin"
 	corepostgres "github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/user/adapters/argon2id"
 	seopostgres "github.com/vernal96/go-cms/kernel/modules/seo/adapters/postgres"
@@ -69,13 +68,12 @@ func (c Config) Application() appkernel.Definition {
 			corefiles.PublicFactory(c.Files.Public),
 			corefiles.PrivateFactory(c.Files.Private),
 		},
-		Caches:           c.Caches.Factories(),
-		Profiles:         []kernel.Profile{dev.Profile},
-		PasswordHasher:   argon2id.Factory{},
-		SiteAccessPolicy: admin.AllowAllSitesPolicy{},
-		MaxUploadSize:    c.Files.MaxUploadSize,
-		UploadTimeout:    c.Files.UploadTimeout,
-		AvatarStorage:    c.Files.AvatarStorage,
-		AvatarMaxSize:    c.Files.AvatarMaxSize,
+		Caches:         c.Caches.Factories(),
+		Profiles:       []kernel.Profile{dev.Profile},
+		PasswordHasher: argon2id.Factory{},
+		MaxUploadSize:  c.Files.MaxUploadSize,
+		UploadTimeout:  c.Files.UploadTimeout,
+		AvatarStorage:  c.Files.AvatarStorage,
+		AvatarMaxSize:  c.Files.AvatarMaxSize,
 	}
 }

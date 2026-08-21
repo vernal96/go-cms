@@ -91,14 +91,14 @@ WHERE code IN ('console-group-one', 'console-group-two');
 	firstGroup, err := database.Groups().Create(ctx, nil, group.Group{
 		Code: "console-group-one",
 		Name: "Console Group One",
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("create first group: %v", err)
 	}
 	secondGroup, err := database.Groups().Create(ctx, nil, group.Group{
 		Code: "console-group-two",
 		Name: "Console Group Two",
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("create second group: %v", err)
 	}

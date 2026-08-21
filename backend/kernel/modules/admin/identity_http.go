@@ -174,6 +174,7 @@ func (h *managementHTTP) listGroupOptions(response http.ResponseWriter, request 
 type groupRequest struct {
 	Name            string             `json:"name"`
 	PermissionCodes *[]permission.Code `json:"permission_codes"`
+	SiteAccess      *[]GroupSiteAccess `json:"site_access"`
 }
 
 func (h *managementHTTP) createGroup(response http.ResponseWriter, request *http.Request) {
@@ -181,11 +182,12 @@ func (h *managementHTTP) createGroup(response http.ResponseWriter, request *http
 		Code            string            `json:"code"`
 		Name            string            `json:"name"`
 		PermissionCodes []permission.Code `json:"permission_codes"`
+		SiteAccess      []GroupSiteAccess `json:"site_access"`
 	}
 	if !decodeBody(response, request, &payload) {
 		return
 	}
-	result, err := h.management.CreateGroup(request.Context(), actor(request), GroupCreateInput{Code: payload.Code, Name: payload.Name, PermissionCodes: payload.PermissionCodes})
+	result, err := h.management.CreateGroup(request.Context(), actor(request), GroupCreateInput{Code: payload.Code, Name: payload.Name, PermissionCodes: payload.PermissionCodes, SiteAccess: payload.SiteAccess})
 	writeResult(response, http.StatusCreated, result, err)
 }
 
@@ -207,7 +209,7 @@ func (h *managementHTTP) updateGroup(response http.ResponseWriter, request *http
 	if !decodeBody(response, request, &payload) {
 		return
 	}
-	result, err := h.management.UpdateGroup(request.Context(), actor(request), id, GroupUpdateInput{Name: payload.Name, PermissionCodes: payload.PermissionCodes})
+	result, err := h.management.UpdateGroup(request.Context(), actor(request), id, GroupUpdateInput{Name: payload.Name, PermissionCodes: payload.PermissionCodes, SiteAccess: payload.SiteAccess})
 	writeResult(response, http.StatusOK, result, err)
 }
 

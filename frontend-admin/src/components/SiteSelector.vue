@@ -43,7 +43,19 @@ async function load(): Promise<void> {
     total.value = response.pagination.total
     const current = selected.selectedSite.value
     if (current && !options.value.some((item) => item.id === current.id)) {
-      options.value.unshift(current)
+	  const verificationQuery = new URLSearchParams({ search: current.domain, page: '1', per_page: '10' })
+	  const verification = await adminRequest<SiteOptionsResponse>(
+		`/api/admin/sites/options?${verificationQuery}`,
+		props.accessToken,
+		{ signal: controller.signal },
+	  )
+	  if (sequence !== requestSequence) return
+	  const verified = verification.items.find((item) => item.id === current.id)
+	  if (verified) options.value.unshift(verified)
+	  else {
+		selected.clearSelected()
+		selectedID.value = null
+	  }
     }
   } catch (error) {
     if (!(error instanceof DOMException && error.name === 'AbortError')) emit('error', error)
@@ -74,7 +86,6 @@ function choose(value: number | null): void {
 
 watch(selected.selectedSite, (value) => {
   selectedID.value = value?.id ?? null
-  if (value && !options.value.some((item) => item.id === value.id)) options.value.unshift(value)
 }, { immediate: true })
 watch(selected.selectorRevision, () => void load())
 

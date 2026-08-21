@@ -147,6 +147,16 @@ func (a *App) boot(ctx context.Context) error {
 	if !ok {
 		return errors.New("group management repository is unavailable")
 	}
+	siteAccessPolicy := a.definition.SiteAccessPolicy
+	if siteAccessPolicy == nil {
+		siteAccessPolicy, err = admin.NewGroupSiteAccessPolicy(
+			groupManagementRepository,
+			coreServices.Authorization,
+		)
+		if err != nil {
+			return err
+		}
+	}
 
 	adminManagement, err := admin.NewManagement(admin.ManagementDependencies{
 		Profiles:           a.definition.Profiles,
@@ -157,7 +167,7 @@ func (a *App) boot(ctx context.Context) error {
 		ResourceRepository: resourceManagementRepository,
 		Authorizer:         coreServices.Authorization,
 		Permissions:        a.permissions,
-		SiteAccessPolicy:   a.definition.SiteAccessPolicy,
+		SiteAccessPolicy:   siteAccessPolicy,
 		Users:              coreServices.Users,
 		UserRepository:     userManagementRepository,
 		Groups:             coreServices.Groups,

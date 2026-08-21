@@ -38,8 +38,8 @@ const columns: AdminTableColumn[] = [
   { prop: 'is_public', label: 'Доступ', width: 130, formatter: (row) => row.is_public ? 'Публичный' : 'Закрытый' },
 ]
 const actions: AdminTableAction[] = [
-  { key: 'edit', label: 'Изменить', visible: () => permissions.value.update },
-  { key: 'delete', label: 'Удалить', danger: true, visible: () => permissions.value.delete },
+  { key: 'edit', label: 'Изменить', visible: (row) => permissions.value.update && Boolean((row as unknown as Site).capabilities?.edit) },
+  { key: 'delete', label: 'Удалить', danger: true, visible: (row) => permissions.value.delete && Boolean((row as unknown as Site).capabilities?.delete) },
 ]
 
 async function load(): Promise<void> {
@@ -77,10 +77,12 @@ function updateSearch(value: string): void {
 async function handleAction(key: string, row: Record<string, unknown>): Promise<void> {
   const site = row as unknown as Site
   if (key === 'edit') {
+	if (!site.capabilities?.edit) return
     await router.push(`/admin/sites/${site.id}/edit`)
     return
   }
   if (key !== 'delete') return
+	if (!site.capabilities?.delete) return
   try {
     await ElMessageBox.confirm(`Удалить сайт ${site.domain} и все его ресурсы?`, 'Удаление сайта', {
       confirmButtonText: 'Удалить', cancelButtonText: 'Отмена', type: 'warning',

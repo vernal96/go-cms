@@ -18,9 +18,6 @@ func validateDefinition(definition Definition) error {
 	if definition.EventBus == nil {
 		return errors.New("event bus factory is nil")
 	}
-	if definition.SiteAccessPolicy == nil {
-		return errors.New("site access policy is nil")
-	}
 	if definition.PasswordHasher == nil {
 		return errors.New("password hasher factory is nil")
 	}

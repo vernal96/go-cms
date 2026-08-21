@@ -66,4 +66,19 @@ describe('SiteSelector', () => {
     const labels = wrapper.findAllComponents({ name: 'ElOption' }).map((option) => option.props('label'))
     expect(labels).toEqual(['new.example.com'])
   })
+
+  it('removes a selected site when the edit-scoped options endpoint no longer returns it', async () => {
+	useSelectedSite().setSelected({ id: 7, domain: 'view-only.example.com' })
+	requestMock.mockResolvedValue({ items: [], pagination: { page: 1, per_page: 10, total: 0 } })
+	const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
+	await router.push('/')
+	await router.isReady()
+	shallowMount(SiteSelector, {
+	  props: { accessToken: 'token', canCreate: false },
+	  global: { plugins: [router], renderStubDefaultSlot: true },
+	})
+	await flushPromises()
+	expect(requestMock).toHaveBeenCalledTimes(2)
+	expect(useSelectedSite().selectedSite.value).toBeNull()
+  })
 })

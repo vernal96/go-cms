@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -53,11 +54,32 @@ type PermissionGrant struct {
 	UpdatedBy  *security.UserID
 }
 
+type SiteAccessAction string
+
+const (
+	SiteAccessView   SiteAccessAction = "view"
+	SiteAccessEdit   SiteAccessAction = "edit"
+	SiteAccessDelete SiteAccessAction = "delete"
+)
+
+type SiteAccess struct {
+	GroupID   ID
+	SiteID    site.ID
+	CanView   bool
+	CanEdit   bool
+	CanDelete bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	CreatedBy *security.UserID
+	UpdatedBy *security.UserID
+}
+
 type CreateInput struct {
 	Code            string
 	Name            string
 	IsSuper         bool
 	PermissionCodes []permission.Code
+	SiteAccesses    []SiteAccess
 }
 
 type UpdateInput struct {
@@ -65,6 +87,7 @@ type UpdateInput struct {
 	Name            string
 	IsSuper         bool
 	PermissionCodes *[]permission.Code
+	SiteAccesses    *[]SiteAccess
 }
 
 type ListQuery struct {
@@ -87,11 +110,11 @@ type AssignmentValidator interface {
 }
 
 type Repository interface {
-	Create(context.Context, *security.UserID, Group, []permission.Code) (Group, error)
+	Create(context.Context, *security.UserID, Group, []permission.Code, []SiteAccess) (Group, error)
 	ByID(context.Context, ID) (Group, error)
 	ByCode(context.Context, string) (Group, error)
 	List(context.Context) ([]Group, error)
-	Update(context.Context, *security.UserID, Group, *[]permission.Code) (Group, error)
+	Update(context.Context, *security.UserID, Group, *[]permission.Code, *[]SiteAccess) (Group, error)
 	Delete(context.Context, ID) error
 	AddUser(
 		context.Context,
@@ -119,6 +142,9 @@ type Repository interface {
 	) (PermissionGrant, error)
 	RevokePermission(context.Context, ID, permission.Code) error
 	Permissions(context.Context, ID) ([]PermissionGrant, error)
+	SiteAccesses(context.Context, ID) ([]SiteAccess, error)
+	EffectiveSiteIDs(context.Context, security.UserID, SiteAccessAction) ([]site.ID, error)
+	UserHasSiteAccess(context.Context, security.UserID, site.ID, SiteAccessAction) (bool, error)
 }
 
 type ManagementRepository interface {
@@ -183,6 +209,7 @@ type Service interface {
 		security.Actor,
 		ID,
 	) ([]PermissionGrant, error)
+	SiteAccesses(context.Context, security.Actor, ID) ([]SiteAccess, error)
 }
 
 func Clone(item Group) Group {

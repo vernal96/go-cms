@@ -34,6 +34,13 @@ export interface Site {
   locale: string
   settings: Record<string, unknown>
   is_public: boolean
+	capabilities: SiteCapabilities
+}
+
+export interface SiteCapabilities {
+	view: boolean
+	edit: boolean
+	delete: boolean
 }
 
 export interface SiteOption {
@@ -460,6 +467,14 @@ export interface GroupOptionsResponse {
 export interface GroupDetailsResponse {
   group: AdminGroup
   permission_codes: string[]
+	site_access: GroupSiteAccess[]
+}
+
+export interface GroupSiteAccess {
+	site_id: number
+	can_view: boolean
+	can_edit: boolean
+	can_delete: boolean
 }
 
 export interface PermissionDefinition {

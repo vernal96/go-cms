@@ -48,6 +48,7 @@ describe('SitesListView', () => {
           locale: 'ru-RU',
           settings: {},
           is_public: false,
+		  capabilities: { view: true, edit: true, delete: true },
         }]))
       }
       return jsonResponse(listResponse(1, [{
@@ -57,6 +58,7 @@ describe('SitesListView', () => {
         locale: 'ru-RU',
         settings: {},
         is_public: false,
+		capabilities: { view: true, edit: true, delete: true },
       }]))
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -85,6 +87,7 @@ describe('SitesListView', () => {
       locale: 'ru-RU',
       settings: {},
       is_public: false,
+	  capabilities: { view: true, edit: true, delete: true },
     })
     await flushPromises()
 
@@ -92,5 +95,28 @@ describe('SitesListView', () => {
     const calls = fetchMock.mock.calls.map(([input, init]) => ({ url: String(input), method: init?.method }))
     expect(calls).toContainEqual({ url: '/api/admin/sites/7', method: 'DELETE' })
     expect(calls[calls.length - 1]?.url).toContain('page=1')
+  })
+
+  it('uses per-site capabilities to hide edit and delete actions', async () => {
+	vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(listResponse(1, [{
+	  id: 3,
+	  domain: 'view-only.example.com',
+	  profile_code: 'dev',
+	  locale: 'ru-RU',
+	  settings: {},
+	  is_public: false,
+	  capabilities: { view: true, edit: false, delete: false },
+	}]))))
+	const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
+	await router.push('/')
+	await router.isReady()
+	const wrapper = shallowMount(SitesListView, {
+	  props: { accessToken: 'token', permissions: new Set(['core.site.update', 'core.site.delete']) },
+	  global: { plugins: [router] },
+	})
+	await flushPromises()
+	const actions = wrapper.findComponent({ name: 'AdminDataTable' }).props('actions') as Array<{ visible?: (row: Record<string, unknown>) => boolean }>
+	const row = { capabilities: { view: true, edit: false, delete: false } }
+	expect(actions.map((action) => action.visible?.(row))).toEqual([false, false])
   })
 })

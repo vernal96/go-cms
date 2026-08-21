@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
+	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -65,6 +66,7 @@ type memoryRepository struct {
 	groups      map[ID]Group
 	memberships map[ID]map[security.UserID]Membership
 	permissions map[ID]map[permission.Code]PermissionGrant
+	siteAccess  map[ID]map[site.ID]SiteAccess
 }
 
 func newMemoryRepository() *memoryRepository {
@@ -73,6 +75,7 @@ func newMemoryRepository() *memoryRepository {
 		groups:      make(map[ID]Group),
 		memberships: make(map[ID]map[security.UserID]Membership),
 		permissions: make(map[ID]map[permission.Code]PermissionGrant),
+		siteAccess:  make(map[ID]map[site.ID]SiteAccess),
 	}
 }
 
@@ -81,6 +84,7 @@ func (r *memoryRepository) Create(
 	actorID *security.UserID,
 	item Group,
 	permissions []permission.Code,
+	siteAccesses []SiteAccess,
 ) (Group, error) {
 	for _, existing := range r.groups {
 		if existing.Code == item.Code {
@@ -97,6 +101,11 @@ func (r *memoryRepository) Create(
 	r.permissions[item.ID] = make(map[permission.Code]PermissionGrant)
 	for _, code := range permissions {
 		r.permissions[item.ID][code] = PermissionGrant{GroupID: item.ID, Permission: code}
+	}
+	r.siteAccess[item.ID] = make(map[site.ID]SiteAccess)
+	for _, access := range siteAccesses {
+		access.GroupID = item.ID
+		r.siteAccess[item.ID][access.SiteID] = access
 	}
 	return Clone(item), nil
 }
@@ -137,6 +146,7 @@ func (r *memoryRepository) Update(
 	actorID *security.UserID,
 	item Group,
 	permissions *[]permission.Code,
+	siteAccesses *[]SiteAccess,
 ) (Group, error) {
 	if _, exists := r.groups[item.ID]; !exists {
 		return Group{}, ErrNotFound
@@ -148,6 +158,13 @@ func (r *memoryRepository) Update(
 		r.permissions[item.ID] = make(map[permission.Code]PermissionGrant)
 		for _, code := range *permissions {
 			r.permissions[item.ID][code] = PermissionGrant{GroupID: item.ID, Permission: code}
+		}
+	}
+	if siteAccesses != nil {
+		r.siteAccess[item.ID] = make(map[site.ID]SiteAccess)
+		for _, access := range *siteAccesses {
+			access.GroupID = item.ID
+			r.siteAccess[item.ID][access.SiteID] = access
 		}
 	}
 	return Clone(item), nil
@@ -163,7 +180,61 @@ func (r *memoryRepository) Delete(
 	delete(r.groups, id)
 	delete(r.memberships, id)
 	delete(r.permissions, id)
+	delete(r.siteAccess, id)
 	return nil
+}
+
+func (r *memoryRepository) SiteAccesses(_ context.Context, groupID ID) ([]SiteAccess, error) {
+	result := make([]SiteAccess, 0, len(r.siteAccess[groupID]))
+	for _, item := range r.siteAccess[groupID] {
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+func (r *memoryRepository) EffectiveSiteIDs(_ context.Context, userID security.UserID, action SiteAccessAction) ([]site.ID, error) {
+	seen := make(map[site.ID]struct{})
+	for groupID, members := range r.memberships {
+		if _, exists := members[userID]; !exists {
+			continue
+		}
+		for siteID, item := range r.siteAccess[groupID] {
+			if siteAccessAllows(item, action) {
+				seen[siteID] = struct{}{}
+			}
+		}
+	}
+	result := make([]site.ID, 0, len(seen))
+	for id := range seen {
+		result = append(result, id)
+	}
+	return result, nil
+}
+
+func (r *memoryRepository) UserHasSiteAccess(ctx context.Context, userID security.UserID, siteID site.ID, action SiteAccessAction) (bool, error) {
+	ids, err := r.EffectiveSiteIDs(ctx, userID, action)
+	if err != nil {
+		return false, err
+	}
+	for _, id := range ids {
+		if id == siteID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func siteAccessAllows(item SiteAccess, action SiteAccessAction) bool {
+	switch action {
+	case SiteAccessView:
+		return item.CanView
+	case SiteAccessEdit:
+		return item.CanEdit
+	case SiteAccessDelete:
+		return item.CanDelete
+	default:
+		return false
+	}
 }
 
 func (r *memoryRepository) AddUser(
@@ -489,6 +560,46 @@ func TestAdminGroupCannotBeDeletedOrDemoted(t *testing.T) {
 	}
 	if _, err := service.Update(context.Background(), security.System(), UpdateInput{ID: admin.ID, Name: admin.Name, IsSuper: false}); !errors.Is(err, ErrProtected) {
 		t.Fatalf("demote admin error = %v", err)
+	}
+}
+
+func TestServiceNormalizesAndReplacesSiteAccess(t *testing.T) {
+	t.Parallel()
+	repository := newMemoryRepository()
+	service, err := NewService(repository, testAccess{
+		privileged: true,
+		checks:     map[permission.Code]error{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.Create(context.Background(), security.User(1), CreateInput{
+		Code:         "site-manager",
+		Name:         "Site manager",
+		SiteAccesses: []SiteAccess{{SiteID: 7, CanDelete: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grants, err := service.SiteAccesses(context.Background(), security.User(1), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grants) != 1 || !grants[0].CanView || !grants[0].CanEdit || !grants[0].CanDelete {
+		t.Fatalf("normalized grants = %#v", grants)
+	}
+	replacement := []SiteAccess{{SiteID: 8, CanEdit: true}}
+	if _, err := service.Update(context.Background(), security.User(1), UpdateInput{
+		ID: created.ID, Name: created.Name, SiteAccesses: &replacement,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	grants, err = service.SiteAccesses(context.Background(), security.User(1), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grants) != 1 || grants[0].SiteID != 8 || !grants[0].CanView || !grants[0].CanEdit || grants[0].CanDelete {
+		t.Fatalf("replacement grants = %#v", grants)
 	}
 }
 

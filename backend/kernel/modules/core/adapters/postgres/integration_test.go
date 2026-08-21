@@ -77,7 +77,7 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 26 {
+	if len(entries) != 28 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	expected := map[string]bool{
@@ -99,6 +99,8 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 		"000012_resource_editor_tree.down.sql":     false,
 		"000013_resource_widget_bindings.up.sql":   false,
 		"000013_resource_widget_bindings.down.sql": false,
+		"000014_group_site_access.up.sql":          false,
+		"000014_group_site_access.down.sql":        false,
 	}
 	for _, entry := range entries {
 		if _, exists := expected[entry.Name()]; exists {

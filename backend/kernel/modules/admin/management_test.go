@@ -48,12 +48,68 @@ func (a managementAuthorizer) Check(_ context.Context, _ security.Actor, code pe
 	return a.denied[code]
 }
 
-type scopedPolicy struct{ scope SiteAccessScope }
+type scopedPolicy struct {
+	scope  SiteAccessScope
+	scopes map[SiteAccessAction]SiteAccessScope
+	checks map[SiteAccessAction]error
+}
 
-func (p scopedPolicy) Scope(context.Context, security.Actor) (SiteAccessScope, error) {
+func (p scopedPolicy) Scope(_ context.Context, _ security.Actor, action SiteAccessAction) (SiteAccessScope, error) {
+	if scope, exists := p.scopes[action]; exists {
+		return scope, nil
+	}
 	return p.scope, nil
 }
-func (scopedPolicy) Check(context.Context, security.Actor, site.ID) error { return nil }
+func (p scopedPolicy) Check(_ context.Context, _ security.Actor, _ site.ID, action SiteAccessAction) error {
+	return p.checks[action]
+}
+
+func TestManagementRequireSiteKeepsGlobalAndSiteChecksIndependent(t *testing.T) {
+	t.Parallel()
+	management := &Management{
+		authorizer: managementAuthorizer{denied: map[permission.Code]error{ResourceReadPermission: security.ErrForbidden}},
+		policy:     scopedPolicy{checks: map[SiteAccessAction]error{SiteAccessEdit: nil}},
+	}
+	if err := management.requireSite(context.Background(), security.User(1), 7, ResourceReadPermission, SiteAccessEdit); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("global permission error = %v", err)
+	}
+	management.authorizer = managementAuthorizer{denied: map[permission.Code]error{}}
+	management.policy = scopedPolicy{checks: map[SiteAccessAction]error{SiteAccessEdit: security.ErrForbidden}}
+	if err := management.requireSite(context.Background(), security.User(1), 7, ResourceReadPermission, SiteAccessEdit); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("site access error = %v", err)
+	}
+}
+
+func TestManagementUsesViewForCatalogEditForOptionsAndReturnsCapabilities(t *testing.T) {
+	t.Parallel()
+	repository := &managementSiteRepository{page: site.Page{Items: []site.Site{
+		{ID: 1, Domain: "view.example", ProfileCode: "dev", Locale: "ru-RU"},
+		{ID: 2, Domain: "edit.example", ProfileCode: "dev", Locale: "ru-RU"},
+	}, Total: 2}}
+	management := &Management{
+		repository: repository,
+		authorizer: managementAuthorizer{denied: map[permission.Code]error{}},
+		policy: scopedPolicy{scopes: map[SiteAccessAction]SiteAccessScope{
+			SiteAccessView:   {SiteIDs: []site.ID{1, 2}},
+			SiteAccessEdit:   {SiteIDs: []site.ID{2}},
+			SiteAccessDelete: {SiteIDs: []site.ID{2}},
+		}},
+	}
+	list, err := management.ListSites(context.Background(), security.User(1), "", 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !list.Items[0].Capabilities.View || list.Items[0].Capabilities.Edit ||
+		!list.Items[1].Capabilities.Edit || !list.Items[1].Capabilities.Delete {
+		t.Fatalf("capabilities = %#v", list.Items)
+	}
+	if _, err := management.ListSiteOptions(context.Background(), security.User(1), "", 1, 10); err != nil {
+		t.Fatal(err)
+	}
+	if repository.query.Scope.All || len(repository.query.Scope.SiteIDs) != 1 || repository.query.Scope.SiteIDs[0] != 2 {
+		t.Fatalf("option scope = %#v", repository.query.Scope)
+	}
+}
 
 func TestManagementListSitesAppliesDefaultsScopeAndPermissions(t *testing.T) {
 	t.Parallel()

@@ -267,6 +267,7 @@ type extensionTestPolicy struct{ err error }
 func (p extensionTestPolicy) Scope(
 	context.Context,
 	security.Actor,
+	SiteAccessAction,
 ) (SiteAccessScope, error) {
 	return SiteAccessScope{All: true}, p.err
 }
@@ -274,6 +275,7 @@ func (p extensionTestPolicy) Check(
 	context.Context,
 	security.Actor,
 	site.ID,
+	SiteAccessAction,
 ) error {
 	return p.err
 }

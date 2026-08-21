@@ -9,6 +9,7 @@ import (
 
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/group"
+	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
@@ -111,17 +112,27 @@ type GroupOptions struct {
 type GroupDetails struct {
 	Group           GroupDTO          `json:"group"`
 	PermissionCodes []permission.Code `json:"permission_codes"`
+	SiteAccess      []GroupSiteAccess `json:"site_access"`
+}
+
+type GroupSiteAccess struct {
+	SiteID    site.ID `json:"site_id"`
+	CanView   bool    `json:"can_view"`
+	CanEdit   bool    `json:"can_edit"`
+	CanDelete bool    `json:"can_delete"`
 }
 
 type GroupCreateInput struct {
 	Code            string
 	Name            string
 	PermissionCodes []permission.Code
+	SiteAccess      []GroupSiteAccess
 }
 
 type GroupUpdateInput struct {
 	Name            string
 	PermissionCodes *[]permission.Code
+	SiteAccess      *[]GroupSiteAccess
 }
 
 type PermissionDefinition struct {
@@ -297,6 +308,7 @@ func (m *Management) Group(ctx context.Context, actor security.Actor, id group.I
 		return GroupDetails{}, err
 	}
 	codes := m.access.Codes()
+	siteAccess := make([]GroupSiteAccess, 0)
 	if !item.IsSuper {
 		grants, err := m.groups.Permissions(ctx, actor, id)
 		if err != nil {
@@ -306,12 +318,20 @@ func (m *Management) Group(ctx context.Context, actor security.Actor, id group.I
 		for index, grant := range grants {
 			codes[index] = grant.Permission
 		}
+		siteGrants, err := m.groups.SiteAccesses(ctx, actor, id)
+		if err != nil {
+			return GroupDetails{}, err
+		}
+		siteAccess = make([]GroupSiteAccess, len(siteGrants))
+		for index, grant := range siteGrants {
+			siteAccess[index] = GroupSiteAccess{SiteID: grant.SiteID, CanView: grant.CanView, CanEdit: grant.CanEdit, CanDelete: grant.CanDelete}
+		}
 	}
-	return GroupDetails{Group: groupDTO(item, permissions.Update, permissions.Delete, privileged), PermissionCodes: codes}, nil
+	return GroupDetails{Group: groupDTO(item, permissions.Update, permissions.Delete, privileged), PermissionCodes: codes, SiteAccess: siteAccess}, nil
 }
 
 func (m *Management) CreateGroup(ctx context.Context, actor security.Actor, input GroupCreateInput) (GroupDetails, error) {
-	item, err := m.groups.Create(ctx, actor, group.CreateInput{Code: input.Code, Name: input.Name, PermissionCodes: input.PermissionCodes})
+	item, err := m.groups.Create(ctx, actor, group.CreateInput{Code: input.Code, Name: input.Name, PermissionCodes: input.PermissionCodes, SiteAccesses: groupSiteAccess(input.SiteAccess)})
 	if err != nil {
 		return GroupDetails{}, identityValidationError(err)
 	}
@@ -323,7 +343,12 @@ func (m *Management) UpdateGroup(ctx context.Context, actor security.Actor, id g
 	if err != nil {
 		return GroupDetails{}, err
 	}
-	_, err = m.groups.Update(ctx, actor, group.UpdateInput{ID: id, Name: input.Name, IsSuper: current.IsSuper, PermissionCodes: input.PermissionCodes})
+	var siteAccesses *[]group.SiteAccess
+	if input.SiteAccess != nil {
+		items := groupSiteAccess(*input.SiteAccess)
+		siteAccesses = &items
+	}
+	_, err = m.groups.Update(ctx, actor, group.UpdateInput{ID: id, Name: input.Name, IsSuper: current.IsSuper, PermissionCodes: input.PermissionCodes, SiteAccesses: siteAccesses})
 	if err != nil {
 		return GroupDetails{}, identityValidationError(err)
 	}
@@ -389,6 +414,14 @@ func userDTO(item user.User, actor security.Actor, permissions UserPermissionSet
 func groupDTO(item group.Group, canUpdate, canDelete, privileged bool) GroupDTO {
 	system := item.Code == group.AdminCode
 	return GroupDTO{ID: item.ID, Code: item.Code, Name: item.Name, System: system, Super: item.IsSuper, CanUpdate: canUpdate, CanDelete: canDelete && !system, CanManagePermissions: privileged && !item.IsSuper}
+}
+
+func groupSiteAccess(items []GroupSiteAccess) []group.SiteAccess {
+	result := make([]group.SiteAccess, len(items))
+	for index, item := range items {
+		result[index] = group.SiteAccess{SiteID: item.SiteID, CanView: item.CanView, CanEdit: item.CanEdit, CanDelete: item.CanDelete}
+	}
+	return result
 }
 
 func identityValidationError(err error) error {

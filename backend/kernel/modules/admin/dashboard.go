@@ -70,16 +70,24 @@ func (m *Management) Dashboard(
 	}
 
 	var result Dashboard
-	var scope site.Scope
-	if canReadSites || canReadResources {
-		accessScope, err := m.policy.Scope(ctx, actor)
+	var viewScope site.Scope
+	if canReadSites {
+		accessScope, err := m.policy.Scope(ctx, actor, SiteAccessView)
 		if err != nil {
 			return Dashboard{}, err
 		}
-		scope = site.Scope{
+		viewScope = site.Scope{
 			All:     accessScope.All,
 			SiteIDs: append([]site.ID(nil), accessScope.SiteIDs...),
 		}
+	}
+	var editScope site.Scope
+	if canReadResources {
+		accessScope, err := m.policy.Scope(ctx, actor, SiteAccessEdit)
+		if err != nil {
+			return Dashboard{}, err
+		}
+		editScope = site.Scope{All: accessScope.All, SiteIDs: append([]site.ID(nil), accessScope.SiteIDs...)}
 	}
 
 	var siteIDs []site.ID
@@ -89,7 +97,7 @@ func (m *Management) Dashboard(
 			return Dashboard{}, fmt.Errorf("site statistics repository is unavailable")
 		}
 		statistics, err := repository.Statistics(ctx, site.StatisticsQuery{
-			Scope: scope,
+			Scope: viewScope,
 			Limit: dashboardSiteLimit,
 		})
 		if err != nil {
@@ -119,7 +127,7 @@ func (m *Management) Dashboard(
 			return Dashboard{}, fmt.Errorf("resource statistics repository is unavailable")
 		}
 		statistics, err := repository.Statistics(ctx, resource.StatisticsQuery{
-			Scope:   scope,
+			Scope:   editScope,
 			SiteIDs: siteIDs,
 		})
 		if err != nil {

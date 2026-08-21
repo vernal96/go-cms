@@ -69,9 +69,17 @@ type SiteAccessScope struct {
 	SiteIDs []site.ID
 }
 
+type SiteAccessAction = group.SiteAccessAction
+
+const (
+	SiteAccessView   = group.SiteAccessView
+	SiteAccessEdit   = group.SiteAccessEdit
+	SiteAccessDelete = group.SiteAccessDelete
+)
+
 type SiteAccessPolicy interface {
-	Scope(context.Context, security.Actor) (SiteAccessScope, error)
-	Check(context.Context, security.Actor, site.ID) error
+	Scope(context.Context, security.Actor, SiteAccessAction) (SiteAccessScope, error)
+	Check(context.Context, security.Actor, site.ID, SiteAccessAction) error
 }
 
 type AllowAllSitesPolicy struct{}
@@ -79,6 +87,7 @@ type AllowAllSitesPolicy struct{}
 func (AllowAllSitesPolicy) Scope(
 	context.Context,
 	security.Actor,
+	SiteAccessAction,
 ) (SiteAccessScope, error) {
 	return SiteAccessScope{All: true}, nil
 }
@@ -87,6 +96,7 @@ func (AllowAllSitesPolicy) Check(
 	context.Context,
 	security.Actor,
 	site.ID,
+	SiteAccessAction,
 ) error {
 	return nil
 }
@@ -242,12 +252,19 @@ type PermissionSet struct {
 }
 
 type SiteDTO struct {
-	ID          site.ID            `json:"id"`
-	ProfileCode kernel.ProfileCode `json:"profile_code"`
-	Domain      string             `json:"domain"`
-	Locale      string             `json:"locale"`
-	Settings    map[string]any     `json:"settings"`
-	IsPublic    bool               `json:"is_public"`
+	ID           site.ID            `json:"id"`
+	ProfileCode  kernel.ProfileCode `json:"profile_code"`
+	Domain       string             `json:"domain"`
+	Locale       string             `json:"locale"`
+	Settings     map[string]any     `json:"settings"`
+	IsPublic     bool               `json:"is_public"`
+	Capabilities SiteCapabilities   `json:"capabilities"`
+}
+
+type SiteCapabilities struct {
+	View   bool `json:"view"`
+	Edit   bool `json:"edit"`
+	Delete bool `json:"delete"`
 }
 
 type SiteOption struct {
@@ -296,6 +313,7 @@ func (m *Management) Navigation(
 			actor,
 			*selectedSiteID,
 			SiteReadPermission,
+			SiteAccessEdit,
 		); err != nil {
 			return Navigation{}, err
 		}
@@ -347,7 +365,7 @@ func (m *Management) ListSites(
 	if err != nil {
 		return SiteList{}, err
 	}
-	scope, err := m.policy.Scope(ctx, actor)
+	scope, err := m.policy.Scope(ctx, actor, SiteAccessView)
 	if err != nil {
 		return SiteList{}, err
 	}
@@ -360,9 +378,13 @@ func (m *Management) ListSites(
 	if err != nil {
 		return SiteList{}, fmt.Errorf("list admin sites: %w", err)
 	}
+	capabilities, err := m.siteCapabilities(ctx, actor, result.Items, &scope)
+	if err != nil {
+		return SiteList{}, err
+	}
 	items := make([]SiteDTO, len(result.Items))
 	for index, item := range result.Items {
-		items[index] = siteDTO(item)
+		items[index] = siteDTO(item, capabilities[item.ID])
 	}
 	permissions, err := m.sitePermissions(ctx, actor)
 	if err != nil {
@@ -382,15 +404,29 @@ func (m *Management) ListSiteOptions(
 	page int,
 	perPage int,
 ) (SiteOptions, error) {
-	result, err := m.ListSites(ctx, actor, search, page, perPage)
+	if err := m.authorizer.Check(ctx, actor, SiteReadPermission); err != nil {
+		return SiteOptions{}, err
+	}
+	page, perPage, err := normalizePagination(page, perPage)
 	if err != nil {
 		return SiteOptions{}, err
+	}
+	scope, err := m.policy.Scope(ctx, actor, SiteAccessEdit)
+	if err != nil {
+		return SiteOptions{}, err
+	}
+	result, err := m.repository.ListPage(ctx, site.ListQuery{
+		Search: search, Page: page, PerPage: perPage,
+		Scope: site.Scope{All: scope.All, SiteIDs: append([]site.ID(nil), scope.SiteIDs...)},
+	})
+	if err != nil {
+		return SiteOptions{}, fmt.Errorf("list admin site options: %w", err)
 	}
 	items := make([]SiteOption, len(result.Items))
 	for index, item := range result.Items {
 		items[index] = SiteOption{ID: item.ID, Domain: item.Domain}
 	}
-	return SiteOptions{Items: items, Pagination: result.Pagination}, nil
+	return SiteOptions{Items: items, Pagination: Pagination{Page: page, PerPage: perPage, Total: result.Total}}, nil
 }
 
 func (m *Management) Site(
@@ -398,7 +434,7 @@ func (m *Management) Site(
 	actor security.Actor,
 	id site.ID,
 ) (SiteDetails, error) {
-	if err := m.requireSite(ctx, actor, id, SiteReadPermission); err != nil {
+	if err := m.requireSite(ctx, actor, id, SiteReadPermission, SiteAccessEdit); err != nil {
 		return SiteDetails{}, err
 	}
 	runtime, exists := m.sites.RuntimeByID(id)
@@ -409,7 +445,11 @@ func (m *Management) Site(
 	if err != nil {
 		return SiteDetails{}, err
 	}
-	return SiteDetails{Site: siteDTO(runtime.Site()), Permissions: permissions}, nil
+	capabilities, err := m.siteCapabilities(ctx, actor, []site.Site{runtime.Site()}, nil)
+	if err != nil {
+		return SiteDetails{}, err
+	}
+	return SiteDetails{Site: siteDTO(runtime.Site(), capabilities[id]), Permissions: permissions}, nil
 }
 
 func (m *Management) CreateSite(
@@ -452,7 +492,11 @@ func (m *Management) CreateSite(
 	if err != nil {
 		return SiteDetails{}, err
 	}
-	return SiteDetails{Site: siteDTO(runtime.Site()), Permissions: permissions}, nil
+	capabilities, err := m.siteCapabilities(ctx, actor, []site.Site{runtime.Site()}, nil)
+	if err != nil {
+		return SiteDetails{}, err
+	}
+	return SiteDetails{Site: siteDTO(runtime.Site(), capabilities[runtime.Site().ID]), Permissions: permissions}, nil
 }
 
 func (m *Management) UpdateSite(
@@ -461,7 +505,7 @@ func (m *Management) UpdateSite(
 	id site.ID,
 	input SiteUpdateInput,
 ) (SiteDetails, error) {
-	if err := m.requireSite(ctx, actor, id, SiteUpdatePermission); err != nil {
+	if err := m.requireSite(ctx, actor, id, SiteUpdatePermission, SiteAccessEdit); err != nil {
 		return SiteDetails{}, err
 	}
 	if _, exists := m.sites.RuntimeByID(id); !exists {
@@ -482,7 +526,11 @@ func (m *Management) UpdateSite(
 	if err != nil {
 		return SiteDetails{}, err
 	}
-	return SiteDetails{Site: siteDTO(runtime.Site()), Permissions: permissions}, nil
+	capabilities, err := m.siteCapabilities(ctx, actor, []site.Site{runtime.Site()}, nil)
+	if err != nil {
+		return SiteDetails{}, err
+	}
+	return SiteDetails{Site: siteDTO(runtime.Site(), capabilities[runtime.Site().ID]), Permissions: permissions}, nil
 }
 
 func (m *Management) DeleteSite(
@@ -490,7 +538,7 @@ func (m *Management) DeleteSite(
 	actor security.Actor,
 	id site.ID,
 ) error {
-	if err := m.requireSite(ctx, actor, id, SiteDeletePermission); err != nil {
+	if err := m.requireSite(ctx, actor, id, SiteDeletePermission, SiteAccessDelete); err != nil {
 		return err
 	}
 	return m.sites.Delete(ctx, actor, id)
@@ -551,7 +599,7 @@ func (m *Management) ResourceChildren(
 	siteID site.ID,
 	parentID *resource.ID,
 ) (ResourceChildren, error) {
-	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission, SiteAccessEdit); err != nil {
 		return ResourceChildren{}, err
 	}
 	runtime, exists := m.sites.RuntimeByID(siteID)
@@ -624,7 +672,7 @@ func (m *Management) ResourceMetadata(
 	actor security.Actor,
 	siteID site.ID,
 ) (ResourceMetadata, error) {
-	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission, SiteAccessEdit); err != nil {
 		return ResourceMetadata{}, err
 	}
 	runtime, exists := m.sites.RuntimeByID(siteID)
@@ -757,7 +805,7 @@ func (m *Management) resourceEditorExtension(
 	if code == "" {
 		return nil, resourceextension.Request{}, resource.ErrNotFound
 	}
-	if err := m.requireSite(ctx, actor, siteID, permissionCode); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, permissionCode, SiteAccessEdit); err != nil {
 		return nil, resourceextension.Request{}, err
 	}
 	item, err := m.resourceRepo.ByID(ctx, resourceID)
@@ -827,7 +875,7 @@ func (m *Management) CreateResource(
 	siteID site.ID,
 	input ResourceCreateInput,
 ) (ResourceTreeItem, error) {
-	if err := m.requireSite(ctx, actor, siteID, ResourceCreatePermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceCreatePermission, SiteAccessEdit); err != nil {
 		return ResourceTreeItem{}, err
 	}
 	if input.Type != resourcetype.Page && input.Type != resourcetype.Link {
@@ -955,7 +1003,7 @@ func (m *Management) Resource(
 	siteID site.ID,
 	resourceID resource.ID,
 ) (ResourceDetails, error) {
-	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission, SiteAccessEdit); err != nil {
 		return ResourceDetails{}, err
 	}
 	item, err := m.resources.Get(ctx, actor, resourceID)
@@ -994,7 +1042,7 @@ func (m *Management) UpdateResource(
 	resourceID resource.ID,
 	input ResourceUpdateInput,
 ) (ResourceDetails, error) {
-	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission, SiteAccessEdit); err != nil {
 		return ResourceDetails{}, err
 	}
 	current, err := m.resources.Get(ctx, actor, resourceID)
@@ -1060,7 +1108,7 @@ func (m *Management) CreateResourceWidget(
 	resourceID resource.ID,
 	input resource.CreateWidgetInput,
 ) (ResourceWidget, error) {
-	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission, SiteAccessEdit); err != nil {
 		return ResourceWidget{}, err
 	}
 	if err := m.requireResourceSite(ctx, actor, siteID, resourceID); err != nil {
@@ -1081,7 +1129,7 @@ func (m *Management) UpdateResourceWidget(
 	bindingID widget.BindingID,
 	input resource.UpdateWidgetInput,
 ) (ResourceWidget, error) {
-	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission, SiteAccessEdit); err != nil {
 		return ResourceWidget{}, err
 	}
 	if err := m.requireResourceSite(ctx, actor, siteID, resourceID); err != nil {
@@ -1104,7 +1152,7 @@ func (m *Management) DeleteResourceWidget(
 	resourceID resource.ID,
 	bindingID widget.BindingID,
 ) error {
-	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission, SiteAccessEdit); err != nil {
 		return err
 	}
 	if err := m.requireResourceSite(ctx, actor, siteID, resourceID); err != nil {
@@ -1120,7 +1168,7 @@ func (m *Management) ReorderResourceWidgets(
 	resourceID resource.ID,
 	order []widget.Order,
 ) ([]ResourceWidget, error) {
-	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission, SiteAccessEdit); err != nil {
 		return nil, err
 	}
 	if err := m.requireResourceSite(ctx, actor, siteID, resourceID); err != nil {
@@ -1157,7 +1205,7 @@ func (m *Management) MoveResource(
 	parentID *resource.ID,
 	position int,
 ) (ResourceDTO, error) {
-	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission, SiteAccessEdit); err != nil {
 		return ResourceDTO{}, err
 	}
 	current, err := m.resources.Get(ctx, actor, resourceID)
@@ -1190,7 +1238,7 @@ func (m *Management) DeleteResource(
 	resourceID resource.ID,
 	permanent bool,
 ) error {
-	if err := m.requireSite(ctx, actor, siteID, ResourceDeletePermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceDeletePermission, SiteAccessEdit); err != nil {
 		return err
 	}
 	current, err := m.resources.Get(ctx, actor, resourceID)
@@ -1213,7 +1261,7 @@ func (m *Management) RestoreResource(
 	resourceID resource.ID,
 	withDescendants bool,
 ) error {
-	if err := m.requireSite(ctx, actor, siteID, ResourceDeletePermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceDeletePermission, SiteAccessEdit); err != nil {
 		return err
 	}
 	current, err := m.resources.Get(ctx, actor, resourceID)
@@ -1246,7 +1294,7 @@ type ResourceLookup struct {
 // differs from the legacy tree options endpoint: callers never receive an
 // entire site as static field choices.
 func (m *Management) ResourceLookup(ctx context.Context, actor security.Actor, siteID site.ID, search string, page, perPage int) (ResourceLookup, error) {
-	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission, SiteAccessEdit); err != nil {
 		return ResourceLookup{}, err
 	}
 	page, perPage, err := normalizePagination(page, perPage)
@@ -1286,7 +1334,7 @@ func (m *Management) ResourceOptions(
 	actor security.Actor,
 	siteID site.ID,
 ) (ResourceOptions, error) {
-	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission, SiteAccessEdit); err != nil {
 		return ResourceOptions{}, err
 	}
 	tree, err := m.resources.Tree(ctx, actor, siteID)
@@ -1303,6 +1351,7 @@ func (m *Management) requireSite(
 	actor security.Actor,
 	id site.ID,
 	code permission.Code,
+	action SiteAccessAction,
 ) error {
 	if id <= 0 {
 		return fmt.Errorf("%w: invalid site id", ErrValidation)
@@ -1310,7 +1359,7 @@ func (m *Management) requireSite(
 	if err := m.authorizer.Check(ctx, actor, code); err != nil {
 		return err
 	}
-	return m.policy.Check(ctx, actor, id)
+	return m.policy.Check(ctx, actor, id, action)
 }
 
 func (m *Management) allowed(
@@ -1344,6 +1393,52 @@ func (m *Management) sitePermissions(
 	return PermissionSet{Read: values[0], Create: values[1], Update: values[2], Delete: values[3]}, nil
 }
 
+func (m *Management) siteCapabilities(
+	ctx context.Context,
+	actor security.Actor,
+	items []site.Site,
+	viewScope *SiteAccessScope,
+) (map[site.ID]SiteCapabilities, error) {
+	result := make(map[site.ID]SiteCapabilities, len(items))
+	actions := []SiteAccessAction{SiteAccessView, SiteAccessEdit, SiteAccessDelete}
+	for actionIndex, action := range actions {
+		var scope SiteAccessScope
+		if actionIndex == 0 && viewScope != nil {
+			scope = *viewScope
+		} else {
+			var err error
+			scope, err = m.policy.Scope(ctx, actor, action)
+			if err != nil {
+				return nil, err
+			}
+		}
+		allowed := make(map[site.ID]struct{}, len(scope.SiteIDs))
+		for _, id := range scope.SiteIDs {
+			allowed[id] = struct{}{}
+		}
+		for _, item := range items {
+			_, includes := allowed[item.ID]
+			if !scope.All && !includes {
+				continue
+			}
+			capabilities := result[item.ID]
+			switch actionIndex {
+			case 0:
+				capabilities.View = true
+			case 1:
+				capabilities.View = true
+				capabilities.Edit = true
+			case 2:
+				capabilities.View = true
+				capabilities.Edit = true
+				capabilities.Delete = true
+			}
+			result[item.ID] = capabilities
+		}
+	}
+	return result, nil
+}
+
 func normalizePagination(page, perPage int) (int, int, error) {
 	if page == 0 {
 		page = 1
@@ -1357,18 +1452,19 @@ func normalizePagination(page, perPage int) (int, int, error) {
 	return page, perPage, nil
 }
 
-func siteDTO(item site.Site) SiteDTO {
+func siteDTO(item site.Site, capabilities SiteCapabilities) SiteDTO {
 	settings := make(map[string]any, len(item.Settings))
 	for key, value := range item.Settings {
 		settings[key] = value
 	}
 	return SiteDTO{
-		ID:          item.ID,
-		ProfileCode: item.ProfileCode,
-		Domain:      item.Domain,
-		Locale:      item.Locale,
-		Settings:    settings,
-		IsPublic:    item.IsPublic,
+		ID:           item.ID,
+		ProfileCode:  item.ProfileCode,
+		Domain:       item.Domain,
+		Locale:       item.Locale,
+		Settings:     settings,
+		IsPublic:     item.IsPublic,
+		Capabilities: capabilities,
 	}
 }
 

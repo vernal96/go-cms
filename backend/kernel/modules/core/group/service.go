@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
+	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -70,12 +72,22 @@ func (s *ApplicationService) Create(
 			return Group{}, err
 		}
 	}
+	siteAccesses, err := normalizeSiteAccesses(input.SiteAccesses)
+	if err != nil {
+		return Group{}, err
+	}
+	if len(siteAccesses) > 0 {
+		if err := s.requirePrivileged(ctx, actor); err != nil {
+			return Group{}, err
+		}
+	}
 
 	created, err := s.repository.Create(
 		ctx,
 		actor.AuditUserID(),
 		item,
 		permissions,
+		siteAccesses,
 	)
 	if err != nil {
 		return Group{}, fmt.Errorf("create group: %w", err)
@@ -199,6 +211,20 @@ func (s *ApplicationService) Update(
 		}
 		permissions = &normalized
 	}
+	var siteAccesses *[]SiteAccess
+	if input.SiteAccesses != nil {
+		if current.IsSuper {
+			return Group{}, ErrProtected
+		}
+		if err := s.requirePrivileged(ctx, actor); err != nil {
+			return Group{}, err
+		}
+		normalized, err := normalizeSiteAccesses(*input.SiteAccesses)
+		if err != nil {
+			return Group{}, err
+		}
+		siteAccesses = &normalized
+	}
 	current.Name = input.Name
 	current.IsSuper = input.IsSuper
 	current, err = normalize(current)
@@ -210,6 +236,7 @@ func (s *ApplicationService) Update(
 		actor.AuditUserID(),
 		current,
 		permissions,
+		siteAccesses,
 	)
 	if err != nil {
 		return Group{}, fmt.Errorf("update group: %w", err)
@@ -457,6 +484,64 @@ func (s *ApplicationService) Permissions(
 		result[index] = clonePermission(item)
 	}
 	return result, nil
+}
+
+func (s *ApplicationService) SiteAccesses(
+	ctx context.Context,
+	actor security.Actor,
+	id ID,
+) ([]SiteAccess, error) {
+	if err := s.access.Check(ctx, actor, readPermission); err != nil {
+		return nil, err
+	}
+	if _, err := s.byID(ctx, id); err != nil {
+		return nil, err
+	}
+	items, err := s.repository.SiteAccesses(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("list group site access: %w", err)
+	}
+	return cloneSiteAccesses(items), nil
+}
+
+func normalizeSiteAccesses(source []SiteAccess) ([]SiteAccess, error) {
+	result := make([]SiteAccess, 0, len(source))
+	seen := make(map[site.ID]struct{}, len(source))
+	for _, item := range source {
+		if item.SiteID <= 0 {
+			return nil, fmt.Errorf("%w: invalid site id", ErrInvalidReference)
+		}
+		if _, exists := seen[item.SiteID]; exists {
+			return nil, fmt.Errorf("%w: duplicate site id %d", ErrInvalidReference, item.SiteID)
+		}
+		seen[item.SiteID] = struct{}{}
+		if item.CanDelete {
+			item.CanEdit = true
+		}
+		if item.CanEdit {
+			item.CanView = true
+		}
+		if !item.CanView {
+			continue
+		}
+		item.GroupID = 0
+		item.CreatedAt = time.Time{}
+		item.UpdatedAt = time.Time{}
+		item.CreatedBy = nil
+		item.UpdatedBy = nil
+		result = append(result, item)
+	}
+	return result, nil
+}
+
+func cloneSiteAccesses(source []SiteAccess) []SiteAccess {
+	result := make([]SiteAccess, len(source))
+	for index, item := range source {
+		item.CreatedBy = cloneUserID(item.CreatedBy)
+		item.UpdatedBy = cloneUserID(item.UpdatedBy)
+		result[index] = item
+	}
+	return result
 }
 
 func (s *ApplicationService) byID(

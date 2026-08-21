@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/group"
+	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -36,6 +37,7 @@ func (r *Repository) Create(
 	actorID *security.UserID,
 	item group.Group,
 	permissions []permission.Code,
+	siteAccesses []group.SiteAccess,
 ) (_ group.Group, resultErr error) {
 	if ctx == nil {
 		return group.Group{}, errors.New("create group context is nil")
@@ -63,6 +65,9 @@ RETURNING
 		return group.Group{}, translateError(err)
 	}
 	if err := replacePermissions(ctx, transaction, actorID, result.ID, permissions); err != nil {
+		return group.Group{}, err
+	}
+	if err := replaceSiteAccesses(ctx, transaction, actorID, result.ID, siteAccesses); err != nil {
 		return group.Group{}, err
 	}
 	if err := transaction.Commit(ctx); err != nil {
@@ -196,6 +201,7 @@ func (r *Repository) Update(
 	actorID *security.UserID,
 	item group.Group,
 	permissions *[]permission.Code,
+	siteAccesses *[]group.SiteAccess,
 ) (_ group.Group, resultErr error) {
 	if ctx == nil {
 		return group.Group{}, errors.New("update group context is nil")
@@ -225,6 +231,11 @@ RETURNING
 	}
 	if permissions != nil {
 		if err := replacePermissions(ctx, transaction, actorID, result.ID, *permissions); err != nil {
+			return group.Group{}, err
+		}
+	}
+	if siteAccesses != nil {
+		if err := replaceSiteAccesses(ctx, transaction, actorID, result.ID, *siteAccesses); err != nil {
 			return group.Group{}, err
 		}
 	}
@@ -621,6 +632,105 @@ ORDER BY permission_code;
 	return result, rows.Err()
 }
 
+func (r *Repository) SiteAccesses(
+	ctx context.Context,
+	groupID group.ID,
+) ([]group.SiteAccess, error) {
+	if ctx == nil {
+		return nil, errors.New("list group site access context is nil")
+	}
+	rows, err := r.connector.Pool().Query(ctx, `
+SELECT
+    group_id, site_id, can_view, can_edit, can_delete,
+    created_at, updated_at, created_by, updated_by
+FROM core.group_site_access
+WHERE group_id = $1
+ORDER BY site_id;
+`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]group.SiteAccess, 0)
+	for rows.Next() {
+		var item group.SiteAccess
+		if err := rows.Scan(
+			&item.GroupID,
+			&item.SiteID,
+			&item.CanView,
+			&item.CanEdit,
+			&item.CanDelete,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+			&item.CreatedBy,
+			&item.UpdatedBy,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (r *Repository) EffectiveSiteIDs(
+	ctx context.Context,
+	userID security.UserID,
+	action group.SiteAccessAction,
+) ([]site.ID, error) {
+	if ctx == nil {
+		return nil, errors.New("effective site access context is nil")
+	}
+	column, err := siteAccessColumn(action)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.connector.Pool().Query(ctx, `
+SELECT DISTINCT gsa.site_id
+FROM core.user_groups ug
+JOIN core.group_site_access gsa ON gsa.group_id = ug.group_id
+WHERE ug.user_id = $1 AND `+column+`
+ORDER BY gsa.site_id;
+`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]site.ID, 0)
+	for rows.Next() {
+		var id site.ID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		result = append(result, id)
+	}
+	return result, rows.Err()
+}
+
+func (r *Repository) UserHasSiteAccess(
+	ctx context.Context,
+	userID security.UserID,
+	siteID site.ID,
+	action group.SiteAccessAction,
+) (bool, error) {
+	if ctx == nil {
+		return false, errors.New("check site access context is nil")
+	}
+	column, err := siteAccessColumn(action)
+	if err != nil {
+		return false, err
+	}
+	var allowed bool
+	err = r.connector.Pool().QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM core.user_groups ug
+    JOIN core.group_site_access gsa ON gsa.group_id = ug.group_id
+    WHERE ug.user_id = $1 AND gsa.site_id = $2 AND `+column+`
+);
+`, userID, siteID).Scan(&allowed)
+	return allowed, err
+}
+
 func replacePermissions(
 	ctx context.Context,
 	transaction pgx.Tx,
@@ -647,6 +757,54 @@ SELECT $1, code, $3, $3
 FROM unnest($2::text[]) AS code;
 `, groupID, raw, actorID)
 	return translateError(err)
+}
+
+func replaceSiteAccesses(
+	ctx context.Context,
+	transaction pgx.Tx,
+	actorID *security.UserID,
+	groupID group.ID,
+	items []group.SiteAccess,
+) error {
+	if _, err := transaction.Exec(ctx, `
+DELETE FROM core.group_site_access WHERE group_id = $1;
+`, groupID); err != nil {
+		return translateError(err)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	siteIDs := make([]int64, len(items))
+	canView := make([]bool, len(items))
+	canEdit := make([]bool, len(items))
+	canDelete := make([]bool, len(items))
+	for index, item := range items {
+		siteIDs[index] = int64(item.SiteID)
+		canView[index] = item.CanView
+		canEdit[index] = item.CanEdit
+		canDelete[index] = item.CanDelete
+	}
+	_, err := transaction.Exec(ctx, `
+INSERT INTO core.group_site_access
+    (group_id, site_id, can_view, can_edit, can_delete, created_by, updated_by)
+SELECT $1, values.site_id, values.can_view, values.can_edit, values.can_delete, $6, $6
+FROM unnest($2::bigint[], $3::boolean[], $4::boolean[], $5::boolean[])
+    AS values(site_id, can_view, can_edit, can_delete);
+`, groupID, siteIDs, canView, canEdit, canDelete, actorID)
+	return translateError(err)
+}
+
+func siteAccessColumn(action group.SiteAccessAction) (string, error) {
+	switch action {
+	case group.SiteAccessView:
+		return "gsa.can_view", nil
+	case group.SiteAccessEdit:
+		return "gsa.can_edit", nil
+	case group.SiteAccessDelete:
+		return "gsa.can_delete", nil
+	default:
+		return "", errors.New("invalid site access action")
+	}
 }
 
 type rowScanner interface {
