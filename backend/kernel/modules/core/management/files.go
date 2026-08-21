@@ -1,4 +1,4 @@
-package admin
+package management
 
 import (
 	"context"
@@ -11,6 +11,22 @@ import (
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
+
+// Files exposes file/folder management without coupling it to the admin UI.
+type Files struct {
+	files      file.ManagementService
+	authorizer security.Authorizer
+}
+
+func NewFiles(files file.ManagementService, authorizer security.Authorizer) (*Files, error) {
+	if files == nil {
+		return nil, errors.New("CMS file service is nil")
+	}
+	if authorizer == nil {
+		return nil, errors.New("CMS file authorizer is nil")
+	}
+	return &Files{files: files, authorizer: authorizer}, nil
+}
 
 const (
 	FileReadPermission   permission.Code = "core.file.read"
@@ -55,7 +71,7 @@ type FilesystemListing struct {
 	Permissions PermissionSet             `json:"permissions"`
 }
 
-func (m *Management) FilesystemDisks(
+func (m *Files) FilesystemDisks(
 	ctx context.Context,
 	actor security.Actor,
 ) (FilesystemDisks, error) {
@@ -74,7 +90,7 @@ func (m *Management) FilesystemDisks(
 	return FilesystemDisks{Items: result, Permissions: permissions}, nil
 }
 
-func (m *Management) BrowseFilesystem(
+func (m *Files) BrowseFilesystem(
 	ctx context.Context,
 	actor security.Actor,
 	storage filesystem.Code,
@@ -111,7 +127,7 @@ func (m *Management) BrowseFilesystem(
 	}, nil
 }
 
-func (m *Management) CreateFilesystemFolder(
+func (m *Files) CreateFilesystemFolder(
 	ctx context.Context,
 	actor security.Actor,
 	input file.CreateFolderInput,
@@ -123,7 +139,7 @@ func (m *Management) CreateFilesystemFolder(
 	return folderItemDTO(item, intPointer(0)), nil
 }
 
-func (m *Management) UploadFilesystemFile(
+func (m *Files) UploadFilesystemFile(
 	ctx context.Context,
 	actor security.Actor,
 	input file.UploadInput,
@@ -135,7 +151,7 @@ func (m *Management) UploadFilesystemFile(
 	return fileItemDTO(item), nil
 }
 
-func (m *Management) FilesystemFile(
+func (m *Files) FilesystemFile(
 	ctx context.Context,
 	actor security.Actor,
 	id file.ID,
@@ -147,7 +163,7 @@ func (m *Management) FilesystemFile(
 	return fileItemDTO(item), nil
 }
 
-func (m *Management) RenameFilesystemFile(
+func (m *Files) RenameFilesystemFile(
 	ctx context.Context,
 	actor security.Actor,
 	input file.RenameFileInput,
@@ -159,7 +175,7 @@ func (m *Management) RenameFilesystemFile(
 	return fileItemDTO(item), nil
 }
 
-func (m *Management) RenameFilesystemFolder(
+func (m *Files) RenameFilesystemFolder(
 	ctx context.Context,
 	actor security.Actor,
 	input file.RenameFolderInput,
@@ -171,7 +187,7 @@ func (m *Management) RenameFilesystemFolder(
 	return folderItemDTO(item, nil), nil
 }
 
-func (m *Management) MoveFilesystemItems(
+func (m *Files) MoveFilesystemItems(
 	ctx context.Context,
 	actor security.Actor,
 	input file.MoveItemsInput,
@@ -183,7 +199,7 @@ func (m *Management) MoveFilesystemItems(
 	return nil
 }
 
-func (m *Management) DeleteFilesystemItems(
+func (m *Files) DeleteFilesystemItems(
 	ctx context.Context,
 	actor security.Actor,
 	input file.DeleteItemsInput,
@@ -194,7 +210,7 @@ func (m *Management) DeleteFilesystemItems(
 	return nil
 }
 
-func (m *Management) OpenFilesystemFile(
+func (m *Files) OpenFilesystemFile(
 	ctx context.Context,
 	actor security.Actor,
 	id file.ID,
@@ -202,7 +218,7 @@ func (m *Management) OpenFilesystemFile(
 	return m.files.Open(ctx, actor, id)
 }
 
-func (m *Management) filePermissions(ctx context.Context, actor security.Actor) (PermissionSet, error) {
+func (m *Files) filePermissions(ctx context.Context, actor security.Actor) (PermissionSet, error) {
 	codes := []permission.Code{FileReadPermission, FileCreatePermission, FileUpdatePermission, FileDeletePermission}
 	values := make([]bool, len(codes))
 	for index, code := range codes {

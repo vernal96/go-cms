@@ -128,10 +128,10 @@ async function load(): Promise<void> {
   loadError.value = null
   try {
     const [details, loadedMetadata, loadedOptions, loadedSite] = await Promise.all([
-      adminRequest<ResourceDetailsResponse>(`/api/admin/sites/${siteId.value}/resources/${resourceId.value}`, props.accessToken),
-      adminRequest<ResourceMetadata>(`/api/admin/sites/${siteId.value}/resource-metadata`, props.accessToken),
-      adminRequest<ResourceOptionsResponse>(`/api/admin/sites/${siteId.value}/resource-options`, props.accessToken),
-      adminRequest<SiteDetailsResponse>(`/api/admin/sites/${siteId.value}`, props.accessToken),
+      adminRequest<ResourceDetailsResponse>(`/api/sites/${siteId.value}/resources/${resourceId.value}`, props.accessToken),
+      adminRequest<ResourceMetadata>(`/api/sites/${siteId.value}/resources/metadata`, props.accessToken),
+      adminRequest<ResourceOptionsResponse>(`/api/sites/${siteId.value}/resources/options`, props.accessToken),
+      adminRequest<SiteDetailsResponse>(`/api/sites/${siteId.value}`, props.accessToken),
     ])
     metadata.value = loadedMetadata
     options.value = loadedOptions.items
@@ -295,7 +295,7 @@ async function submit(): Promise<void> {
   submitting.value = true
   try {
     const response = await adminRequest<ResourceDetailsResponse>(
-      `/api/admin/sites/${siteId.value}/resources/${resourceId.value}`,
+      `/api/sites/${siteId.value}/resources/${resourceId.value}`,
       props.accessToken,
       { method: 'PATCH', body: JSON.stringify(payload) },
     )
@@ -327,9 +327,9 @@ async function changeDeleted(next: boolean): Promise<void> {
   deleting.value = true
   try {
     if (next) {
-      await adminRequestVoid(`/api/admin/sites/${siteId.value}/resources/${resourceId.value}`, props.accessToken, { method: 'DELETE' })
+      await adminRequestVoid(`/api/sites/${siteId.value}/resources/${resourceId.value}`, props.accessToken, { method: 'DELETE' })
     } else {
-      await adminRequestVoid(`/api/admin/sites/${siteId.value}/resources/${resourceId.value}/restore`, props.accessToken, {
+      await adminRequestVoid(`/api/sites/${siteId.value}/resources/${resourceId.value}/restore`, props.accessToken, {
         method: 'POST', body: JSON.stringify({ with_descendants: false }),
       })
     }

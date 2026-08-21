@@ -1,15 +1,19 @@
-package admin
+package management
 
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
+	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
 
 type filesystemManagementService struct {
@@ -27,7 +31,7 @@ func (s filesystemManagementService) Browse(context.Context, security.Actor, fil
 
 func TestFilesystemManagementReturnsDiskListingAndCapabilities(t *testing.T) {
 	now := time.Now().UTC()
-	management := &Management{
+	management := &Files{
 		files: filesystemManagementService{listing: file.BrowserListing{
 			Storage: "public", Visibility: filesystem.VisibilityPublic,
 			Folders: []file.FolderEntry{{Folder: file.Folder{ID: 3, Storage: "public", Name: "images", CreatedAt: now, UpdatedAt: now}, ItemCount: 4}},
@@ -59,5 +63,31 @@ func TestFileValidationErrorPreservesAuthorizationAndConflicts(t *testing.T) {
 	}
 	if actual := fileValidationError(errors.New("bad name")); !errors.Is(actual, ErrValidation) {
 		t.Fatalf("invalid input = %v", actual)
+	}
+}
+
+func TestFilesRoutesUseUniversalNamespace(t *testing.T) {
+	t.Parallel()
+	handler := &filesHTTP{
+		files: &Files{
+			files:      filesystemManagementService{},
+			authorizer: managementAuthorizer{denied: map[permission.Code]error{}},
+		},
+		maxUploadSize: 1 << 20,
+		uploadTimeout: time.Minute,
+	}
+	router := chi.NewRouter()
+	registerFileRoutes(router, handler)
+	request := httptest.NewRequest(http.MethodGet, "/files/disks", nil)
+	request = request.WithContext(httptransport.WithActor(request.Context(), security.User(1)))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("universal route = %d, %s", response.Code, response.Body.String())
+	}
+	legacy := httptest.NewRecorder()
+	router.ServeHTTP(legacy, httptest.NewRequest(http.MethodGet, "/filesystem/disks", nil))
+	if legacy.Code != http.StatusNotFound {
+		t.Fatalf("legacy route status = %d", legacy.Code)
 	}
 }

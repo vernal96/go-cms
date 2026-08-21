@@ -61,7 +61,7 @@ describe('ResourceTree', () => {
     await load({ level: 0, data: {} }, rootResolve)
 
     expect(requestMock).toHaveBeenCalledWith(
-      '/api/admin/sites/7/resources',
+      '/api/sites/7/resources',
       'token',
     )
     expect(rootResolve).toHaveBeenCalledWith([
@@ -73,7 +73,7 @@ describe('ResourceTree', () => {
     await load({ level: 1, data: { id: 3 } }, childResolve)
 
     expect(requestMock).toHaveBeenLastCalledWith(
-      '/api/admin/sites/7/resources?parent_id=3',
+      '/api/sites/7/resources?parent_id=3',
       'token',
     )
     expect(childResolve).toHaveBeenCalledWith([
@@ -125,7 +125,7 @@ describe('ResourceTree', () => {
     await flushPromises()
 
     expect(requestMock).toHaveBeenCalledWith(
-      '/api/admin/sites/7/resources/3/move',
+      '/api/sites/7/resources/3/move',
       'token',
       {
         method: 'POST',

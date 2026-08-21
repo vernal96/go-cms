@@ -1894,6 +1894,16 @@ func TestPublicAndProtectedModuleRoutesUseJWTActor(t *testing.T) {
 			response.Body.String(),
 		)
 	}
+
+	for _, path := range []string{"/api/sites", "/api/files/disks"} {
+		request = httptest.NewRequest(http.MethodGet, path, nil)
+		request.Host = "example.com"
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized || response.Header().Get("WWW-Authenticate") != "Bearer" {
+			t.Fatalf("universal route %s = %d, %#v, %q", path, response.Code, response.Header(), response.Body.String())
+		}
+	}
 }
 
 func TestLoginRouteIsAvailableBeforePrivateSiteResolution(t *testing.T) {

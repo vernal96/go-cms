@@ -1,4 +1,4 @@
-package admin
+package management
 
 import (
 	"context"
@@ -65,13 +65,15 @@ func TestManagementHTTPListSiteOptionsAndErrors(t *testing.T) {
 				Items: []site.Site{{ID: 1, Domain: "example.com", ProfileCode: "dev", Locale: "ru-RU"}},
 				Total: 1,
 			}, err: test.repositoryError}
-			management := &Management{
+			management := &Sites{
+				authorization: authorization{
+					authorizer: managementAuthorizer{denied: test.denied},
+					policy:     scopedPolicy{scope: SiteAccessScope{All: true}},
+				},
 				repository: repository,
-				authorizer: managementAuthorizer{denied: test.denied},
-				policy:     scopedPolicy{scope: SiteAccessScope{All: true}},
 			}
 			router := chi.NewRouter()
-			registerManagementRoutes(router, management)
+			registerContentRoutes(router, management, nil)
 			request := httptest.NewRequest(http.MethodGet, test.url, nil)
 			request = request.WithContext(httptransport.WithActor(request.Context(), security.User(1)))
 			response := httptest.NewRecorder()
@@ -130,7 +132,7 @@ func TestManagementHTTPWritesStructuredFieldErrors(t *testing.T) {
 func TestManagementHTTPWidgetRoutesValidateStableBindingID(t *testing.T) {
 	t.Parallel()
 	router := chi.NewRouter()
-	registerManagementRoutes(router, &Management{})
+	registerContentRoutes(router, nil, &Resources{})
 	request := httptest.NewRequest(
 		http.MethodPatch,
 		"/sites/7/resources/9/widgets/not-an-id",
@@ -146,9 +148,9 @@ func TestManagementHTTPWidgetRoutesValidateStableBindingID(t *testing.T) {
 
 func TestManagementHTTPWidgetLifecycleUsesStableBindingID(t *testing.T) {
 	t.Parallel()
-	management, repository := managementHTTPWidgetFixture(t)
+	management, repository := contentHTTPWidgetFixture(t)
 	router := chi.NewRouter()
-	registerManagementRoutes(router, management)
+	registerContentRoutes(router, nil, management)
 	request := func(method, path, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		current := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -210,7 +212,7 @@ func TestManagementHTTPWidgetLifecycleUsesStableBindingID(t *testing.T) {
 	}
 }
 
-func managementHTTPWidgetFixture(t *testing.T) (*Management, *extensionTestResources) {
+func contentHTTPWidgetFixture(t *testing.T) (*Resources, *extensionTestResources) {
 	t.Helper()
 	profile := kernel.Profile{
 		Code:    "widget-http",
@@ -256,8 +258,11 @@ func managementHTTPWidgetFixture(t *testing.T) (*Management, *extensionTestResou
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Management{
-		sites: extensionTestSites{runtime: siteRuntime}, resources: resources,
-		resourceRepo: repository, authorizer: authorizer, policy: extensionTestPolicy{},
+	return &Resources{
+		authorization: authorization{
+			sites: extensionTestSites{runtime: siteRuntime}, authorizer: authorizer,
+			policy: extensionTestPolicy{},
+		},
+		resources: resources, resourceRepo: repository,
 	}, repository
 }

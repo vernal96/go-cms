@@ -90,7 +90,7 @@ async function loadSites(): Promise<void> {
 	sitesLoading.value = true
 	try {
 		const query = new URLSearchParams({ search: siteSearch.value.trim(), page: String(sitePage.value), per_page: String(sitePerPage) })
-		const response = await adminRequest<SiteListResponse>(`/api/admin/sites?${query}`, props.accessToken)
+		const response = await adminRequest<SiteListResponse>(`/api/sites?${query}`, props.accessToken)
 		sites.value = response.items
 		siteTotal.value = response.pagination.total
 	} catch (caught) {

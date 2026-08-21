@@ -1,4 +1,4 @@
-package admin
+package management
 
 import (
 	"errors"
@@ -14,26 +14,32 @@ import (
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
 
-func registerFilesystemRoutes(router chi.Router, handler *managementHTTP) {
-	router.Get("/filesystem/disks", handler.filesystemDisks)
-	router.Get("/filesystem/items", handler.filesystemItems)
-	router.Post("/filesystem/folders", handler.createFilesystemFolder)
-	router.Patch("/filesystem/folders/{folderID}", handler.renameFilesystemFolder)
-	router.Post("/filesystem/uploads", handler.uploadFilesystemFile)
-	router.Get("/filesystem/files/{fileID}", handler.getFilesystemFile)
-	router.Patch("/filesystem/files/{fileID}", handler.renameFilesystemFile)
-	router.Get("/filesystem/files/{fileID}/preview", handler.previewFilesystemFile)
-	router.Get("/filesystem/files/{fileID}/download", handler.downloadFilesystemFile)
-	router.Post("/filesystem/move", handler.moveFilesystemItems)
-	router.Post("/filesystem/delete", handler.deleteFilesystemItems)
+type filesHTTP struct {
+	files         *Files
+	maxUploadSize int64
+	uploadTimeout time.Duration
 }
 
-func (h *managementHTTP) filesystemDisks(response http.ResponseWriter, request *http.Request) {
-	result, err := h.management.FilesystemDisks(request.Context(), actor(request))
+func registerFileRoutes(router chi.Router, handler *filesHTTP) {
+	router.Get("/files/disks", handler.filesystemDisks)
+	router.Get("/files/items", handler.filesystemItems)
+	router.Post("/files/folders", handler.createFilesystemFolder)
+	router.Patch("/files/folders/{folderID}", handler.renameFilesystemFolder)
+	router.Post("/files/uploads", handler.uploadFilesystemFile)
+	router.Get("/files/{fileID}", handler.getFilesystemFile)
+	router.Patch("/files/{fileID}", handler.renameFilesystemFile)
+	router.Get("/files/{fileID}/preview", handler.previewFilesystemFile)
+	router.Get("/files/{fileID}/download", handler.downloadFilesystemFile)
+	router.Post("/files/move", handler.moveFilesystemItems)
+	router.Post("/files/delete", handler.deleteFilesystemItems)
+}
+
+func (h *filesHTTP) filesystemDisks(response http.ResponseWriter, request *http.Request) {
+	result, err := h.files.FilesystemDisks(request.Context(), actor(request))
 	writeResult(response, http.StatusOK, result, err)
 }
 
-func (h *managementHTTP) filesystemItems(response http.ResponseWriter, request *http.Request) {
+func (h *filesHTTP) filesystemItems(response http.ResponseWriter, request *http.Request) {
 	storage := filesystem.Code(request.URL.Query().Get("disk"))
 	if storage == "" {
 		writeBadRequest(response, "disk is required")
@@ -43,7 +49,7 @@ func (h *managementHTTP) filesystemItems(response http.ResponseWriter, request *
 	if !ok {
 		return
 	}
-	result, err := h.management.BrowseFilesystem(request.Context(), actor(request), storage, folderID)
+	result, err := h.files.BrowseFilesystem(request.Context(), actor(request), storage, folderID)
 	writeResult(response, http.StatusOK, result, err)
 }
 
@@ -53,12 +59,12 @@ type filesystemFolderRequest struct {
 	Name     string          `json:"name"`
 }
 
-func (h *managementHTTP) createFilesystemFolder(response http.ResponseWriter, request *http.Request) {
+func (h *filesHTTP) createFilesystemFolder(response http.ResponseWriter, request *http.Request) {
 	var payload filesystemFolderRequest
 	if !decodeBody(response, request, &payload) {
 		return
 	}
-	result, err := h.management.CreateFilesystemFolder(request.Context(), actor(request), file.CreateFolderInput{
+	result, err := h.files.CreateFilesystemFolder(request.Context(), actor(request), file.CreateFolderInput{
 		Storage: payload.Disk, ParentID: payload.ParentID, Name: payload.Name,
 	})
 	writeResult(response, http.StatusCreated, result, err)
@@ -68,7 +74,7 @@ type filesystemRenameRequest struct {
 	Name string `json:"name"`
 }
 
-func (h *managementHTTP) renameFilesystemFolder(response http.ResponseWriter, request *http.Request) {
+func (h *filesHTTP) renameFilesystemFolder(response http.ResponseWriter, request *http.Request) {
 	id, ok := filesystemFolderID(response, request)
 	if !ok {
 		return
@@ -77,17 +83,17 @@ func (h *managementHTTP) renameFilesystemFolder(response http.ResponseWriter, re
 	if !decodeBody(response, request, &payload) {
 		return
 	}
-	result, err := h.management.RenameFilesystemFolder(request.Context(), actor(request), file.RenameFolderInput{ID: id, Name: payload.Name})
+	result, err := h.files.RenameFilesystemFolder(request.Context(), actor(request), file.RenameFolderInput{ID: id, Name: payload.Name})
 	writeResult(response, http.StatusOK, result, err)
 }
 
-func (h *managementHTTP) uploadFilesystemFile(response http.ResponseWriter, request *http.Request) {
-	deadline := time.Now().Add(h.management.uploadTimeout)
+func (h *filesHTTP) uploadFilesystemFile(response http.ResponseWriter, request *http.Request) {
+	deadline := time.Now().Add(h.uploadTimeout)
 	controller := http.NewResponseController(response)
 	_ = controller.SetReadDeadline(deadline)
 	_ = controller.SetWriteDeadline(deadline)
 
-	request.Body = http.MaxBytesReader(response, request.Body, h.management.maxUploadSize+(1<<20))
+	request.Body = http.MaxBytesReader(response, request.Body, h.maxUploadSize+(1<<20))
 	if err := request.ParseMultipartForm(1 << 20); err != nil {
 		var maxBytes *http.MaxBytesError
 		if errors.As(err, &maxBytes) {
@@ -111,27 +117,27 @@ func (h *managementHTTP) uploadFilesystemFile(response http.ResponseWriter, requ
 		return
 	}
 	defer uploaded.Close()
-	if header.Size > h.management.maxUploadSize {
+	if header.Size > h.maxUploadSize {
 		httptransport.WriteJSONError(response, http.StatusRequestEntityTooLarge, "file_too_large", "uploaded file is too large")
 		return
 	}
-	result, err := h.management.UploadFilesystemFile(request.Context(), actor(request), file.UploadInput{
+	result, err := h.files.UploadFilesystemFile(request.Context(), actor(request), file.UploadInput{
 		Storage: storage, FolderID: folderID, Name: header.Filename,
-		Content: io.LimitReader(uploaded, h.management.maxUploadSize+1),
+		Content: io.LimitReader(uploaded, h.maxUploadSize+1),
 	})
 	writeResult(response, http.StatusCreated, result, err)
 }
 
-func (h *managementHTTP) getFilesystemFile(response http.ResponseWriter, request *http.Request) {
+func (h *filesHTTP) getFilesystemFile(response http.ResponseWriter, request *http.Request) {
 	id, ok := filesystemFileID(response, request)
 	if !ok {
 		return
 	}
-	result, err := h.management.FilesystemFile(request.Context(), actor(request), id)
+	result, err := h.files.FilesystemFile(request.Context(), actor(request), id)
 	writeResult(response, http.StatusOK, result, err)
 }
 
-func (h *managementHTTP) renameFilesystemFile(response http.ResponseWriter, request *http.Request) {
+func (h *filesHTTP) renameFilesystemFile(response http.ResponseWriter, request *http.Request) {
 	id, ok := filesystemFileID(response, request)
 	if !ok {
 		return
@@ -140,7 +146,7 @@ func (h *managementHTTP) renameFilesystemFile(response http.ResponseWriter, requ
 	if !decodeBody(response, request, &payload) {
 		return
 	}
-	result, err := h.management.RenameFilesystemFile(request.Context(), actor(request), file.RenameFileInput{ID: id, Name: payload.Name})
+	result, err := h.files.RenameFilesystemFile(request.Context(), actor(request), file.RenameFileInput{ID: id, Name: payload.Name})
 	writeResult(response, http.StatusOK, result, err)
 }
 
@@ -155,12 +161,12 @@ type filesystemMoveRequest struct {
 	Items    []filesystemItemRequest `json:"items"`
 }
 
-func (h *managementHTTP) moveFilesystemItems(response http.ResponseWriter, request *http.Request) {
+func (h *filesHTTP) moveFilesystemItems(response http.ResponseWriter, request *http.Request) {
 	var payload filesystemMoveRequest
 	if !decodeBody(response, request, &payload) {
 		return
 	}
-	if err := h.management.MoveFilesystemItems(request.Context(), actor(request), file.MoveItemsInput{
+	if err := h.files.MoveFilesystemItems(request.Context(), actor(request), file.MoveItemsInput{
 		Storage: payload.Disk, FolderID: payload.FolderID, Items: filesystemReferences(payload.Items),
 	}); err != nil {
 		writeManagementError(response, err)
@@ -173,32 +179,32 @@ type filesystemDeleteRequest struct {
 	Items []filesystemItemRequest `json:"items"`
 }
 
-func (h *managementHTTP) deleteFilesystemItems(response http.ResponseWriter, request *http.Request) {
+func (h *filesHTTP) deleteFilesystemItems(response http.ResponseWriter, request *http.Request) {
 	var payload filesystemDeleteRequest
 	if !decodeBody(response, request, &payload) {
 		return
 	}
-	if err := h.management.DeleteFilesystemItems(request.Context(), actor(request), file.DeleteItemsInput{Items: filesystemReferences(payload.Items)}); err != nil {
+	if err := h.files.DeleteFilesystemItems(request.Context(), actor(request), file.DeleteItemsInput{Items: filesystemReferences(payload.Items)}); err != nil {
 		writeManagementError(response, err)
 		return
 	}
 	response.WriteHeader(http.StatusNoContent)
 }
 
-func (h *managementHTTP) previewFilesystemFile(response http.ResponseWriter, request *http.Request) {
+func (h *filesHTTP) previewFilesystemFile(response http.ResponseWriter, request *http.Request) {
 	h.serveFilesystemContent(response, request, "inline")
 }
 
-func (h *managementHTTP) downloadFilesystemFile(response http.ResponseWriter, request *http.Request) {
+func (h *filesHTTP) downloadFilesystemFile(response http.ResponseWriter, request *http.Request) {
 	h.serveFilesystemContent(response, request, "attachment")
 }
 
-func (h *managementHTTP) serveFilesystemContent(response http.ResponseWriter, request *http.Request, disposition string) {
+func (h *filesHTTP) serveFilesystemContent(response http.ResponseWriter, request *http.Request, disposition string) {
 	id, ok := filesystemFileID(response, request)
 	if !ok {
 		return
 	}
-	opened, err := h.management.OpenFilesystemFile(request.Context(), actor(request), id)
+	opened, err := h.files.OpenFilesystemFile(request.Context(), actor(request), id)
 	if err != nil {
 		writeManagementError(response, err)
 		return

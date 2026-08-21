@@ -127,7 +127,7 @@ describe('ResourceWidgetsEditor drag and drop', () => {
 
     expect(requestMock).toHaveBeenCalledTimes(1)
     expect(requestMock).toHaveBeenCalledWith(
-      '/api/admin/sites/7/resources/9/widgets/order',
+      '/api/sites/7/resources/9/widgets/order',
       'token',
       {
         method: 'PUT',

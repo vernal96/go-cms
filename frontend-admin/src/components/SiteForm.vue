@@ -77,7 +77,7 @@ watch(
 onMounted(async () => {
   try {
     const response = await adminRequest<SiteProfilesResponse>(
-      '/api/admin/site-profiles',
+      '/api/site-profiles',
       props.accessToken,
     )
     profiles.value = response.items

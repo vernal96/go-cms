@@ -20,6 +20,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
+	coremanagement "github.com/vernal96/go-cms/kernel/modules/core/management"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
@@ -141,7 +142,14 @@ func NewHandler(
 	if err != nil {
 		return nil, err
 	}
-	root.Mount("/api/admin", adminHandler)
+	cmsHandler, err := newCMSHandler(application)
+	if err != nil {
+		return nil, err
+	}
+	api := chi.NewRouter()
+	api.Mount("/admin", adminHandler)
+	api.Mount("/", cmsHandler)
+	root.Mount("/api", api)
 
 	platform := chi.NewRouter()
 	platform.HandleFunc("/files/*", handler.serveFile)
@@ -218,6 +226,19 @@ func newAdminHandler(
 		return nil, err
 	}
 	return adminRuntime.AdminHandler(management)
+}
+
+func newCMSHandler(application *app.App) (http.Handler, error) {
+	sites, resources, files, err := application.CMSManagement()
+	if err != nil {
+		return nil, err
+	}
+	definition := application.Definition()
+	return coremanagement.NewHTTPHandler(coremanagement.HTTPDependencies{
+		Sites: sites, Resources: resources, Files: files,
+		MaxUploadSize: definition.MaxUploadSize,
+		UploadTimeout: definition.UploadTimeout,
+	})
 }
 
 func (h *Handler) ServeHTTP(

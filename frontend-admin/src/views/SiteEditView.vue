@@ -27,7 +27,7 @@ async function load(): Promise<void> {
   error.value = null
   try {
     const response = await adminRequest<SiteDetailsResponse>(
-      `/api/admin/sites/${route.params.siteId}`,
+      `/api/sites/${route.params.siteId}`,
       props.accessToken,
     )
     initial.value = {
@@ -50,7 +50,7 @@ async function submit(payload: SiteFormPayload): Promise<void> {
   fieldErrors.value = []
   try {
     const response = await adminRequest<SiteDetailsResponse>(
-      `/api/admin/sites/${route.params.siteId}`,
+      `/api/sites/${route.params.siteId}`,
       props.accessToken,
       { method: 'PATCH', body: JSON.stringify(payload) },
     )

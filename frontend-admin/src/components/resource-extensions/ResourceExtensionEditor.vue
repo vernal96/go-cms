@@ -45,7 +45,7 @@ type ExtensionValue = string | number | boolean | null | undefined
 const values = reactive<Record<string, ExtensionValue>>({})
 
 const endpoint = computed(() =>
-  `/api/admin/sites/${props.siteId}/resources/${props.resourceId}/extensions/${props.metadata.code}`,
+  `/api/sites/${props.siteId}/resources/${props.resourceId}/extensions/${props.metadata.code}`,
 )
 const seoPreview = computed(() =>
   props.metadata.code === 'seo' ? preview.value as SEOPreview | null : null,

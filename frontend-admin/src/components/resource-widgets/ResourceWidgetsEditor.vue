@@ -80,7 +80,7 @@ async function save(value: WidgetSettingsValue): Promise<void> {
   if (!selectedDefinition.value) return
   saving.value = true
   try {
-    const path = `/api/admin/sites/${props.siteId}/resources/${props.resourceId}/widgets`
+    const path = `/api/sites/${props.siteId}/resources/${props.resourceId}/widgets`
     const saved = editingWidget.value
       ? await adminRequest<ResourceWidget>(`${path}/${editingWidget.value.id}`, props.accessToken, {
           method: 'PATCH', body: JSON.stringify(value),
@@ -115,7 +115,7 @@ async function remove(value: ResourceWidget): Promise<void> {
   } catch { return }
   try {
     await adminRequestVoid(
-      `/api/admin/sites/${props.siteId}/resources/${props.resourceId}/widgets/${value.id}`,
+      `/api/sites/${props.siteId}/resources/${props.resourceId}/widgets/${value.id}`,
       props.accessToken,
       { method: 'DELETE' },
     )
@@ -166,7 +166,7 @@ async function drop(area: WidgetArea, index: number, event: DragEvent): Promise<
   emit('update:modelValue', moved)
   try {
     const response = await adminRequest<{ items: ResourceWidget[] }>(
-      `/api/admin/sites/${props.siteId}/resources/${props.resourceId}/widgets/order`,
+      `/api/sites/${props.siteId}/resources/${props.resourceId}/widgets/order`,
       props.accessToken,
       { method: 'PUT', body: JSON.stringify({ items: widgetOrder(moved) }) },
     )

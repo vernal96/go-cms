@@ -142,7 +142,7 @@ async function initialize(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const response = await adminRequest<FilesystemDisksResponse>('/api/admin/filesystem/disks', props.accessToken)
+    const response = await adminRequest<FilesystemDisksResponse>('/api/files/disks', props.accessToken)
     disks.value = response.items
     permissions.value = response.permissions
     disk.value = visibleDisks.value[0]?.code ?? ''
@@ -162,7 +162,7 @@ async function loadFolder(folderID: number | null, remember = true): Promise<voi
   try {
     const query = new URLSearchParams({ disk: disk.value })
     if (folderID !== null) query.set('folder_id', String(folderID))
-    listing.value = await adminRequest<FilesystemListingResponse>(`/api/admin/filesystem/items?${query}`, props.accessToken)
+    listing.value = await adminRequest<FilesystemListingResponse>(`/api/files/items?${query}`, props.accessToken)
     if (remember && previous !== folderID) history.value.push(previous)
     selected.value = new Set()
     anchorIndex.value = null
@@ -213,7 +213,7 @@ async function createFolder(parentID = listing.value?.folder?.id ?? null, sugges
       confirmButtonText: 'Создать', cancelButtonText: 'Отмена',
       inputValidator: (name) => name.trim().length > 0 || 'Введите название.',
     })
-    const created = await adminRequest<FilesystemItem>('/api/admin/filesystem/folders', props.accessToken, {
+    const created = await adminRequest<FilesystemItem>('/api/files/folders', props.accessToken, {
       method: 'POST', body: JSON.stringify({ disk: disk.value, parent_id: parentID, name: value.trim() }),
     })
     await loadFolder(listing.value?.folder?.id ?? null, false)
@@ -228,7 +228,7 @@ async function rename(item: FilesystemItem): Promise<void> {
       inputValue: item.name, confirmButtonText: 'Сохранить', cancelButtonText: 'Отмена',
       inputValidator: (name) => name.trim().length > 0 || 'Введите название.',
     })
-    const path = item.kind === 'folder' ? `/api/admin/filesystem/folders/${item.id}` : `/api/admin/filesystem/files/${item.id}`
+    const path = item.kind === 'folder' ? `/api/files/folders/${item.id}` : `/api/files/${item.id}`
     await adminRequest<FilesystemItem>(path, props.accessToken, { method: 'PATCH', body: JSON.stringify({ name: value.trim() }) })
     await loadFolder(listing.value?.folder?.id ?? null, false)
   } catch { /* cancelled */ }
@@ -240,7 +240,7 @@ async function remove(items = selectedItems.value): Promise<void> {
     await ElMessageBox.confirm(`Удалить выбранные объекты (${items.length}) без возможности восстановления?`, 'Удаление', {
       type: 'warning', confirmButtonText: 'Удалить', cancelButtonText: 'Отмена',
     })
-    await adminRequestVoid('/api/admin/filesystem/delete', props.accessToken, {
+    await adminRequestVoid('/api/files/delete', props.accessToken, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items: items.map(reference) }),
     })
@@ -253,7 +253,7 @@ async function remove(items = selectedItems.value): Promise<void> {
 async function move(items: FilesystemItem[], folderID: number | null): Promise<void> {
   if (!permissions.value.update || items.length === 0 || items.some((item) => item.kind === 'folder' && item.id === folderID)) return
   try {
-    await adminRequestVoid('/api/admin/filesystem/move', props.accessToken, {
+    await adminRequestVoid('/api/files/move', props.accessToken, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ disk: disk.value, folder_id: folderID, items: items.map(reference) }),
     })
@@ -378,7 +378,7 @@ async function uploadEntry(entry: FileSystemEntry, parentID: number | null): Pro
 
 async function createFolderDirect(name: string, parentID: number | null): Promise<FilesystemItem | null> {
   try {
-    return await adminRequest<FilesystemItem>('/api/admin/filesystem/folders', props.accessToken, {
+    return await adminRequest<FilesystemItem>('/api/files/folders', props.accessToken, {
       method: 'POST', body: JSON.stringify({ disk: disk.value, parent_id: parentID, name }),
     })
   } catch (caught) { ElMessage.error(`${name}: ${message(caught, 'не удалось создать папку')}`); return null }
@@ -389,7 +389,7 @@ async function uploadFile(uploaded: File, parentID: number | null): Promise<void
   data.set('disk', disk.value)
   if (parentID !== null) data.set('folder_id', String(parentID))
   data.set('file', uploaded, uploaded.name)
-  try { await adminUpload<FilesystemItem>('/api/admin/filesystem/uploads', props.accessToken, data) }
+  try { await adminUpload<FilesystemItem>('/api/files/uploads', props.accessToken, data) }
   catch (caught) { ElMessage.error(`${uploaded.name}: ${message(caught, 'ошибка загрузки')}`) }
 }
 
@@ -421,7 +421,7 @@ async function uploadSelected(files: FileList | null): Promise<void> {
 async function preview(item: FilesystemItem): Promise<void> {
   revokePreview()
   try {
-    const blob = await adminBlob(`/api/admin/filesystem/files/${item.id}/preview`, props.accessToken)
+    const blob = await adminBlob(`/api/files/${item.id}/preview`, props.accessToken)
     previewURL.value = URL.createObjectURL(blob)
     previewName.value = item.name
     previewKind.value = browserPreviewKind(item) ?? 'document'
@@ -433,7 +433,7 @@ async function preview(item: FilesystemItem): Promise<void> {
 async function loadThumbnail(item: FilesystemItem): Promise<void> {
   const key = itemKey(item)
   try {
-    const blob = await adminBlob(`/api/admin/filesystem/files/${item.id}/preview`, props.accessToken)
+    const blob = await adminBlob(`/api/files/${item.id}/preview`, props.accessToken)
     if (!listing.value?.items.some((current) => itemKey(current) === key)) {
       URL.revokeObjectURL(URL.createObjectURL(blob))
       return
@@ -448,7 +448,7 @@ async function confirmDownload(item: FilesystemItem): Promise<void> {
   } catch { /* cancelled */ }
 }
 async function download(item: FilesystemItem): Promise<void> {
-  const blob = await adminBlob(`/api/admin/filesystem/files/${item.id}/download`, props.accessToken)
+  const blob = await adminBlob(`/api/files/${item.id}/download`, props.accessToken)
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url; link.download = item.name; link.click()

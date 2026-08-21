@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/permission"
@@ -229,5 +230,23 @@ func TestAdminAuthorizationMapsUnexpectedErrors(t *testing.T) {
 			response.Code,
 			response.Body.String(),
 		)
+	}
+}
+
+func TestAdminRouterNoLongerOwnsCMSCRUD(t *testing.T) {
+	t.Parallel()
+	router := chi.NewRouter()
+	registerManagementRoutes(router, &Management{})
+	for _, path := range []string{"/sites", "/sites/7/resources", "/filesystem/disks"} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, body = %q", path, response.Code, response.Body.String())
+		}
+	}
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/navigation", nil))
+	if response.Code == http.StatusNotFound {
+		t.Fatal("admin navigation route is missing")
 	}
 }

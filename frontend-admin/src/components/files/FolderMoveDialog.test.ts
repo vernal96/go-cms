@@ -74,7 +74,7 @@ describe('FolderMoveDialog', () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      '/api/admin/filesystem/items?disk=public',
+      '/api/files/items?disk=public',
       expect.anything(),
     )
     expect(roots.map(({ id }) => id)).toEqual([2, 3])
@@ -88,7 +88,7 @@ describe('FolderMoveDialog', () => {
     )
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      '/api/admin/filesystem/items?disk=public&folder_id=2',
+      '/api/files/items?disk=public&folder_id=2',
       expect.anything(),
     )
     expect(children).toEqual([expect.objectContaining({ id: 4, disabled: true, blocked: true })])

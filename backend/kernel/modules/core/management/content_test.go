@@ -1,4 +1,4 @@
-package admin
+package management
 
 import (
 	"context"
@@ -17,6 +17,21 @@ type managementSiteRepository struct {
 	query site.ListQuery
 	page  site.Page
 	err   error
+}
+
+type menuRepository struct {
+	resource.ManagementRepository
+	items []resource.Resource
+}
+
+func (r menuRepository) ListBySite(context.Context, site.ID) ([]resource.Resource, error) {
+	return append([]resource.Resource(nil), r.items...), nil
+}
+
+type menuSites struct{ SiteCatalog }
+
+func (menuSites) RuntimeByID(id site.ID) (*site.Runtime, bool) {
+	return &site.Runtime{}, id == 7
 }
 
 func (r *managementSiteRepository) List(context.Context) ([]site.Site, error) {
@@ -66,7 +81,7 @@ func (p scopedPolicy) Check(_ context.Context, _ security.Actor, _ site.ID, acti
 
 func TestManagementRequireSiteKeepsGlobalAndSiteChecksIndependent(t *testing.T) {
 	t.Parallel()
-	management := &Management{
+	management := authorization{
 		authorizer: managementAuthorizer{denied: map[permission.Code]error{ResourceReadPermission: security.ErrForbidden}},
 		policy:     scopedPolicy{checks: map[SiteAccessAction]error{SiteAccessEdit: nil}},
 	}
@@ -86,14 +101,16 @@ func TestManagementUsesViewForCatalogEditForOptionsAndReturnsCapabilities(t *tes
 		{ID: 1, Domain: "view.example", ProfileCode: "dev", Locale: "ru-RU"},
 		{ID: 2, Domain: "edit.example", ProfileCode: "dev", Locale: "ru-RU"},
 	}, Total: 2}}
-	management := &Management{
+	management := &Sites{
+		authorization: authorization{
+			authorizer: managementAuthorizer{denied: map[permission.Code]error{}},
+			policy: scopedPolicy{scopes: map[SiteAccessAction]SiteAccessScope{
+				SiteAccessView:   {SiteIDs: []site.ID{1, 2}},
+				SiteAccessEdit:   {SiteIDs: []site.ID{2}},
+				SiteAccessDelete: {SiteIDs: []site.ID{2}},
+			}},
+		},
 		repository: repository,
-		authorizer: managementAuthorizer{denied: map[permission.Code]error{}},
-		policy: scopedPolicy{scopes: map[SiteAccessAction]SiteAccessScope{
-			SiteAccessView:   {SiteIDs: []site.ID{1, 2}},
-			SiteAccessEdit:   {SiteIDs: []site.ID{2}},
-			SiteAccessDelete: {SiteIDs: []site.ID{2}},
-		}},
 	}
 	list, err := management.ListSites(context.Background(), security.User(1), "", 1, 10)
 	if err != nil {
@@ -117,12 +134,14 @@ func TestManagementListSitesAppliesDefaultsScopeAndPermissions(t *testing.T) {
 		Items: []site.Site{{ID: 7, Domain: "example.com", ProfileCode: "dev", Locale: "ru-RU"}},
 		Total: 1,
 	}}
-	management := &Management{
+	management := &Sites{
+		authorization: authorization{
+			authorizer: managementAuthorizer{denied: map[permission.Code]error{
+				SiteDeletePermission: security.ErrForbidden,
+			}},
+			policy: scopedPolicy{scope: SiteAccessScope{SiteIDs: []site.ID{7}}},
+		},
 		repository: repository,
-		authorizer: managementAuthorizer{denied: map[permission.Code]error{
-			SiteDeletePermission: security.ErrForbidden,
-		}},
-		policy: scopedPolicy{scope: SiteAccessScope{SiteIDs: []site.ID{7}}},
 	}
 
 	result, err := management.ListSites(context.Background(), security.User(1), " example ", 0, 0)
@@ -143,12 +162,14 @@ func TestManagementListSitesAppliesDefaultsScopeAndPermissions(t *testing.T) {
 
 func TestManagementListSitesRejectsPermissionAndPagination(t *testing.T) {
 	t.Parallel()
-	management := &Management{
+	management := &Sites{
+		authorization: authorization{
+			authorizer: managementAuthorizer{denied: map[permission.Code]error{
+				SiteReadPermission: security.ErrForbidden,
+			}},
+			policy: scopedPolicy{},
+		},
 		repository: &managementSiteRepository{},
-		authorizer: managementAuthorizer{denied: map[permission.Code]error{
-			SiteReadPermission: security.ErrForbidden,
-		}},
-		policy: scopedPolicy{},
 	}
 	if _, err := management.ListSites(context.Background(), security.User(1), "", 1, 10); !errors.Is(err, security.ErrForbidden) {
 		t.Fatalf("permission error = %v", err)
@@ -201,6 +222,42 @@ func TestResourceTreeItemReportsEffectivePublication(t *testing.T) {
 				t.Fatalf("published = %v, want %v", got, current.want)
 			}
 		})
+	}
+}
+
+func TestMenuFiltersOrdersAndBuildsHierarchy(t *testing.T) {
+	t.Parallel()
+	past := time.Now().UTC().Add(-time.Hour)
+	future := time.Now().UTC().Add(time.Hour)
+	rootID := resource.ID(10)
+	targetID := resource.ID(30)
+	rootPath, childPath, targetPath := "/catalog", "/catalog/item", "/target"
+	externalURL := "https://example.org"
+	repository := menuRepository{items: []resource.Resource{
+		{ID: 20, SiteID: 7, Type: resourcetype.Link, Title: "External", ExternalURL: &externalURL, IsPublic: true, InMenu: true, Sort: 2},
+		{ID: rootID, SiteID: 7, Type: resourcetype.Page, Title: "Catalog", MenuTitle: " Menu catalog ", Path: &rootPath, IsPublic: true, InMenu: true, Sort: 1},
+		{ID: 11, SiteID: 7, ParentID: &rootID, Type: resourcetype.Page, Title: "Child", Path: &childPath, IsPublic: true, InMenu: true, Sort: 3},
+		{ID: 12, SiteID: 7, ParentID: &rootID, Type: resourcetype.Page, Title: "Private", Path: &childPath, InMenu: true},
+		{ID: 13, SiteID: 7, ParentID: &rootID, Type: resourcetype.Page, Title: "Future", Path: &childPath, IsPublic: true, InMenu: true, PublishedAt: &future},
+		{ID: 14, SiteID: 7, ParentID: &rootID, Type: resourcetype.Page, Title: "Deleted", Path: &childPath, IsPublic: true, InMenu: true, DeletedAt: &past},
+		{ID: targetID, SiteID: 7, Type: resourcetype.Page, Title: "Target", Path: &targetPath, IsPublic: true, InMenu: false},
+		{ID: 40, SiteID: 7, Type: resourcetype.ResourceLink, Title: "Internal", TargetResourceID: &targetID, IsPublic: true, InMenu: true, Sort: 2},
+	}}
+	content := &Resources{
+		authorization: authorization{
+			sites: menuSites{}, authorizer: managementAuthorizer{denied: map[permission.Code]error{}},
+			policy: AllowAllSitesPolicy{},
+		},
+		resourceRepo: repository,
+	}
+	menu, err := content.Menu(context.Background(), security.User(1), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(menu.Items) != 3 || menu.Items[0].ID != rootID || menu.Items[0].Title != "Menu catalog" ||
+		len(menu.Items[0].Children) != 1 || menu.Items[0].Children[0].ID != 11 ||
+		menu.Items[1].ID != 20 || menu.Items[2].ID != 40 || menu.Items[2].URL != targetPath {
+		t.Fatalf("menu = %#v", menu)
 	}
 }
 

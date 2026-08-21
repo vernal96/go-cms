@@ -89,7 +89,7 @@ describe('ResourceCreateDialog', () => {
 
     expect(requestMock).toHaveBeenNthCalledWith(
       2,
-      '/api/admin/sites/7/resources',
+      '/api/sites/7/resources',
       'token',
       expect.objectContaining({ method: 'POST' }),
     )

@@ -23,7 +23,7 @@ watch(id, async (value) => {
     selected.value = null; revokePreview(); return
   }
   try {
-    selected.value = await adminRequest<FilesystemItem>(`/api/admin/filesystem/files/${value}`, accessToken.value)
+    selected.value = await adminRequest<FilesystemItem>(`/api/files/${value}`, accessToken.value)
     await loadPreview()
   } catch (error) { selected.value = null; ElMessage.error(error instanceof Error ? error.message : 'Не удалось загрузить файл.') }
 }, { immediate: true })
@@ -32,7 +32,7 @@ onBeforeUnmount(revokePreview)
 async function loadPreview(): Promise<void> {
   revokePreview()
   if (!selected.value?.mime_type?.startsWith('image/') || !accessToken?.value) return
-  const blob = await adminBlob(`/api/admin/filesystem/files/${selected.value.id}/preview`, accessToken.value)
+  const blob = await adminBlob(`/api/files/${selected.value.id}/preview`, accessToken.value)
   previewURL.value = URL.createObjectURL(blob)
 }
 function choose(item: FilesystemItem): void { model.value = item.id }

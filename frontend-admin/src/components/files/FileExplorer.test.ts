@@ -118,7 +118,7 @@ describe('FileExplorer', () => {
     wrapper.findComponent(FolderMoveDialog).vm.$emit('confirm', 9)
     await flushPromises()
 
-    const moveCall = fetchMock.mock.calls.find(([url]) => url === '/api/admin/filesystem/move')
+    const moveCall = fetchMock.mock.calls.find(([url]) => url === '/api/files/move')
     expect(moveCall?.[1]).toEqual(expect.objectContaining({ method: 'POST' }))
     expect(JSON.parse(String(moveCall?.[1]?.body))).toEqual({
       disk: 'public', folder_id: 9,
@@ -151,7 +151,7 @@ describe('FileExplorer', () => {
 
     await tiles[0]!.trigger('drop', { dataTransfer: transfer })
     await flushPromises()
-    const moveCall = fetchMock.mock.calls.find(([url]) => url === '/api/admin/filesystem/move')
+    const moveCall = fetchMock.mock.calls.find(([url]) => url === '/api/files/move')
     expect(JSON.parse(String(moveCall?.[1]?.body))).toEqual({
       disk: 'public', folder_id: 1,
       items: [{ kind: 'file', id: 2 }, { kind: 'file', id: 3 }],
@@ -200,7 +200,7 @@ describe('FileExplorer', () => {
 
     await wrapper.find('.file-grid').trigger('drop', { dataTransfer: transfer })
     await flushPromises()
-    expect(fetchMock.mock.calls.some(([url]) => url === '/api/admin/filesystem/uploads')).toBe(true)
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/files/uploads')).toBe(true)
     expect(wrapper.find('.file-grid').classes()).not.toContain('is-drop-target')
   })
 

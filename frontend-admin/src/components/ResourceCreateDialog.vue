@@ -87,7 +87,7 @@ async function open(parentItem: ResourceTreeItem | null): Promise<void> {
   metadataLoading.value = true
   try {
     metadata.value = await adminRequest<ResourceMetadata>(
-      `/api/admin/sites/${props.siteId}/resource-metadata`,
+      `/api/sites/${props.siteId}/resources/metadata`,
       props.accessToken,
     )
     form.type = metadata.value.types[0]?.code ?? 'link'
@@ -155,7 +155,7 @@ async function submit(): Promise<void> {
   loading.value = true
   try {
     const created = await adminRequest<ResourceTreeItem>(
-      `/api/admin/sites/${props.siteId}/resources`,
+      `/api/sites/${props.siteId}/resources`,
       props.accessToken,
       { method: 'POST', body: JSON.stringify(payload) },
     )

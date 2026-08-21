@@ -19,7 +19,7 @@ export function useSelectedSite() {
     }
     try {
       const response = await adminRequest<SiteDetailsResponse>(
-        `/api/admin/sites/${stored.id}`,
+        `/api/sites/${stored.id}`,
         accessToken,
       )
       setSelected({ id: response.site.id, domain: response.site.domain })

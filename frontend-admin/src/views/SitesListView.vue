@@ -51,7 +51,7 @@ async function load(): Promise<void> {
   const query = new URLSearchParams({ search: search.value, page: String(page.value), per_page: String(perPage) })
   try {
     const response = await adminRequest<SiteListResponse>(
-      `/api/admin/sites?${query}`,
+      `/api/sites?${query}`,
       props.accessToken,
       { signal: controller.signal },
     )
@@ -91,7 +91,7 @@ async function handleAction(key: string, row: Record<string, unknown>): Promise<
     return
   }
   try {
-    await adminRequestVoid(`/api/admin/sites/${site.id}`, props.accessToken, { method: 'DELETE' })
+    await adminRequestVoid(`/api/sites/${site.id}`, props.accessToken, { method: 'DELETE' })
     if (selected.selectedSite.value?.id === site.id) selected.clearSelected()
     if (rows.value.length === 1 && page.value > 1) page.value -= 1
     ElMessage.success('Сайт удалён')

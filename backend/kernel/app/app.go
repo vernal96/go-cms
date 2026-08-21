@@ -19,6 +19,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	corecommands "github.com/vernal96/go-cms/kernel/modules/core/commands"
+	coremanagement "github.com/vernal96/go-cms/kernel/modules/core/management"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/permission"
@@ -52,7 +53,7 @@ type Definition struct {
 	Caches              []cache.Factory
 	Profiles            []kernel.Profile
 	PasswordHasher      coreuser.PasswordHasherFactory
-	SiteAccessPolicy    admin.SiteAccessPolicy
+	SiteAccessPolicy    coremanagement.SiteAccessPolicy
 	MaxUploadSize       int64
 	UploadTimeout       time.Duration
 	AvatarStorage       filesystem.Code
@@ -85,6 +86,9 @@ type App struct {
 	sites             *site.Catalog
 	services          Services
 	permissions       *permission.Catalog
+	cmsSites          *coremanagement.Sites
+	cmsResources      *coremanagement.Resources
+	cmsFiles          *coremanagement.Files
 	adminManagement   *admin.Management
 
 	bootOnce sync.Once

@@ -27,7 +27,7 @@ describe('GroupFormView', () => {
           ],
         }
       }
-      if (url.startsWith('/api/admin/sites?')) {
+      if (url.startsWith('/api/sites?')) {
         return {
           items: [{ id: 7, domain: 'example.test', profile_code: 'dev', locale: 'ru-RU', settings: {}, is_public: false, capabilities: { view: true, edit: true, delete: true } }],
           pagination: { page: 1, per_page: 10, total: 1 },

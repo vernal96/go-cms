@@ -81,7 +81,7 @@ describe('ResourceExtensionEditor', () => {
 
     expect(requestMock).toHaveBeenNthCalledWith(
       1,
-      '/api/admin/sites/7/resources/9/extensions/seo',
+      '/api/sites/7/resources/9/extensions/seo',
       'token',
     )
     const buttons = wrapper.findAllComponents({ name: 'ElButton' })
@@ -89,7 +89,7 @@ describe('ResourceExtensionEditor', () => {
     await flushPromises()
     expect(requestMock).toHaveBeenNthCalledWith(
       2,
-      '/api/admin/sites/7/resources/9/extensions/seo/preview',
+      '/api/sites/7/resources/9/extensions/seo/preview',
       'token',
       expect.objectContaining({ method: 'POST' }),
     )
@@ -99,7 +99,7 @@ describe('ResourceExtensionEditor', () => {
     await flushPromises()
     expect(requestMock).toHaveBeenNthCalledWith(
       3,
-      '/api/admin/sites/7/resources/9/extensions/seo',
+      '/api/sites/7/resources/9/extensions/seo',
       'token',
       expect.objectContaining({ method: 'PATCH' }),
     )

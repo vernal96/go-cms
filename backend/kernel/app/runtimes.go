@@ -9,6 +9,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/console"
 	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
+	coremanagement "github.com/vernal96/go-cms/kernel/modules/core/management"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -67,6 +68,19 @@ func (a *App) AdminManagement() (*admin.Management, error) {
 		return nil, ErrNotBooted
 	}
 	return a.adminManagement, nil
+}
+
+func (a *App) CMSManagement() (*coremanagement.Sites, *coremanagement.Resources, *coremanagement.Files, error) {
+	if a == nil {
+		return nil, nil, nil, errors.New("app is nil")
+	}
+	if a.closed.Load() {
+		return nil, nil, nil, ErrClosed
+	}
+	if !a.booted.Load() || a.cmsSites == nil || a.cmsResources == nil || a.cmsFiles == nil {
+		return nil, nil, nil, ErrNotBooted
+	}
+	return a.cmsSites, a.cmsResources, a.cmsFiles, nil
 }
 
 func (a *App) RuntimeByDomain(

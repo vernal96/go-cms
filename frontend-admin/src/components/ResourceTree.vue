@@ -49,7 +49,7 @@ const loadNode: LoadFunction = async (node, resolve) => {
   const query = parentId === null ? '' : `?parent_id=${parentId}`
   try {
     const response = await adminRequest<ResourceChildrenResponse>(
-      `/api/admin/sites/${siteId.value}/resources${query}`,
+      `/api/sites/${siteId.value}/resources${query}`,
       props.accessToken,
     )
     rootError.value = false
@@ -128,7 +128,7 @@ async function loadSearchResults(): Promise<void> {
   searchLoading.value = true
   try {
     const response = await adminRequest<ResourceOptionsResponse>(
-      `/api/admin/sites/${siteId.value}/resource-options`,
+      `/api/sites/${siteId.value}/resources/options`,
       props.accessToken,
     )
     if (requestID !== searchRequest) return
@@ -168,7 +168,7 @@ async function softDelete(item: TreeNodeData): Promise<void> {
       `Удалить «${item.display_title}»?`,
       { type: 'warning', confirmButtonText: 'Удалить', cancelButtonText: 'Отмена' },
     )
-    await adminRequestVoid(`/api/admin/sites/${siteId.value}/resources/${item.id}`, props.accessToken, { method: 'DELETE' })
+    await adminRequestVoid(`/api/sites/${siteId.value}/resources/${item.id}`, props.accessToken, { method: 'DELETE' })
     ElMessage.success('Ресурс удалён')
     notifyChanged()
   } catch (error) {
@@ -181,7 +181,7 @@ async function softDelete(item: TreeNodeData): Promise<void> {
 async function restore(item: TreeNodeData, withDescendants: boolean): Promise<void> {
   closeContextMenu()
   try {
-    await adminRequestVoid(`/api/admin/sites/${siteId.value}/resources/${item.id}/restore`, props.accessToken, {
+    await adminRequestVoid(`/api/sites/${siteId.value}/resources/${item.id}/restore`, props.accessToken, {
       method: 'POST', body: JSON.stringify({ with_descendants: withDescendants }),
     })
     ElMessage.success(withDescendants ? 'Поддерево восстановлено' : 'Ресурс восстановлен')
@@ -200,7 +200,7 @@ async function permanentDelete(item: TreeNodeData): Promise<void> {
       `Удалить «${item.display_title}» окончательно?`,
       { type: 'error', confirmButtonText: 'Удалить окончательно', cancelButtonText: 'Отмена' },
     )
-    await adminRequestVoid(`/api/admin/sites/${siteId.value}/resources/${item.id}/permanent`, props.accessToken, { method: 'DELETE' })
+    await adminRequestVoid(`/api/sites/${siteId.value}/resources/${item.id}/permanent`, props.accessToken, { method: 'DELETE' })
     if (Number(router.currentRoute?.value.params.resourceId) === item.id) void router.push('/admin/dashboard')
     ElMessage.success('Ресурс удалён окончательно')
     notifyChanged()
@@ -244,7 +244,7 @@ async function handleDrop(dragging: Node, drop: Node, type: 'before' | 'after' |
   }
   moving.value = true
   try {
-    await adminRequest(`/api/admin/sites/${siteId.value}/resources/${source.id}/move`, props.accessToken, {
+    await adminRequest(`/api/sites/${siteId.value}/resources/${source.id}/move`, props.accessToken, {
       method: 'POST', body: JSON.stringify({ parent_id: parentId, position }),
     })
     ElMessage.success('Ресурс перемещён')

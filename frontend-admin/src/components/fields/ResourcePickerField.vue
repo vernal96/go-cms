@@ -16,7 +16,7 @@ async function load(search = ''): Promise<void> {
   try {
     const query = new URLSearchParams({ page: '1', per_page: '30' })
     if (search) query.set('search', search)
-    const result = await adminRequest<ResourceLookupResponse>(`/api/admin/sites/${props.siteId}/resource-lookup?${query}`, props.accessToken)
+    const result = await adminRequest<ResourceLookupResponse>(`/api/sites/${props.siteId}/resources/lookup?${query}`, props.accessToken)
     options.value = result.items
   } finally { loading.value = false }
 }

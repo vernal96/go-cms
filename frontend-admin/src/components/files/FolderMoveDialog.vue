@@ -56,7 +56,7 @@ const loadNode: LoadFunction = async (node: Node, resolve) => {
     const query = new URLSearchParams({ disk: props.disk })
     if (data.id !== null) query.set('folder_id', String(data.id))
     const response = await adminRequest<FilesystemListingResponse>(
-      `/api/admin/filesystem/items?${query}`,
+      `/api/files/items?${query}`,
       props.accessToken,
     )
     resolve(response.items.filter((item) => item.kind === 'folder').map((item) => {

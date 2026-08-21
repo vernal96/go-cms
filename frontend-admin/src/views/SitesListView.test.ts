@@ -93,7 +93,7 @@ describe('SitesListView', () => {
 
     expect(useSelectedSite().selectedSite.value).toBeNull()
     const calls = fetchMock.mock.calls.map(([input, init]) => ({ url: String(input), method: init?.method }))
-    expect(calls).toContainEqual({ url: '/api/admin/sites/7', method: 'DELETE' })
+    expect(calls).toContainEqual({ url: '/api/sites/7', method: 'DELETE' })
     expect(calls[calls.length - 1]?.url).toContain('page=1')
   })
 

@@ -11,6 +11,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	coregroup "github.com/vernal96/go-cms/kernel/modules/core/group"
+	coremanagement "github.com/vernal96/go-cms/kernel/modules/core/management"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
@@ -149,7 +150,7 @@ func (a *App) boot(ctx context.Context) error {
 	}
 	siteAccessPolicy := a.definition.SiteAccessPolicy
 	if siteAccessPolicy == nil {
-		siteAccessPolicy, err = admin.NewGroupSiteAccessPolicy(
+		siteAccessPolicy, err = coremanagement.NewGroupSiteAccessPolicy(
 			groupManagementRepository,
 			coreServices.Authorization,
 		)
@@ -158,12 +159,35 @@ func (a *App) boot(ctx context.Context) error {
 		}
 	}
 
+	cmsSites, err := coremanagement.NewSites(coremanagement.SiteDependencies{
+		Profiles:         a.definition.Profiles,
+		ProfileSource:    profileResolver(profileBlueprints),
+		SiteRepository:   siteManagementRepository,
+		Sites:            catalog,
+		Resources:        resourceService,
+		Authorizer:       coreServices.Authorization,
+		SiteAccessPolicy: siteAccessPolicy,
+	})
+	if err != nil {
+		return err
+	}
+	cmsResources, err := coremanagement.NewResources(coremanagement.ResourceDependencies{
+		Sites: catalog, Resources: resourceService,
+		ResourceRepository: resourceManagementRepository,
+		Authorizer:         coreServices.Authorization, SiteAccessPolicy: siteAccessPolicy,
+	})
+	if err != nil {
+		return err
+	}
+	cmsFiles, err := coremanagement.NewFiles(coreServices.Files, coreServices.Authorization)
+	if err != nil {
+		return err
+	}
+
 	adminManagement, err := admin.NewManagement(admin.ManagementDependencies{
 		Profiles:           a.definition.Profiles,
-		ProfileSource:      profileResolver(profileBlueprints),
 		SiteRepository:     siteManagementRepository,
 		Sites:              catalog,
-		Resources:          resourceService,
 		ResourceRepository: resourceManagementRepository,
 		Authorizer:         coreServices.Authorization,
 		Permissions:        a.permissions,
@@ -175,7 +199,6 @@ func (a *App) boot(ctx context.Context) error {
 		Access:             coreServices.Authorization,
 		Files:              coreServices.Files,
 		Media:              coreServices.Media,
-		MaxUploadSize:      a.definition.MaxUploadSize,
 		UploadTimeout:      a.definition.UploadTimeout,
 		AvatarStorage:      a.definition.AvatarStorage,
 		AvatarMaxSize:      a.definition.AvatarMaxSize,
@@ -187,6 +210,9 @@ func (a *App) boot(ctx context.Context) error {
 	a.profileBlueprints = profileBlueprints
 	a.sites = catalog
 	a.services = servicesFromCore(coreServices)
+	a.cmsSites = cmsSites
+	a.cmsResources = cmsResources
+	a.cmsFiles = cmsFiles
 	a.adminManagement = adminManagement
 	a.booted.Store(true)
 	return nil

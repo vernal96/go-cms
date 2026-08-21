@@ -34,7 +34,7 @@ async function load(): Promise<void> {
   })
   try {
     const response = await adminRequest<SiteOptionsResponse>(
-      `/api/admin/sites/options?${query}`,
+      `/api/sites/options?${query}`,
       props.accessToken,
       { signal: controller.signal },
     )
@@ -45,7 +45,7 @@ async function load(): Promise<void> {
     if (current && !options.value.some((item) => item.id === current.id)) {
 	  const verificationQuery = new URLSearchParams({ search: current.domain, page: '1', per_page: '10' })
 	  const verification = await adminRequest<SiteOptionsResponse>(
-		`/api/admin/sites/options?${verificationQuery}`,
+		`/api/sites/options?${verificationQuery}`,
 		props.accessToken,
 		{ signal: controller.signal },
 	  )

@@ -25,7 +25,7 @@ async function submit(payload: SiteFormPayload): Promise<void> {
   fieldErrors.value = []
   try {
     const response = await adminRequest<SiteDetailsResponse>(
-      '/api/admin/sites',
+      '/api/sites',
       props.accessToken,
       {
         method: 'POST',

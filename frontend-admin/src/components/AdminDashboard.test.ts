@@ -79,7 +79,7 @@ describe('AdminDashboard', () => {
     const wrapper = await mountDashboard(['admin.panel.read', 'core.resource.read'])
 
     expect(fetchMock).toHaveBeenCalledWith('/api/admin/navigation', expect.any(Object))
-    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/admin/sites/'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/sites/'))).toBe(false)
     expect(wrapper.findComponent({ name: 'SiteSelector' }).exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'ResourceTree' }).exists()).toBe(false)
     expect(wrapper.find('.resource-sidebar').exists()).toBe(true)

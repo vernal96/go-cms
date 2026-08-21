@@ -22,7 +22,7 @@ describe('useSelectedSite', () => {
     const selected = useSelectedSite()
     await selected.initialize('token')
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/admin/sites/7', expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith('/api/sites/7', expect.objectContaining({
       headers: expect.any(Headers),
     }))
     expect(selected.selectedSite.value).toEqual({ id: 7, domain: 'example.com' })

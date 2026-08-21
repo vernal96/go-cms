@@ -1,4 +1,4 @@
-package admin
+package management
 
 import (
 	"context"
@@ -284,7 +284,7 @@ func extensionManagement(
 	t *testing.T,
 	editor resourceextension.Editor,
 	resourceType resourcetype.Code,
-) (*Management, *extensionTestEditor) {
+) (*Resources, *extensionTestEditor) {
 	t.Helper()
 	var modules []kernel.ProfileModule
 	if editor != nil {
@@ -320,11 +320,13 @@ func extensionManagement(
 	resources := &extensionTestResources{item: resource.Resource{
 		ID: 9, SiteID: 7, Type: resourceType,
 	}}
-	return &Management{
-		sites:        extensionTestSites{runtime: siteRuntime},
+	return &Resources{
+		authorization: authorization{
+			sites:      extensionTestSites{runtime: siteRuntime},
+			authorizer: managementAuthorizer{denied: map[permission.Code]error{}},
+			policy:     extensionTestPolicy{},
+		},
 		resourceRepo: resources,
-		authorizer:   managementAuthorizer{denied: map[permission.Code]error{}},
-		policy:       extensionTestPolicy{},
 	}, testEditor
 }
 
@@ -372,10 +374,12 @@ func TestResourceMetadataDescribesTemplateSlotsAndProfileWidgets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	management := &Management{
-		sites:      extensionTestSites{runtime: runtime},
-		authorizer: managementAuthorizer{denied: map[permission.Code]error{}},
-		policy:     extensionTestPolicy{},
+	management := &Resources{
+		authorization: authorization{
+			sites:      extensionTestSites{runtime: runtime},
+			authorizer: managementAuthorizer{denied: map[permission.Code]error{}},
+			policy:     extensionTestPolicy{},
+		},
 	}
 	metadata, err := management.ResourceMetadata(context.Background(), security.User(1), 7)
 	if err != nil {
