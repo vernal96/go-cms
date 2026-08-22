@@ -395,6 +395,18 @@ func TestResourceMetadataDescribesTemplateSlotsAndProfileWidgets(t *testing.T) {
 		len(metadata.Widgets[0].Views) != 1 || metadata.Widgets[0].Views[0].Code != "compact" {
 		t.Fatalf("widgets = %#v", metadata.Widgets)
 	}
+	var library *ResourceType
+	for index := range metadata.Types {
+		if metadata.Types[index].Code == resourcetype.Library {
+			library = &metadata.Types[index]
+			break
+		}
+	}
+	if library == nil || !library.Capabilities.SupportsTemplate ||
+		!library.Capabilities.SupportsWidgets || !library.Capabilities.OwnsLibraryItems ||
+		library.Capabilities.MutableType || library.Capabilities.DefaultIcon == "" {
+		t.Fatalf("library metadata = %#v", library)
+	}
 }
 
 func TestResourceExtensionMetadataAndOperationsAreProfileScoped(t *testing.T) {

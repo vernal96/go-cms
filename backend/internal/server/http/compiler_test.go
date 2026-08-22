@@ -105,6 +105,10 @@ func (compilerResourceType) PathMode() resourcetype.PathMode {
 	return resourcetype.PathRoute
 }
 
+func (compilerResourceType) Capabilities() resourcetype.Capabilities {
+	return resourcetype.Capabilities{MutableType: true}
+}
+
 func (compilerResourceType) Normalize(
 	payload resourcetype.Payload,
 ) (resourcetype.Payload, error) {

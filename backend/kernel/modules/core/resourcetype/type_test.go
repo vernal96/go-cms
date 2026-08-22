@@ -23,7 +23,7 @@ func TestPageTypeNormalizesDefaultsAndRejectsIncompatibleFields(
 		*normalized.ContentType != "html" {
 		t.Fatalf("content type = %#v", normalized.ContentType)
 	}
-	if normalized.Settings == nil {
+	if normalized.Fields == nil {
 		t.Fatal("settings map was not initialized")
 	}
 
@@ -32,7 +32,7 @@ func TestPageTypeNormalizesDefaultsAndRejectsIncompatibleFields(
 		t.Fatal(err)
 	}
 	if withoutTemplate.Template != nil || withoutTemplate.ContentType == nil ||
-		*withoutTemplate.ContentType != "html" || withoutTemplate.Settings == nil {
+		*withoutTemplate.ContentType != "html" || withoutTemplate.Fields == nil {
 		t.Fatalf("blank page normalization = %#v", withoutTemplate)
 	}
 	emptyTemplate := template.Code("")
@@ -138,6 +138,45 @@ func TestResourceLinkTypeRequiresTarget(t *testing.T) {
 		ExternalURL:      &externalURL,
 	}); err == nil || !strings.Contains(err.Error(), "external_url") {
 		t.Fatalf("incompatible external url error = %v", err)
+	}
+}
+
+func TestLibraryTypeCapabilitiesAndURLPattern(t *testing.T) {
+	library := standardType(t, Library)
+	capabilities := library.Capabilities()
+	if !capabilities.SupportsTemplate || !capabilities.SupportsContent ||
+		!capabilities.SupportsWidgets || !capabilities.SupportsFields ||
+		capabilities.MutableType || !capabilities.OwnsLibraryItems ||
+		capabilities.DefaultIcon == "" {
+		t.Fatalf("library capabilities = %#v", capabilities)
+	}
+
+	normalized, err := library.Normalize(Payload{TypeSettings: map[string]any{
+		"item_url_pattern":      "/{year}/{slug}",
+		"default_item_template": "article",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.TypeSettings["item_url_pattern"] != "/{year}/{slug}" {
+		t.Fatalf("library settings = %#v", normalized.TypeSettings)
+	}
+	normalized, err = library.Normalize(Payload{TypeSettings: map[string]any{
+		"item_url_pattern": "", "default_item_template": nil,
+	}})
+	if err != nil || normalized.TypeSettings["item_url_pattern"] != DefaultItemURLPattern {
+		t.Fatalf("normalized optional library settings = %#v, %v", normalized.TypeSettings, err)
+	}
+	if _, exists := normalized.TypeSettings["default_item_template"]; exists {
+		t.Fatalf("empty default template was preserved: %#v", normalized.TypeSettings)
+	}
+	if err := ValidateLibrarySettings(map[string]any{"item_url_pattern": 42}); err == nil {
+		t.Fatal("accepted non-string item URL pattern")
+	}
+	for _, pattern := range []string{"/{year}", "/{unknown}/{slug}", "{slug}", "/{slug}/"} {
+		if err := ValidateItemURLPattern(pattern); err == nil {
+			t.Fatalf("accepted invalid pattern %q", pattern)
+		}
 	}
 }
 

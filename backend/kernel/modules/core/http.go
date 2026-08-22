@@ -52,6 +52,10 @@ func (r *Runtime) HTTP() httptransport.Builder {
 					Handler: pageResourceHandler{logger: r.logger},
 				},
 				{
+					Type:    httptransport.ResourceHandlerCode(resourcetype.Library),
+					Handler: pageResourceHandler{logger: r.logger},
+				},
+				{
 					Type:    httptransport.ResourceHandlerCode(resourcetype.Link),
 					Handler: externalLinkHandler{},
 				},
@@ -72,8 +76,8 @@ func (r *Runtime) HTTP() httptransport.Builder {
 						)
 					}
 					return &terminalResourceHandler{
-						resolver: resolver,
-						handlers: handlers,
+						resolver: resolver, handlers: handlers,
+						libraryItems: r.services.LibraryItems,
 					}, nil
 				},
 			},
@@ -82,8 +86,9 @@ func (r *Runtime) HTTP() httptransport.Builder {
 }
 
 type terminalResourceHandler struct {
-	resolver *resource.RouteResolver
-	handlers httptransport.ResourceHandlers
+	resolver     *resource.RouteResolver
+	handlers     httptransport.ResourceHandlers
+	libraryItems *resource.LibraryService
 }
 
 func (h *terminalResourceHandler) ServeHTTP(
@@ -118,6 +123,16 @@ func (h *terminalResourceHandler) ServeHTTP(
 			Preview: httptransport.PreviewFromContext(request.Context()),
 		},
 	)
+	if errors.Is(err, resource.ErrNotFound) && h.libraryItems != nil {
+		libraryItem, _, itemErr := h.libraryItems.ResolvePublished(request.Context(), actor, site.ID(siteRuntime.Site().ID), path)
+		if itemErr == nil {
+			itemPath := path
+			item = resource.Resource{ID: libraryItem.ID, SiteID: libraryItem.SiteID, Type: resourcetype.Page, Template: libraryItem.Template, ContentType: libraryItem.ContentType, Title: libraryItem.Title, Slug: libraryItem.Slug, Path: &itemPath, Annotation: libraryItem.Annotation, Content: libraryItem.Content, ImageMediaID: libraryItem.ImageMediaID, IsPublic: libraryItem.IsPublic, IsSearchable: libraryItem.IsSearchable, PublishedAt: libraryItem.PublishedAt, UnpublishedAt: libraryItem.UnpublishedAt, Fields: libraryItem.Fields, Widgets: libraryItem.Widgets, CreatedAt: libraryItem.CreatedAt, UpdatedAt: libraryItem.UpdatedAt}
+			err = nil
+		} else {
+			err = itemErr
+		}
+	}
 	if err != nil {
 		writeResourceRouteError(response, request, err)
 		return

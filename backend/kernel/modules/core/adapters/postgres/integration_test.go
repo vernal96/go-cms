@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
@@ -77,30 +79,32 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 28 {
+	if len(entries) != 30 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	expected := map[string]bool{
-		"000005_identity.up.sql":                   false,
-		"000005_identity.down.sql":                 false,
-		"000006_permissions.up.sql":                false,
-		"000006_permissions.down.sql":              false,
-		"000007_resource_widgets.up.sql":           false,
-		"000007_resource_widgets.down.sql":         false,
-		"000008_user_blocking.up.sql":              false,
-		"000008_user_blocking.down.sql":            false,
-		"000009_file_field_references.up.sql":      false,
-		"000009_file_field_references.down.sql":    false,
-		"000010_user_preferences.up.sql":           false,
-		"000010_user_preferences.down.sql":         false,
-		"000011_user_accent_color.up.sql":          false,
-		"000011_user_accent_color.down.sql":        false,
-		"000012_resource_editor_tree.up.sql":       false,
-		"000012_resource_editor_tree.down.sql":     false,
-		"000013_resource_widget_bindings.up.sql":   false,
-		"000013_resource_widget_bindings.down.sql": false,
-		"000014_group_site_access.up.sql":          false,
-		"000014_group_site_access.down.sql":        false,
+		"000005_identity.up.sql":                             false,
+		"000005_identity.down.sql":                           false,
+		"000006_permissions.up.sql":                          false,
+		"000006_permissions.down.sql":                        false,
+		"000007_resource_widgets.up.sql":                     false,
+		"000007_resource_widgets.down.sql":                   false,
+		"000008_user_blocking.up.sql":                        false,
+		"000008_user_blocking.down.sql":                      false,
+		"000009_file_field_references.up.sql":                false,
+		"000009_file_field_references.down.sql":              false,
+		"000010_user_preferences.up.sql":                     false,
+		"000010_user_preferences.down.sql":                   false,
+		"000011_user_accent_color.up.sql":                    false,
+		"000011_user_accent_color.down.sql":                  false,
+		"000012_resource_editor_tree.up.sql":                 false,
+		"000012_resource_editor_tree.down.sql":               false,
+		"000013_resource_widget_bindings.up.sql":             false,
+		"000013_resource_widget_bindings.down.sql":           false,
+		"000014_group_site_access.up.sql":                    false,
+		"000014_group_site_access.down.sql":                  false,
+		"000015_resource_entities_fields_libraries.up.sql":   false,
+		"000015_resource_entities_fields_libraries.down.sql": false,
 	}
 	for _, entry := range entries {
 		if _, exists := expected[entry.Name()]; exists {
@@ -201,7 +205,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 13 || !hasVersion || dirty {
+	if version != 15 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,
@@ -721,7 +725,7 @@ WHERE id = $1;
 		IsSearchable: true,
 		InMenu:       true,
 		InSitemap:    true,
-		Settings:     map[string]any{"headline": "Home"},
+		Fields:       map[string]any{"headline": "Home"},
 	}, validateImageMedia)
 
 	if err != nil {
@@ -776,7 +780,7 @@ WHERE id = $1;
 		IsSearchable: true,
 		InMenu:       true,
 		InSitemap:    true,
-		Settings:     map[string]any{"headline": "Invalid"},
+		Fields:       map[string]any{"headline": "Invalid"},
 	}, validateImageMedia); !errors.Is(err, resource.ErrInvalidReference) {
 		t.Fatalf("non-image resource media error = %v", err)
 	}
@@ -796,7 +800,7 @@ WHERE id = $1;
 		IsSearchable: true,
 		InMenu:       true,
 		InSitemap:    true,
-		Settings:     map[string]any{"headline": "Duplicate"},
+		Fields:       map[string]any{"headline": "Duplicate"},
 	}, validateImageMedia); !errors.Is(err, media.ErrAlreadyAttached) {
 		t.Fatalf("duplicate media attachment error = %v", err)
 	}
@@ -879,7 +883,7 @@ WHERE id = $1;
 			IsSearchable: true,
 			InMenu:       true,
 			InSitemap:    true,
-			Settings:     map[string]any{},
+			Fields:       map[string]any{},
 		},
 		nil,
 	)
@@ -938,7 +942,7 @@ WHERE id = $1;
 		SiteID: root.SiteID, ParentID: &root.ID, Type: resourcetype.Page,
 		Title: "Sibling", Slug: "sibling", Path: &siblingPath,
 		IsPublic: true, IsSearchable: true, InMenu: true, InSitemap: true,
-		Settings: map[string]any{},
+		Fields: map[string]any{},
 	}, nil)
 	if err != nil {
 		t.Fatalf("create resource sibling: %v", err)
@@ -1053,7 +1057,7 @@ WHERE resource_id = $1;
 				IsSearchable: true,
 				InMenu:       true,
 				InSitemap:    true,
-				Settings:     map[string]any{},
+				Fields:       map[string]any{},
 			}, nil)
 
 		if err != nil {
@@ -1097,7 +1101,7 @@ WHERE resource_id = $1;
 					IsSearchable: true,
 					InMenu:       true,
 					InSitemap:    true,
-					Settings: map[string]any{
+					Fields: map[string]any{
 						"headline": "Concurrent",
 					},
 				},
@@ -1146,7 +1150,7 @@ WHERE resource_id = $1;
 			IsSearchable: true,
 			InMenu:       true,
 			InSitemap:    true,
-			Settings:     map[string]any{},
+			Fields:       map[string]any{},
 		}, nil)
 
 	if err != nil {
@@ -1167,7 +1171,7 @@ WHERE resource_id = $1;
 		IsSearchable: true,
 		InMenu:       true,
 		InSitemap:    true,
-		Settings:     map[string]any{},
+		Fields:       map[string]any{},
 	}, nil)
 
 	if err != nil {
@@ -1191,7 +1195,7 @@ WHERE resource_id = $1;
 			IsSearchable: true,
 			InMenu:       true,
 			InSitemap:    true,
-			Settings:     map[string]any{},
+			Fields:       map[string]any{},
 		}, nil)
 
 	if err != nil {
@@ -1221,7 +1225,7 @@ WHERE resource_id = $1;
 		IsSearchable: true,
 		InMenu:       true,
 		InSitemap:    true,
-		Settings:     map[string]any{},
+		Fields:       map[string]any{},
 	}, nil)
 
 	if !errors.Is(err, resource.ErrConflict) {
@@ -1242,7 +1246,7 @@ WHERE resource_id = $1;
 		IsSearchable: true,
 		InMenu:       true,
 		InSitemap:    true,
-		Settings:     map[string]any{},
+		Fields:       map[string]any{},
 	}, nil)
 
 	if !errors.Is(err, resource.ErrInvalidReference) {
@@ -1250,16 +1254,283 @@ WHERE resource_id = $1;
 	}
 
 	if _, err := connector.Pool().Exec(ctx, `
+WITH entity AS (
+    INSERT INTO core.resource_entities (site_id, storage_kind)
+    VALUES ($1, 'tree')
+    RETURNING id
+)
 INSERT INTO core.resources
 (
+    id,
     site_id,
     title,
     slug,
-    settings
+    type_settings
 )
-VALUES ($1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
+VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
 `, siteIDs["localhost"]); err == nil {
-		t.Fatal("resources accepted non-object settings")
+		t.Fatal("resources accepted non-object type settings")
+	}
+
+	queryRepository, ok := resourceRepository.(resource.QueryRepository)
+	if !ok {
+		t.Fatal("resource query repository is unavailable")
+	}
+	typedLowPath := "/typed-low"
+	typedLow, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: siteIDs["localhost"], Type: resourcetype.Page,
+		Title: "Typed low", Slug: "typed-low", Path: &typedLowPath,
+		IsPublic: true, IsSearchable: true,
+		Fields: map[string]any{
+			"salary": int64(9), "city": "Moscow", "remote": false,
+			"attachment": int64(11), "roles": []string{"editor", "author"},
+		},
+		FieldValues: []field.StoredValue{
+			{Key: "salary", Kind: field.StorageInteger, Value: int64(9)},
+			{Key: "city", Kind: field.StorageString, Value: "Moscow"},
+			{Key: "remote", Kind: field.StorageBoolean, Value: false},
+			{Key: "attachment", Kind: field.StorageReference, Value: int64(11)},
+			{Key: "roles", Position: 0, Kind: field.StorageString, Multiple: true, Value: "editor"},
+			{Key: "roles", Position: 1, Kind: field.StorageString, Multiple: true, Value: "author"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create low typed resource: %v", err)
+	}
+	typedHighPath := "/typed-high"
+	typedHigh, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: siteIDs["localhost"], Type: resourcetype.Page,
+		Title: "Typed high", Slug: "typed-high", Path: &typedHighPath,
+		IsPublic: true, IsSearchable: true,
+		Fields: map[string]any{
+			"salary": int64(150000), "city": "Moscow", "remote": true,
+			"attachment": int64(22),
+		},
+		FieldValues: []field.StoredValue{
+			{Key: "salary", Kind: field.StorageInteger, Value: int64(150000)},
+			{Key: "city", Kind: field.StorageString, Value: "Moscow"},
+			{Key: "remote", Kind: field.StorageBoolean, Value: true},
+			{Key: "attachment", Kind: field.StorageReference, Value: int64(22)},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create high typed resource: %v", err)
+	}
+	loadedTypedLow, err := resourceRepository.ByID(ctx, typedLow.ID)
+	if err != nil || !reflect.DeepEqual(loadedTypedLow.Fields["roles"], []string{"editor", "author"}) {
+		t.Fatalf("loaded ordered multi-value fields = %#v, %v", loadedTypedLow.Fields, err)
+	}
+	for _, test := range []struct {
+		name      string
+		condition resource.FilterCondition
+		wantID    resource.ID
+	}{
+		{name: "numeric", condition: resource.FilterCondition{Field: "resource.field.salary", Operator: resource.FilterGreaterThanOrEqual, Value: int64(100000), Kind: field.StorageInteger}, wantID: typedHigh.ID},
+		{name: "boolean", condition: resource.FilterCondition{Field: "resource.field.remote", Operator: resource.FilterEqual, Value: true, Kind: field.StorageBoolean}, wantID: typedHigh.ID},
+		{name: "reference", condition: resource.FilterCondition{Field: "resource.field.attachment", Operator: resource.FilterEqual, Value: int64(22), Kind: field.StorageReference}, wantID: typedHigh.ID},
+	} {
+		page, queryErr := queryRepository.Query(ctx, resource.Query{
+			SiteID: siteIDs["localhost"], Limit: 100, Filters: []resource.FilterCondition{test.condition},
+		})
+		if queryErr != nil || len(page.Items) != 1 || page.Items[0].ID != test.wantID {
+			t.Fatalf("%s typed filter = %#v, %v", test.name, page, queryErr)
+		}
+	}
+	cityPage, err := queryRepository.Query(ctx, resource.Query{
+		SiteID: siteIDs["localhost"], Limit: 100,
+		Filters: []resource.FilterCondition{{Field: "resource.field.city", Operator: resource.FilterEqual, Value: "Moscow", Kind: field.StorageString}},
+	})
+	if err != nil || len(cityPage.Items) != 2 {
+		t.Fatalf("string typed filter = %#v, %v", cityPage, err)
+	}
+	sortedPage, err := queryRepository.Query(ctx, resource.Query{
+		SiteID: siteIDs["localhost"], Limit: 100,
+		Sort: []resource.Sort{{Field: "resource.field.salary", Direction: resource.SortDescending, Kind: field.StorageInteger}},
+	})
+	if err != nil || len(sortedPage.Items) < 2 || sortedPage.Items[0].ID != typedHigh.ID || sortedPage.Items[1].ID != typedLow.ID {
+		t.Fatalf("numeric typed sort = %#v, %v", sortedPage, err)
+	}
+	staleFree := typedLow
+	staleFree.Fields = map[string]any{"city": "Moscow"}
+	staleFree.FieldValues = []field.StoredValue{{Key: "city", Kind: field.StorageString, Value: "Moscow"}}
+	staleFree, err = resourceRepository.Update(ctx, nil, typedLow, staleFree, nil)
+	if err != nil {
+		t.Fatalf("remove stale typed values: %v", err)
+	}
+	if _, exists := staleFree.Fields["salary"]; exists {
+		t.Fatalf("stale salary field survived update: %#v", staleFree.Fields)
+	}
+
+	libraryItems, ok := resourceRepository.(resource.LibraryItemRepository)
+	if !ok {
+		t.Fatal("library item repository is unavailable")
+	}
+	libraryPath := "/catalog"
+	library, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: siteIDs["localhost"], Type: resourcetype.Library,
+		Title: "Catalog", Slug: "catalog", Path: &libraryPath,
+		IsPublic: true, IsSearchable: true, InMenu: true, InSitemap: true,
+		Fields: map[string]any{}, TypeSettings: map[string]any{
+			"item_url_pattern": "/{year}/{slug}",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create library: %v", err)
+	}
+	archivePath := "/archive"
+	archive, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: siteIDs["localhost"], Type: resourcetype.Library,
+		Title: "Archive", Slug: "archive", Path: &archivePath,
+		IsPublic: true, IsSearchable: true, InMenu: true, InSitemap: true,
+		Fields: map[string]any{}, TypeSettings: map[string]any{
+			"item_url_pattern": "/{slug}",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create target library: %v", err)
+	}
+	oldPublication := time.Date(1900, time.January, 2, 3, 4, 5, 0, time.UTC)
+	createdLibraryItem, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
+		SiteID: siteIDs["localhost"], LibraryID: library.ID,
+		Title: "Typed item", Slug: "typed-item", ContentType: &contentType,
+		IsPublic: true, IsSearchable: true, PublishedAt: &oldPublication,
+		Fields: map[string]any{"headline": "Stored headline"},
+		FieldValues: []field.StoredValue{{
+			Key: "headline", Kind: field.StorageString, Value: "Stored headline",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create partitioned library item: %v", err)
+	}
+	loadedLibraryItem, err := libraryItems.LibraryItemByID(ctx, createdLibraryItem.ID)
+	if err != nil || loadedLibraryItem.Fields["headline"] != "Stored headline" {
+		t.Fatalf("loaded library item = %#v, %v", loadedLibraryItem, err)
+	}
+	itemWidget, err := widgetRepository.CreateWidget(ctx, createdLibraryItem.ID, widget.Binding{
+		Code: "content_summary", Area: widget.AreaBody, Position: 0,
+		Presentation: presentation, Params: map[string]any{"title": "Library item"},
+	})
+	if err != nil || itemWidget.ID <= 0 {
+		t.Fatalf("create library item widget = %#v, %v", itemWidget, err)
+	}
+	loadedLibraryItem, err = libraryItems.LibraryItemByID(ctx, createdLibraryItem.ID)
+	if err != nil || len(loadedLibraryItem.Widgets) != 1 || loadedLibraryItem.Widgets[0].ID != itemWidget.ID {
+		t.Fatalf("loaded library item widgets = %#v, %v", loadedLibraryItem.Widgets, err)
+	}
+	futurePublication := time.Date(2040, time.December, 31, 23, 59, 0, 0, time.UTC)
+	loadedLibraryItem.Title = "Moved item"
+	loadedLibraryItem.PublishedAt = &futurePublication
+	loadedLibraryItem, err = libraryItems.UpdateLibraryItem(
+		ctx, nil, createdLibraryItem, loadedLibraryItem,
+	)
+	if err != nil || loadedLibraryItem.Title != "Moved item" {
+		t.Fatalf("update across time partitions = %#v, %v", loadedLibraryItem, err)
+	}
+	routedItem, routedLibrary, err := libraryItems.ResolveLibraryItemRoute(
+		ctx, siteIDs["localhost"], "/catalog/2040/typed-item",
+	)
+	if err != nil || routedItem.ID != loadedLibraryItem.ID || routedLibrary.ID != library.ID {
+		t.Fatalf("resolve dated library item route = %#v / %#v, %v", routedItem, routedLibrary, err)
+	}
+	if _, _, err := libraryItems.ResolveLibraryItemRoute(ctx, siteIDs["localhost"], "/catalog/2039/typed-item"); !errors.Is(err, resource.ErrNotFound) {
+		t.Fatalf("wrong dated library item route error = %v", err)
+	}
+	loadedLibraryItem, err = libraryItems.MoveLibraryItem(
+		ctx, nil, loadedLibraryItem.ID, archive.ID,
+	)
+	if err != nil || loadedLibraryItem.LibraryID != archive.ID {
+		t.Fatalf("move across library partitions = %#v, %v", loadedLibraryItem, err)
+	}
+	if routedItem, routedLibrary, err = libraryItems.ResolveLibraryItemRoute(ctx, siteIDs["localhost"], "/archive/typed-item"); err != nil || routedItem.ID != loadedLibraryItem.ID || routedLibrary.ID != archive.ID {
+		t.Fatalf("resolve moved library item route = %#v / %#v, %v", routedItem, routedLibrary, err)
+	}
+	renamedArchive := archive
+	renamedArchivePath := "/renamed-archive"
+	renamedArchive.Path = &renamedArchivePath
+	renamedArchive.Slug = "renamed-archive"
+	renamedArchive, err = resourceRepository.Update(ctx, nil, archive, renamedArchive, nil)
+	if err != nil {
+		t.Fatalf("rename owning library: %v", err)
+	}
+	if routedItem, _, err = libraryItems.ResolveLibraryItemRoute(ctx, siteIDs["localhost"], "/renamed-archive/typed-item"); err != nil || routedItem.ID != loadedLibraryItem.ID {
+		t.Fatalf("resolve item after library rename = %#v, %v", routedItem, err)
+	}
+	if _, _, err := libraryItems.ResolveLibraryItemRoute(ctx, siteIDs["localhost"], "/archive/typed-item"); !errors.Is(err, resource.ErrNotFound) {
+		t.Fatalf("old library item route error = %v", err)
+	}
+	if _, err := libraryItems.MoveLibraryItem(ctx, nil, loadedLibraryItem.ID, root.ID); !errors.Is(err, resource.ErrInvalidReference) {
+		t.Fatalf("move to non-library error = %v", err)
+	}
+	crossSiteLibraryPath := "/cross-library"
+	crossSiteLibrary, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: siteIDs["example.com"], Type: resourcetype.Library,
+		Title: "Cross-site library", Slug: "cross-library", Path: &crossSiteLibraryPath,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+		TypeSettings: map[string]any{"item_url_pattern": "/{slug}"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create cross-site library: %v", err)
+	}
+	if _, err := libraryItems.MoveLibraryItem(ctx, nil, loadedLibraryItem.ID, crossSiteLibrary.ID); !errors.Is(err, resource.ErrInvalidReference) {
+		t.Fatalf("cross-site library item move error = %v", err)
+	}
+	itemPage, err := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 10,
+	})
+	if err != nil || len(itemPage.Items) != 1 || itemPage.Items[0].ID != loadedLibraryItem.ID {
+		t.Fatalf("query moved library item = %#v, %v", itemPage, err)
+	}
+	itemPage, err = libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 10,
+		Search: strconv.FormatInt(int64(loadedLibraryItem.ID), 10),
+	})
+	if err != nil || len(itemPage.Items) != 1 || itemPage.Items[0].ID != loadedLibraryItem.ID {
+		t.Fatalf("query library item by id = %#v, %v", itemPage, err)
+	}
+	lifecycleRepository, ok := resourceRepository.(resource.LifecycleRepository)
+	if !ok {
+		t.Fatal("resource lifecycle repository is unavailable")
+	}
+	if err := lifecycleRepository.SoftDelete(ctx, nil, renamedArchive.ID); err != nil {
+		t.Fatalf("soft-delete owning library: %v", err)
+	}
+	itemPage, err = libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 10,
+	})
+	if err != nil || len(itemPage.Items) != 0 {
+		t.Fatalf("query under deleted library = %#v, %v", itemPage, err)
+	}
+	if err := lifecycleRepository.Restore(ctx, nil, renamedArchive.ID, false); err != nil {
+		t.Fatalf("restore owning library: %v", err)
+	}
+	if err := libraryItems.SoftDeleteLibraryItem(ctx, nil, loadedLibraryItem.ID); err != nil {
+		t.Fatalf("soft-delete library item: %v", err)
+	}
+	if err := lifecycleRepository.SoftDelete(ctx, nil, renamedArchive.ID); err != nil {
+		t.Fatalf("soft-delete library with individually deleted item: %v", err)
+	}
+	if err := lifecycleRepository.Restore(ctx, nil, renamedArchive.ID, false); err != nil {
+		t.Fatalf("restore library with individually deleted item: %v", err)
+	}
+	stillDeleted, err := libraryItems.LibraryItemByID(ctx, loadedLibraryItem.ID)
+	if err != nil || stillDeleted.DeletedAt == nil {
+		t.Fatalf("individual deletion after library restore = %#v, %v", stillDeleted, err)
+	}
+	notDeleted := false
+	itemPage, err = libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 10, Deleted: &notDeleted,
+	})
+	if err != nil || len(itemPage.Items) != 0 {
+		t.Fatalf("query after soft delete = %#v, %v", itemPage, err)
+	}
+	if err := libraryItems.RestoreLibraryItem(ctx, nil, loadedLibraryItem.ID); err != nil {
+		t.Fatalf("restore library item: %v", err)
+	}
+	if err := libraryItems.DeleteLibraryItem(ctx, loadedLibraryItem.ID); err != nil {
+		t.Fatalf("permanently delete library item: %v", err)
+	}
+	if _, err := libraryItems.LibraryItemByID(ctx, loadedLibraryItem.ID); !errors.Is(err, resource.ErrNotFound) {
+		t.Fatalf("deleted library item error = %v", err)
 	}
 
 	child.Slug = "renamed"
@@ -1314,7 +1585,7 @@ VALUES ($1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
 			IsSearchable:     true,
 			InMenu:           true,
 			InSitemap:        true,
-			Settings:         map[string]any{},
+			Fields:           map[string]any{},
 		}, nil); err != nil {
 		t.Fatalf("create internal resource link: %v", err)
 	}
@@ -1335,7 +1606,7 @@ VALUES ($1, 'Invalid settings', 'invalid-settings', '[]'::jsonb);
 			IsSearchable:     true,
 			InMenu:           true,
 			InSitemap:        true,
-			Settings:         map[string]any{},
+			Fields:           map[string]any{},
 		}, nil)
 
 	if err != nil {
@@ -1448,7 +1719,7 @@ WHERE id = ANY($2);
 	}
 
 	restoreMigration = true
-	if err := manager.Down(ctx, plan, 7); err != nil {
+	if err := manager.Down(ctx, plan, 9); err != nil {
 		t.Fatalf("down: %v", err)
 	}
 

@@ -135,6 +135,10 @@ func (noPathType) PathMode() resourcetype.PathMode {
 	return resourcetype.PathNone
 }
 
+func (noPathType) Capabilities() resourcetype.Capabilities {
+	return resourcetype.Capabilities{MutableType: true}
+}
+
 func (noPathType) Normalize(
 	payload resourcetype.Payload,
 ) (resourcetype.Payload, error) {
@@ -143,7 +147,7 @@ func (noPathType) Normalize(
 		payload.Content != "" ||
 		payload.TargetResourceID != nil ||
 		payload.ExternalURL != nil ||
-		len(payload.Settings) != 0 {
+		len(payload.Fields) != 0 {
 		return resourcetype.Payload{}, errors.New(
 			"no_path payload must be empty",
 		)
@@ -181,6 +185,98 @@ type memoryRepository struct {
 	updateError  error
 	deleteError  error
 	deletedMedia []media.ID
+}
+
+type memoryLibraryRepository struct {
+	*memoryRepository
+	items  map[ID]LibraryItem
+	nextID ID
+}
+
+func (r *memoryLibraryRepository) CreateLibraryItem(_ context.Context, _ *security.UserID, item LibraryItem) (LibraryItem, error) {
+	if r.items == nil {
+		r.items = map[ID]LibraryItem{}
+	}
+	if r.nextID == 0 {
+		r.nextID = 1000
+	}
+	item = cloneLibraryItem(item)
+	item.ID = r.nextID
+	r.nextID++
+	item.CreatedAt = time.Now().UTC()
+	item.UpdatedAt = item.CreatedAt
+	r.items[item.ID] = cloneLibraryItem(item)
+	return cloneLibraryItem(item), nil
+}
+
+func (r *memoryLibraryRepository) LibraryItemByID(_ context.Context, id ID) (LibraryItem, error) {
+	item, exists := r.items[id]
+	if !exists {
+		return LibraryItem{}, ErrNotFound
+	}
+	return cloneLibraryItem(item), nil
+}
+
+func (r *memoryLibraryRepository) UpdateLibraryItem(_ context.Context, _ *security.UserID, _ LibraryItem, item LibraryItem) (LibraryItem, error) {
+	if _, exists := r.items[item.ID]; !exists {
+		return LibraryItem{}, ErrNotFound
+	}
+	item.UpdatedAt = time.Now().UTC()
+	r.items[item.ID] = cloneLibraryItem(item)
+	return cloneLibraryItem(item), nil
+}
+
+func (r *memoryLibraryRepository) SoftDeleteLibraryItem(_ context.Context, _ *security.UserID, id ID) error {
+	item, exists := r.items[id]
+	if !exists {
+		return ErrNotFound
+	}
+	now := time.Now().UTC()
+	item.DeletedAt = &now
+	r.items[id] = item
+	return nil
+}
+
+func (r *memoryLibraryRepository) RestoreLibraryItem(_ context.Context, _ *security.UserID, id ID) error {
+	item, exists := r.items[id]
+	if !exists {
+		return ErrNotFound
+	}
+	item.DeletedAt = nil
+	r.items[id] = item
+	return nil
+}
+
+func (r *memoryLibraryRepository) DeleteLibraryItem(_ context.Context, id ID) error {
+	if _, exists := r.items[id]; !exists {
+		return ErrNotFound
+	}
+	delete(r.items, id)
+	return nil
+}
+
+func (r *memoryLibraryRepository) MoveLibraryItem(_ context.Context, _ *security.UserID, id, libraryID ID) (LibraryItem, error) {
+	item, exists := r.items[id]
+	if !exists {
+		return LibraryItem{}, ErrNotFound
+	}
+	item.LibraryID = libraryID
+	r.items[id] = item
+	return cloneLibraryItem(item), nil
+}
+
+func (r *memoryLibraryRepository) QueryLibraryItems(_ context.Context, query LibraryItemQuery) (LibraryItemPage, error) {
+	result := LibraryItemPage{}
+	for _, item := range r.items {
+		if item.SiteID == query.SiteID && item.LibraryID == query.LibraryID {
+			result.Items = append(result.Items, cloneLibraryItem(item))
+		}
+	}
+	return result, nil
+}
+
+func (*memoryLibraryRepository) ResolveLibraryItemRoute(context.Context, site.ID, string) (LibraryItem, Resource, error) {
+	return LibraryItem{}, Resource{}, ErrNotFound
 }
 
 func newMemoryRepository() *memoryRepository {
@@ -745,7 +841,7 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 		SiteID:   1,
 		Template: &templateCode,
 		Title:    " Home ",
-		Settings: map[string]any{"headline": "Welcome"},
+		Fields:   map[string]any{"headline": "Welcome"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -778,7 +874,7 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 		IsSearchable: &falseValue,
 		InMenu:       &falseValue,
 		InSitemap:    &falseValue,
-		Settings:     map[string]any{"headline": "About us"},
+		Fields:       map[string]any{"headline": "About us"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -803,7 +899,7 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	if blank.Template != nil || blank.ContentType == nil ||
-		*blank.ContentType != "html" || len(blank.Settings) != 0 {
+		*blank.ContentType != "html" || len(blank.Fields) != 0 {
 		t.Fatalf("blank page = %#v", blank)
 	}
 
@@ -812,7 +908,7 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 		Template: &templateCode,
 		Title:    "Invalid settings",
 		Slug:     "invalid-settings",
-		Settings: map[string]any{"headline": "x"},
+		Fields:   map[string]any{"headline": "x"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "min") {
 		t.Fatalf("invalid settings error = %v", err)
@@ -823,10 +919,119 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 		Template: &templateCode,
 		Title:    "Invalid slug",
 		Slug:     "Not-Valid",
-		Settings: map[string]any{"headline": "Valid"},
+		Fields:   map[string]any{"headline": "Valid"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "slug") {
 		t.Fatalf("invalid slug error = %v", err)
+	}
+}
+
+func TestServiceKeepsLibraryTypeImmutableBothDirections(t *testing.T) {
+	service, _, _ := newTestService(t)
+	ctx := context.Background()
+	home, err := service.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, Type: resourcetype.Page, Title: "Home",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	library, err := service.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, ParentID: &home.ID, Type: resourcetype.Library,
+		Title: "Catalog", Slug: "catalog", TypeSettings: map[string]any{
+			"item_url_pattern": "/{slug}",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if library.Type != resourcetype.Library || library.Path == nil || *library.Path != "/catalog" {
+		t.Fatalf("created library = %#v", library)
+	}
+
+	_, err = service.Update(ctx, security.System(), UpdateInput{
+		ID: library.ID, ParentID: library.ParentID, Type: resourcetype.Page,
+		Title: library.Title, Slug: library.Slug, IsPublic: library.IsPublic,
+		IsSearchable: library.IsSearchable, InMenu: library.InMenu,
+		InSitemap: library.InSitemap, Fields: library.Fields,
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("library to page error = %v", err)
+	}
+	_, err = service.Update(ctx, security.System(), UpdateInput{
+		ID: home.ID, Type: resourcetype.Library, Title: home.Title,
+		IsPublic: home.IsPublic, IsSearchable: home.IsSearchable,
+		InMenu: home.InMenu, InSitemap: home.InSitemap,
+		TypeSettings: map[string]any{"item_url_pattern": "/{slug}"},
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("page to library error = %v", err)
+	}
+}
+
+func TestLibraryServiceCopiesDefaultTemplateOnlyAtCreation(t *testing.T) {
+	common, treeRepository, _ := newTestService(t)
+	ctx := context.Background()
+	home, err := common.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, Type: resourcetype.Page, Title: "Home",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	library, err := common.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, ParentID: &home.ID, Type: resourcetype.Library,
+		Title: "Catalog", Slug: "catalog", TypeSettings: map[string]any{
+			"item_url_pattern": "/{slug}", "default_item_template": "article",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := &memoryLibraryRepository{
+		memoryRepository: treeRepository,
+		items:            map[ID]LibraryItem{},
+		nextID:           1000,
+	}
+	common.repository = repository
+	libraryService, err := NewLibraryService(repository, common)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := libraryService.Create(ctx, security.System(), CreateLibraryItemInput{
+		SiteID: 1, LibraryID: library.ID, Title: "First", Slug: "first",
+		Fields: map[string]any{"headline": "First headline"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Template == nil || *first.Template != template.Code("article") {
+		t.Fatalf("first item template = %#v", first.Template)
+	}
+
+	_, err = common.Update(ctx, security.System(), UpdateInput{
+		ID: library.ID, ParentID: library.ParentID, Type: resourcetype.Library,
+		Title: library.Title, Slug: library.Slug, IsPublic: library.IsPublic,
+		IsSearchable: library.IsSearchable, InMenu: library.InMenu,
+		InSitemap: library.InSitemap, Fields: library.Fields,
+		TypeSettings: map[string]any{
+			"item_url_pattern": "/{slug}", "default_item_template": "empty",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedFirst, err := libraryService.Get(ctx, security.System(), first.ID)
+	if err != nil || storedFirst.Template == nil || *storedFirst.Template != template.Code("article") {
+		t.Fatalf("existing item template after default change = %#v, %v", storedFirst.Template, err)
+	}
+	second, err := libraryService.Create(ctx, security.System(), CreateLibraryItemInput{
+		SiteID: 1, LibraryID: library.ID, Title: "Second", Slug: "second",
+		Fields: map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Template == nil || *second.Template != template.Code("empty") {
+		t.Fatalf("second item template = %#v", second.Template)
 	}
 }
 
@@ -1136,7 +1341,7 @@ func TestServiceUpdateFullyReplacesStateAndRejectsNoPathAncestor(
 		Title:    "Page",
 		Slug:     "page",
 		Content:  "old",
-		Settings: map[string]any{"headline": "Old title"},
+		Fields:   map[string]any{"headline": "Old title"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1170,7 +1375,7 @@ func TestServiceUpdateFullyReplacesStateAndRejectsNoPathAncestor(
 	if page.Template != nil ||
 		page.ContentType != nil ||
 		page.Content != "" ||
-		len(page.Settings) != 0 ||
+		len(page.Fields) != 0 ||
 		page.IsPublic ||
 		page.IsSearchable ||
 		page.InMenu ||
@@ -1362,7 +1567,7 @@ func TestServiceDetectsInvalidStoredResourcesOnRead(t *testing.T) {
 		Template: &templateCode,
 		Title:    "Stored",
 		Slug:     "stored",
-		Settings: map[string]any{"headline": "Stored headline"},
+		Fields:   map[string]any{"headline": "Stored headline"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1390,9 +1595,9 @@ func TestServiceDetectsInvalidStoredResourcesOnRead(t *testing.T) {
 			contains: "unknown template",
 		},
 		{
-			name: "invalid settings",
+			name: "invalid fields",
 			mutate: func(item *Resource) {
-				item.Settings = map[string]any{"headline": "x"}
+				item.Fields = map[string]any{"headline": "x"}
 			},
 			contains: "min",
 		},
@@ -1439,7 +1644,7 @@ func TestServiceResourceImageMediaValidationAndAttachment(
 		Template:     &templateCode,
 		Title:        "Home",
 		ImageMediaID: &imageMediaID,
-		Settings:     map[string]any{"headline": "Home"},
+		Fields:       map[string]any{"headline": "Home"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1455,7 +1660,7 @@ func TestServiceResourceImageMediaValidationAndAttachment(
 		Title:        "Child",
 		Slug:         "child",
 		ImageMediaID: &imageMediaID,
-		Settings:     map[string]any{"headline": "Child"},
+		Fields:       map[string]any{"headline": "Child"},
 	}); !errors.Is(err, media.ErrAlreadyAttached) {
 		t.Fatalf("duplicate media attachment error = %v", err)
 	}
@@ -1466,7 +1671,7 @@ func TestServiceResourceImageMediaValidationAndAttachment(
 		Template:     &templateCode,
 		Title:        "Other home",
 		ImageMediaID: &nonImageMediaID,
-		Settings:     map[string]any{"headline": "Other"},
+		Fields:       map[string]any{"headline": "Other"},
 	}); !errors.Is(err, ErrInvalidReference) {
 		t.Fatalf("non-image media error = %v", err)
 	}
@@ -1477,7 +1682,7 @@ func TestServiceResourceImageMediaValidationAndAttachment(
 		Template:     &templateCode,
 		Title:        "Missing image",
 		ImageMediaID: &missingMediaID,
-		Settings:     map[string]any{"headline": "Missing"},
+		Fields:       map[string]any{"headline": "Missing"},
 	}); !errors.Is(err, ErrInvalidReference) {
 		t.Fatalf("missing media error = %v", err)
 	}
@@ -1497,7 +1702,7 @@ func TestServiceReplacingAndClearingImageDeletesOldMedia(
 		Template:     &templateCode,
 		Title:        "Home",
 		ImageMediaID: &firstMediaID,
-		Settings:     map[string]any{"headline": "Home"},
+		Fields:       map[string]any{"headline": "Home"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1551,7 +1756,7 @@ func TestServiceDeletingResourceTreeDeletesItsMedia(t *testing.T) {
 		Template:     &templateCode,
 		Title:        "Home",
 		ImageMediaID: &rootMediaID,
-		Settings:     map[string]any{"headline": "Home"},
+		Fields:       map[string]any{"headline": "Home"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1564,7 +1769,7 @@ func TestServiceDeletingResourceTreeDeletesItsMedia(t *testing.T) {
 		Title:        "Child",
 		Slug:         "child",
 		ImageMediaID: &childMediaID,
-		Settings:     map[string]any{"headline": "Child"},
+		Fields:       map[string]any{"headline": "Child"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1625,7 +1830,7 @@ func updateInputFrom(item Resource) UpdateInput {
 		Sort:             item.Sort,
 		PublishedAt:      cloneTime(item.PublishedAt),
 		UnpublishedAt:    cloneTime(item.UnpublishedAt),
-		Settings:         cloneMap(item.Settings),
+		Fields:           cloneMap(item.Fields),
 	}
 }
 

@@ -15,7 +15,18 @@ const (
 	Page         Code = "page"
 	Link         Code = "link"
 	ResourceLink Code = "resource_link"
+	Library      Code = "library"
 )
+
+type Capabilities struct {
+	SupportsTemplate bool
+	SupportsContent  bool
+	SupportsWidgets  bool
+	SupportsFields   bool
+	MutableType      bool
+	OwnsLibraryItems bool
+	DefaultIcon      string
+}
 
 type PathMode string
 
@@ -30,12 +41,14 @@ type Payload struct {
 	Content          string
 	TargetResourceID *int64
 	ExternalURL      *string
-	Settings         map[string]any
+	Fields           map[string]any
+	TypeSettings     map[string]any
 }
 
 type Type interface {
 	Code() Code
 	PathMode() PathMode
+	Capabilities() Capabilities
 	Normalize(Payload) (Payload, error)
 }
 
@@ -44,6 +57,7 @@ func StandardTypes() []Type {
 		pageType{},
 		linkType{},
 		resourceLinkType{},
+		libraryType{},
 	}
 }
 
@@ -57,6 +71,10 @@ func (pageType) PathMode() PathMode {
 	return PathRoute
 }
 
+func (pageType) Capabilities() Capabilities {
+	return Capabilities{SupportsTemplate: true, SupportsContent: true, SupportsWidgets: true, SupportsFields: true, MutableType: true, DefaultIcon: "Document"}
+}
+
 func (pageType) Normalize(payload Payload) (Payload, error) {
 	if payload.Template != nil && *payload.Template == "" {
 		return Payload{}, errors.New("page template code is empty")
@@ -68,6 +86,9 @@ func (pageType) Normalize(payload Payload) (Payload, error) {
 	}
 	if payload.ExternalURL != nil {
 		return Payload{}, errors.New("page external_url must be empty")
+	}
+	if len(payload.TypeSettings) != 0 {
+		return Payload{}, errors.New("page type settings must be empty")
 	}
 
 	if payload.ContentType == nil || *payload.ContentType == "" {
@@ -94,6 +115,10 @@ func (linkType) PathMode() PathMode {
 	return PathRoute
 }
 
+func (linkType) Capabilities() Capabilities {
+	return Capabilities{MutableType: true, DefaultIcon: "Link"}
+}
+
 func (linkType) Normalize(payload Payload) (Payload, error) {
 	if payload.Template != nil {
 		return Payload{}, errors.New("link template must be empty")
@@ -109,8 +134,11 @@ func (linkType) Normalize(payload Payload) (Payload, error) {
 			"link target_resource_id must be empty",
 		)
 	}
-	if len(payload.Settings) != 0 {
+	if len(payload.Fields) != 0 {
 		return Payload{}, errors.New("link settings must be empty")
+	}
+	if len(payload.TypeSettings) != 0 {
+		return Payload{}, errors.New("link type settings must be empty")
 	}
 	if payload.ExternalURL == nil ||
 		!validExternalURL(*payload.ExternalURL) {
@@ -130,6 +158,10 @@ func (resourceLinkType) Code() Code {
 
 func (resourceLinkType) PathMode() PathMode {
 	return PathRoute
+}
+
+func (resourceLinkType) Capabilities() Capabilities {
+	return Capabilities{MutableType: true, DefaultIcon: "Link"}
 }
 
 func (resourceLinkType) Normalize(
@@ -155,10 +187,13 @@ func (resourceLinkType) Normalize(
 			"resource_link external_url must be empty",
 		)
 	}
-	if len(payload.Settings) != 0 {
+	if len(payload.Fields) != 0 {
 		return Payload{}, errors.New(
 			"resource_link settings must be empty",
 		)
+	}
+	if len(payload.TypeSettings) != 0 {
+		return Payload{}, errors.New("resource_link type settings must be empty")
 	}
 	if payload.TargetResourceID == nil ||
 		*payload.TargetResourceID <= 0 {
@@ -168,6 +203,106 @@ func (resourceLinkType) Normalize(
 	}
 
 	return clonePayload(payload), nil
+}
+
+type libraryType struct{}
+
+func (libraryType) Code() Code         { return Library }
+func (libraryType) PathMode() PathMode { return PathRoute }
+func (libraryType) Capabilities() Capabilities {
+	return Capabilities{SupportsTemplate: true, SupportsContent: true, SupportsWidgets: true, SupportsFields: true, MutableType: false, OwnsLibraryItems: true, DefaultIcon: "Collection"}
+}
+func (libraryType) Normalize(payload Payload) (Payload, error) {
+	if payload.Template != nil && *payload.Template == "" {
+		return Payload{}, errors.New("library template code is empty")
+	}
+	if payload.TargetResourceID != nil {
+		return Payload{}, errors.New("library target_resource_id must be empty")
+	}
+	if payload.ExternalURL != nil {
+		return Payload{}, errors.New("library external_url must be empty")
+	}
+	if payload.ContentType == nil || *payload.ContentType == "" {
+		contentType := "html"
+		payload.ContentType = &contentType
+	}
+	if *payload.ContentType != "html" {
+		return Payload{}, fmt.Errorf("unsupported library content_type %q", *payload.ContentType)
+	}
+	payload.TypeSettings = cloneMap(payload.TypeSettings)
+	if payload.TypeSettings["item_url_pattern"] == nil || payload.TypeSettings["item_url_pattern"] == "" {
+		payload.TypeSettings["item_url_pattern"] = DefaultItemURLPattern
+	}
+	if payload.TypeSettings["default_item_template"] == nil || payload.TypeSettings["default_item_template"] == "" {
+		delete(payload.TypeSettings, "default_item_template")
+	}
+	if err := ValidateLibrarySettings(payload.TypeSettings); err != nil {
+		return Payload{}, err
+	}
+	return clonePayload(payload), nil
+}
+
+const DefaultItemURLPattern = "/{slug}"
+
+func ValidateLibrarySettings(settings map[string]any) error {
+	for key := range settings {
+		if key != "item_url_pattern" && key != "default_item_template" {
+			return fmt.Errorf("unknown library type setting %q", key)
+		}
+	}
+	pattern := ""
+	if value, exists := settings["item_url_pattern"]; exists && value != nil {
+		var ok bool
+		pattern, ok = value.(string)
+		if !ok {
+			return errors.New("library item_url_pattern is invalid")
+		}
+	}
+	if pattern == "" {
+		pattern = DefaultItemURLPattern
+	}
+	if err := ValidateItemURLPattern(pattern); err != nil {
+		return err
+	}
+	if value, exists := settings["default_item_template"]; exists && value != nil && value != "" {
+		code, ok := value.(string)
+		if !ok || code == "" || strings.TrimSpace(code) != code {
+			return errors.New("library default_item_template is invalid")
+		}
+	}
+	return nil
+}
+
+func ValidateItemURLPattern(pattern string) error {
+	if pattern == "" || pattern[0] != '/' || strings.HasSuffix(pattern, "/") || strings.Contains(pattern, "//") {
+		return errors.New("library item_url_pattern is invalid")
+	}
+	allowed := map[string]bool{"id": true, "slug": true, "year": true, "month": true, "day": true}
+	unique := false
+	for cursor := 0; cursor < len(pattern); {
+		open := strings.IndexByte(pattern[cursor:], '{')
+		if open < 0 {
+			break
+		}
+		open += cursor
+		close := strings.IndexByte(pattern[open:], '}')
+		if close < 0 {
+			return errors.New("library item_url_pattern has unmatched token")
+		}
+		close += open
+		token := pattern[open+1 : close]
+		if !allowed[token] {
+			return fmt.Errorf("library item_url_pattern token %q is unsupported", token)
+		}
+		if token == "id" || token == "slug" {
+			unique = true
+		}
+		cursor = close + 1
+	}
+	if strings.Count(pattern, "{") != strings.Count(pattern, "}") || !unique {
+		return errors.New("library item_url_pattern must contain {id} or {slug}")
+	}
+	return nil
 }
 
 func validExternalURL(value string) bool {
@@ -218,7 +353,8 @@ func clonePayload(payload Payload) Payload {
 		payload.ExternalURL = &value
 	}
 
-	payload.Settings = cloneMap(payload.Settings)
+	payload.Fields = cloneMap(payload.Fields)
+	payload.TypeSettings = cloneMap(payload.TypeSettings)
 	return payload
 }
 

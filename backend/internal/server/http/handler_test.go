@@ -927,6 +927,10 @@ func (transportResourceType) PathMode() resourcetype.PathMode {
 	return resourcetype.PathRoute
 }
 
+func (transportResourceType) Capabilities() resourcetype.Capabilities {
+	return resourcetype.Capabilities{MutableType: true}
+}
+
 func (transportResourceType) Normalize(
 	payload resourcetype.Payload,
 ) (resourcetype.Payload, error) {

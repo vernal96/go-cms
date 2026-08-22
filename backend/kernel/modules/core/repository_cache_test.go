@@ -159,10 +159,10 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 	store := newMemoryCacheStore()
 	base := &resourceRepositoryStub{
 		item: resource.Resource{
-			ID:       7,
-			SiteID:   3,
-			Title:    "cached",
-			Settings: map[string]any{"count": json.Number("2")},
+			ID:     7,
+			SiteID: 3,
+			Title:  "cached",
+			Fields: map[string]any{"count": json.Number("2")},
 			Widgets: []widget.Binding{{
 				ID:           1,
 				Code:         widget.Code("content_summary"),

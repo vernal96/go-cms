@@ -12,13 +12,11 @@ SET settings = settings
     - 'phone_value'
 WHERE profile_code = 'dev';
 
-UPDATE core.resources AS resources
-SET settings = resources.settings
-    - 'page_title'
-    - 'show_title'
-    - 'layout'
-FROM core.sites AS sites
-WHERE resources.site_id = sites.id
+DELETE FROM core.resource_field_values AS value
+USING core.resources AS resources, core.sites AS sites
+WHERE value.resource_id = resources.id
+  AND resources.site_id = sites.id
   AND sites.profile_code = 'dev'
   AND resources.type = 'page'
-	AND resources.template = 'page';
+  AND resources.template = 'page'
+  AND value.field_key IN ('page_title', 'show_title', 'layout');

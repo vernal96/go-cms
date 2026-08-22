@@ -35,8 +35,8 @@ describe('ResourceCreateDialog', () => {
     requestMock
       .mockResolvedValueOnce({
         types: [
-          { code: 'page', label: 'Страница' },
-          { code: 'link', label: 'Ссылка' },
+			{ code: 'page', label: 'Страница', capabilities: { supports_template: true, supports_content: true, supports_fields: true, mutable_type: true } },
+			{ code: 'link', label: 'Ссылка', capabilities: { mutable_type: true } },
         ],
         templates: [
           {
@@ -80,7 +80,7 @@ describe('ResourceCreateDialog', () => {
       title: ' Home ',
       menu_title: '',
       slug: '',
-      settings: {},
+		fields: {},
     })
 
     const buttons = wrapper.findAllComponents({ name: 'ElButton' })
@@ -101,7 +101,8 @@ describe('ResourceCreateDialog', () => {
       title: 'Home',
       menu_title: '',
       slug: '',
-      settings: {},
+		fields: {},
+		type_settings: {},
     })
     expect(wrapper.emitted('created')?.[0]).toEqual([created, null])
   })

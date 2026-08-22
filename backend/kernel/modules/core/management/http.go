@@ -53,6 +53,14 @@ func registerContentRoutes(router chi.Router, sites *Sites, resources *Resources
 	router.Delete("/sites/{siteID}/resources/{resourceID}", handler.deleteResource)
 	router.Post("/sites/{siteID}/resources/{resourceID}/restore", handler.restoreResource)
 	router.Delete("/sites/{siteID}/resources/{resourceID}/permanent", handler.deleteResourcePermanent)
+	router.Get("/sites/{siteID}/resources/{resourceID}/items", handler.listLibraryItems)
+	router.Post("/sites/{siteID}/resources/{resourceID}/items", handler.createLibraryItem)
+	router.Get("/sites/{siteID}/library-items/{itemID}", handler.getLibraryItem)
+	router.Patch("/sites/{siteID}/library-items/{itemID}", handler.updateLibraryItem)
+	router.Post("/sites/{siteID}/library-items/{itemID}/move", handler.moveLibraryItem)
+	router.Delete("/sites/{siteID}/library-items/{itemID}", handler.deleteLibraryItem)
+	router.Delete("/sites/{siteID}/library-items/{itemID}/permanent", handler.deleteLibraryItemPermanent)
+	router.Post("/sites/{siteID}/library-items/{itemID}/restore", handler.restoreLibraryItem)
 	router.Get("/sites/{siteID}/menu", handler.menu)
 }
 
@@ -203,14 +211,15 @@ func (h *contentHTTP) resourceMetadata(response http.ResponseWriter, request *ht
 }
 
 type createResourceRequest struct {
-	ParentID    *resource.ID      `json:"parent_id"`
-	Type        resourcetype.Code `json:"type"`
-	Template    *template.Code    `json:"template_code"`
-	Title       string            `json:"title"`
-	MenuTitle   string            `json:"menu_title"`
-	Slug        string            `json:"slug"`
-	ExternalURL *string           `json:"external_url"`
-	Settings    map[string]any    `json:"settings"`
+	ParentID     *resource.ID      `json:"parent_id"`
+	Type         resourcetype.Code `json:"type"`
+	Template     *template.Code    `json:"template_code"`
+	Title        string            `json:"title"`
+	MenuTitle    string            `json:"menu_title"`
+	Slug         string            `json:"slug"`
+	ExternalURL  *string           `json:"external_url"`
+	Fields       map[string]any    `json:"fields"`
+	TypeSettings map[string]any    `json:"type_settings"`
 }
 
 func (h *contentHTTP) createResource(response http.ResponseWriter, request *http.Request) {
@@ -222,19 +231,20 @@ func (h *contentHTTP) createResource(response http.ResponseWriter, request *http
 	if !decodeBody(response, request, &payload) {
 		return
 	}
-	if payload.Settings == nil {
-		writeValidation(response, "settings is required")
+	if payload.Fields == nil || payload.TypeSettings == nil {
+		writeValidation(response, "fields and type_settings are required")
 		return
 	}
 	result, err := h.resources.CreateResource(request.Context(), actor(request), id, ResourceCreateInput{
-		ParentID:    payload.ParentID,
-		Type:        payload.Type,
-		Template:    payload.Template,
-		Title:       payload.Title,
-		MenuTitle:   payload.MenuTitle,
-		Slug:        payload.Slug,
-		ExternalURL: payload.ExternalURL,
-		Settings:    payload.Settings,
+		ParentID:     payload.ParentID,
+		Type:         payload.Type,
+		Template:     payload.Template,
+		Title:        payload.Title,
+		MenuTitle:    payload.MenuTitle,
+		Slug:         payload.Slug,
+		ExternalURL:  payload.ExternalURL,
+		Fields:       payload.Fields,
+		TypeSettings: payload.TypeSettings,
 	})
 	writeResult(response, http.StatusCreated, result, err)
 }
@@ -292,7 +302,8 @@ type updateResourceRequest struct {
 	Sort          *int              `json:"sort"`
 	PublishedAt   *time.Time        `json:"published_at"`
 	UnpublishedAt *time.Time        `json:"unpublished_at"`
-	Settings      map[string]any    `json:"settings"`
+	Fields        map[string]any    `json:"fields"`
+	TypeSettings  map[string]any    `json:"type_settings"`
 }
 
 func (h *contentHTTP) updateResource(response http.ResponseWriter, request *http.Request) {
@@ -310,8 +321,8 @@ func (h *contentHTTP) updateResource(response http.ResponseWriter, request *http
 	}
 	if payload.IsPublic == nil || payload.IsSearchable == nil ||
 		payload.InMenu == nil || payload.InSitemap == nil || payload.Sort == nil ||
-		payload.Settings == nil {
-		writeValidation(response, "resource flags, sort and settings are required")
+		payload.Fields == nil || payload.TypeSettings == nil {
+		writeValidation(response, "resource flags, sort, fields and type_settings are required")
 		return
 	}
 	result, err := h.resources.UpdateResource(
@@ -334,7 +345,8 @@ func (h *contentHTTP) updateResource(response http.ResponseWriter, request *http
 			Sort:          *payload.Sort,
 			PublishedAt:   payload.PublishedAt,
 			UnpublishedAt: payload.UnpublishedAt,
-			Settings:      payload.Settings,
+			Fields:        payload.Fields,
+			TypeSettings:  payload.TypeSettings,
 		},
 	)
 	writeResult(response, http.StatusOK, result, err)
@@ -604,6 +616,135 @@ func (h *contentHTTP) restoreResource(response http.ResponseWriter, request *htt
 		return
 	}
 	response.WriteHeader(http.StatusNoContent)
+}
+
+type libraryItemRequest struct {
+	Template      *template.Code `json:"template_code"`
+	Title         string         `json:"title"`
+	Slug          string         `json:"slug"`
+	Annotation    string         `json:"annotation"`
+	Content       string         `json:"content"`
+	IsPublic      *bool          `json:"is_public"`
+	IsSearchable  *bool          `json:"is_searchable"`
+	PublishedAt   *time.Time     `json:"published_at"`
+	UnpublishedAt *time.Time     `json:"unpublished_at"`
+	Fields        map[string]any `json:"fields"`
+}
+
+func (h *contentHTTP) listLibraryItems(response http.ResponseWriter, request *http.Request) {
+	siteID, libraryID, ok := resourceWidgetResourceParams(response, request)
+	if !ok {
+		return
+	}
+	limit := 25
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			writeBadRequest(response, "limit is invalid")
+			return
+		}
+		limit = parsed
+	}
+	result, err := h.resources.LibraryItems(request.Context(), actor(request), siteID, libraryID, request.URL.Query().Get("cursor"), limit, request.URL.Query().Get("search"))
+	writeResult(response, http.StatusOK, result, err)
+}
+
+func (h *contentHTTP) createLibraryItem(response http.ResponseWriter, request *http.Request) {
+	siteID, libraryID, ok := resourceWidgetResourceParams(response, request)
+	if !ok {
+		return
+	}
+	var payload libraryItemRequest
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	if payload.Fields == nil {
+		writeValidation(response, "fields are required")
+		return
+	}
+	result, err := h.resources.CreateLibraryItem(request.Context(), actor(request), siteID, libraryID, LibraryItemCreateInput{Template: payload.Template, Title: payload.Title, Slug: payload.Slug, Annotation: payload.Annotation, Content: payload.Content, IsPublic: payload.IsPublic, IsSearchable: payload.IsSearchable, PublishedAt: payload.PublishedAt, UnpublishedAt: payload.UnpublishedAt, Fields: payload.Fields})
+	writeResult(response, http.StatusCreated, result, err)
+}
+
+func (h *contentHTTP) getLibraryItem(response http.ResponseWriter, request *http.Request) {
+	siteID, itemID, ok := libraryItemParams(response, request)
+	if !ok {
+		return
+	}
+	result, err := h.resources.LibraryItem(request.Context(), actor(request), siteID, itemID)
+	writeResult(response, http.StatusOK, result, err)
+}
+
+func (h *contentHTTP) updateLibraryItem(response http.ResponseWriter, request *http.Request) {
+	siteID, itemID, ok := libraryItemParams(response, request)
+	if !ok {
+		return
+	}
+	var payload libraryItemRequest
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	if payload.Fields == nil || payload.IsPublic == nil || payload.IsSearchable == nil {
+		writeValidation(response, "fields and publication flags are required")
+		return
+	}
+	result, err := h.resources.UpdateLibraryItem(request.Context(), actor(request), siteID, itemID, LibraryItemUpdateInput{LibraryItemCreateInput: LibraryItemCreateInput{Template: payload.Template, Title: payload.Title, Slug: payload.Slug, Annotation: payload.Annotation, Content: payload.Content, PublishedAt: payload.PublishedAt, UnpublishedAt: payload.UnpublishedAt, Fields: payload.Fields}, IsPublic: payload.IsPublic, IsSearchable: payload.IsSearchable})
+	writeResult(response, http.StatusOK, result, err)
+}
+
+func (h *contentHTTP) moveLibraryItem(response http.ResponseWriter, request *http.Request) {
+	siteID, itemID, ok := libraryItemParams(response, request)
+	if !ok {
+		return
+	}
+	var payload struct {
+		LibraryID resource.ID `json:"library_id"`
+	}
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	result, err := h.resources.MoveLibraryItem(request.Context(), actor(request), siteID, itemID, payload.LibraryID)
+	writeResult(response, http.StatusOK, result, err)
+}
+
+func (h *contentHTTP) deleteLibraryItem(response http.ResponseWriter, request *http.Request) {
+	h.changeLibraryItemDeleted(response, request, false, false)
+}
+func (h *contentHTTP) deleteLibraryItemPermanent(response http.ResponseWriter, request *http.Request) {
+	h.changeLibraryItemDeleted(response, request, false, true)
+}
+func (h *contentHTTP) restoreLibraryItem(response http.ResponseWriter, request *http.Request) {
+	h.changeLibraryItemDeleted(response, request, true, false)
+}
+func (h *contentHTTP) changeLibraryItemDeleted(response http.ResponseWriter, request *http.Request, restore, permanent bool) {
+	siteID, itemID, ok := libraryItemParams(response, request)
+	if !ok {
+		return
+	}
+	var err error
+	if restore {
+		err = h.resources.RestoreLibraryItem(request.Context(), actor(request), siteID, itemID)
+	} else {
+		err = h.resources.DeleteLibraryItem(request.Context(), actor(request), siteID, itemID, permanent)
+	}
+	if err != nil {
+		writeManagementError(response, err)
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func libraryItemParams(response http.ResponseWriter, request *http.Request) (site.ID, resource.ID, bool) {
+	siteID, ok := siteID(response, request)
+	if !ok {
+		return 0, 0, false
+	}
+	parsed, err := strconv.ParseInt(chi.URLParam(request, "itemID"), 10, 64)
+	if err != nil || parsed <= 0 {
+		writeBadRequest(response, "item_id is invalid")
+		return 0, 0, false
+	}
+	return siteID, resource.ID(parsed), true
 }
 
 func actor(request *http.Request) security.Actor {

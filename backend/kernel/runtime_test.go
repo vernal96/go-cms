@@ -792,6 +792,9 @@ func (customFieldType) Compile(any) (field.ValueType, error) {
 
 type customValueType struct{}
 
+func (customValueType) StorageKind() field.StorageKind { return field.StorageString }
+func (customValueType) Multiple() bool                 { return false }
+
 func (customValueType) Normalize(value any) (any, error) {
 	result, ok := value.(string)
 	if !ok {
@@ -827,6 +830,10 @@ func (t customResourceType) Code() resourcetype.Code {
 
 func (t customResourceType) PathMode() resourcetype.PathMode {
 	return t.pathMode
+}
+
+func (customResourceType) Capabilities() resourcetype.Capabilities {
+	return resourcetype.Capabilities{MutableType: true}
 }
 
 func (customResourceType) Normalize(
@@ -1378,7 +1385,7 @@ func TestCoreModuleRegistersAllStandardFieldTypes(t *testing.T) {
 		}
 	}
 
-	if len(registry.ResourceTypes) != 3 {
+	if len(registry.ResourceTypes) != 4 {
 		t.Fatalf(
 			"standard resource types = %d",
 			len(registry.ResourceTypes),
@@ -1395,6 +1402,7 @@ func TestCoreModuleRegistersAllStandardFieldTypes(t *testing.T) {
 		resourcetype.Page,
 		resourcetype.Link,
 		resourcetype.ResourceLink,
+		resourcetype.Library,
 	} {
 		if !resourceTypes[code] {
 			t.Fatalf("standard resource type %q is missing", code)

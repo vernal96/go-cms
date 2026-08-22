@@ -255,7 +255,7 @@ func (r valueResolver) resolve(variable string) (string, bool) {
 		return stringValue(r.site.Locale)
 	}
 	if key, found := strings.CutPrefix(variable, "resource.field."); found {
-		return scalarValue(r.resource.Settings[key])
+		return scalarValue(r.resource.Fields[key])
 	}
 	if key, found := strings.CutPrefix(variable, "site.field."); found {
 		return scalarValue(r.site.Settings[key])

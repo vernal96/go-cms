@@ -46,15 +46,15 @@ describe('ResourceEditView schema transitions', () => {
           unpublished_at: null,
           deleted: false,
           deleted_at: null,
-          settings: { page_title: 'Old title' },
+			fields: { page_title: 'Old title' }, type_settings: {},
 					widgets: [],
         },
         permissions: { update: true, delete: true, restore: true },
       })
       .mockResolvedValueOnce({
         types: [
-          { code: 'page', label: 'Страница' },
-          { code: 'link', label: 'Ссылка' },
+			{ code: 'page', label: 'Страница', capabilities: { supports_template: true, supports_content: true, supports_widgets: true, supports_fields: true, mutable_type: true } },
+			{ code: 'link', label: 'Ссылка', capabilities: { mutable_type: true } },
         ],
         templates: [
           {
@@ -127,7 +127,7 @@ describe('ResourceEditView schema transitions', () => {
       .findComponent({ name: 'ElForm' })
       .props('model') as Record<string, unknown>
     expect(model.template_code).toBe('landing')
-    expect(model.settings).toEqual({ hero_title: '', columns: null })
+    expect(model.fields).toEqual({ hero_title: '', columns: null })
 		expect(wrapper.findAllComponents({ name: 'ElTabPane' }).some(
 			(tab) => tab.props('name') === 'widgets',
 		)).toBe(false)
@@ -136,7 +136,7 @@ describe('ResourceEditView schema transitions', () => {
     await flushPromises()
     expect(model.type).toBe('link')
     expect(model.template_code).toBeNull()
-    expect(model.settings).toEqual({})
+    expect(model.fields).toEqual({})
     expect(ElMessageBox.confirm).toHaveBeenCalledTimes(2)
   })
 
@@ -150,15 +150,15 @@ describe('ResourceEditView schema transitions', () => {
 					content_type: 'html', content: '', external_url: null, is_public: true,
 					is_searchable: true, in_menu: true, in_sitemap: true, sort: 0,
 					published_at: null, unpublished_at: null, deleted: false, deleted_at: null,
-					settings: {},
+					fields: {}, type_settings: {},
 					widgets: [],
 				},
 				permissions: { update: true, delete: true, restore: true },
 			})
 			.mockResolvedValueOnce({
 				types: [
-					{ code: 'page', label: 'Страница' },
-					{ code: 'link', label: 'Ссылка' },
+					{ code: 'page', label: 'Страница', capabilities: { supports_template: true, supports_content: true, supports_fields: true, mutable_type: true } },
+					{ code: 'link', label: 'Ссылка', capabilities: { mutable_type: true } },
 				],
 				templates: [{ code: 'page', label: 'Страница', icon: 'document', fields: [], supports_resource_widgets: false, widget_areas: [] }],
 				widgets: [],

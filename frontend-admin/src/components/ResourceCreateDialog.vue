@@ -17,6 +17,7 @@ import type {
   ResourceCreatePayload,
   ResourceMetadata,
   ResourceTreeItem,
+  ResourceTypeCode,
 } from '../types/admin'
 import DynamicFieldsForm from './fields/DynamicFieldsForm.vue'
 import {
@@ -43,19 +44,28 @@ const metadata = ref<ResourceMetadata>({ types: [], templates: [], widgets: [], 
 const parent = ref<ResourceTreeItem | null>(null)
 const noTemplateValue = null as unknown as string
 const form = reactive({
-  type: 'page' as 'page' | 'link',
+  type: 'page' as ResourceTypeCode,
   template_code: null as string | null,
   title: '',
   menu_title: '',
   slug: '',
   external_url: '',
-  settings: {} as Record<string, unknown>,
+  fields: {} as Record<string, unknown>,
+  type_settings: { item_url_pattern: '', default_item_template: null as string | null },
 })
 const selectedTemplate = computed(
   () =>
     metadata.value.templates.find((item) => item.code === form.template_code) ??
     null,
 )
+const selectedType = computed(() => metadata.value.types.find((item) => item.code === form.type) ?? null)
+function capability(snake: string, pascal: string): boolean {
+  const values = selectedType.value?.capabilities as Record<string, unknown> | undefined
+  return values?.[snake] === true || values?.[pascal] === true
+}
+const supportsTemplate = computed(() => capability('supports_template', 'SupportsTemplate'))
+const supportsFields = computed(() => capability('supports_fields', 'SupportsFields'))
+const ownsLibraryItems = computed(() => capability('owns_library_items', 'OwnsLibraryItems'))
 const displayedFieldErrors = computed<DynamicFieldErrors>(() => {
   const result = { ...localFieldErrors.value }
   for (const error of serverFieldErrors.value) {
@@ -78,7 +88,8 @@ async function open(parentItem: ResourceTreeItem | null): Promise<void> {
     menu_title: '',
     slug: '',
     external_url: '',
-    settings: {},
+    fields: {},
+    type_settings: { item_url_pattern: '', default_item_template: null },
   })
   errorMessage.value = null
   serverFieldErrors.value = []
@@ -92,7 +103,7 @@ async function open(parentItem: ResourceTreeItem | null): Promise<void> {
     )
     form.type = metadata.value.types[0]?.code ?? 'link'
     form.template_code = null
-    form.settings = createFieldValues(selectedTemplate.value?.fields ?? [])
+    form.fields = createFieldValues(selectedTemplate.value?.fields ?? [])
   } catch (error) {
     errorMessage.value = 'Не удалось загрузить типы ресурсов.'
     emit('error', error)
@@ -105,7 +116,7 @@ watch(
   () => form.template_code,
   (code, previous) => {
     if (!previous || code === previous || !visible.value) return
-    form.settings = createFieldValues(selectedTemplate.value?.fields ?? [])
+    form.fields = createFieldValues(selectedTemplate.value?.fields ?? [])
     serverFieldErrors.value = []
     localFieldErrors.value = {}
   },
@@ -115,8 +126,8 @@ watch(
   () => form.type,
   (type) => {
     if (!visible.value) return
-    if (type === 'link') form.settings = {}
-    else form.settings = createFieldValues(selectedTemplate.value?.fields ?? [])
+    if (type === 'link') form.fields = {}
+    else form.fields = createFieldValues(selectedTemplate.value?.fields ?? [])
   },
 )
 
@@ -132,23 +143,23 @@ async function submit(): Promise<void> {
     errorMessage.value = 'Укажите адрес ссылки.'
     return
   }
-  const fields =
-    form.type === 'page' ? (selectedTemplate.value?.fields ?? []) : []
+  const fields = supportsFields.value ? (selectedTemplate.value?.fields ?? []) : []
   if (unsupportedFieldTypes(fields).length > 0) {
     errorMessage.value =
       'Форма содержит неизвестные типы полей и не может быть отправлена.'
     return
   }
-  localFieldErrors.value = validateFieldValues(fields, form.settings)
+  localFieldErrors.value = validateFieldValues(fields, form.fields)
   if (Object.keys(localFieldErrors.value).length > 0) return
   const payload: ResourceCreatePayload = {
     parent_id: parent.value?.id ?? null,
     type: form.type,
-    template_code: form.type === 'page' ? form.template_code : null,
+    template_code: supportsTemplate.value ? form.template_code : null,
     title: form.title.trim(),
     menu_title: form.menu_title.trim(),
     slug: form.slug.trim(),
-    settings: { ...form.settings },
+    fields: supportsFields.value ? { ...form.fields } : {},
+    type_settings: ownsLibraryItems.value ? { ...form.type_settings } : {},
   }
   if (form.type === 'link') payload.external_url = form.external_url.trim()
 
@@ -195,7 +206,7 @@ defineExpose({ open })
           />
         </el-select>
       </el-form-item>
-      <el-form-item v-if="form.type === 'page'" label="Шаблон">
+      <el-form-item v-if="supportsTemplate" label="Шаблон">
         <el-select v-model="form.template_code" class="full-width">
           <el-option label="(без шаблона)" :value="noTemplateValue" />
           <el-option
@@ -223,12 +234,20 @@ defineExpose({ open })
           placeholder="https://example.com"
         />
       </el-form-item>
+      <template v-if="ownsLibraryItems">
+        <el-form-item label="Шаблон URL ресурса"><el-input v-model="form.type_settings.item_url_pattern" placeholder="/{slug}" /></el-form-item>
+        <el-form-item label="Шаблон ресурса по умолчанию">
+          <el-select v-model="form.type_settings.default_item_template" clearable class="full-width">
+            <el-option v-for="item in metadata.templates" :key="item.code" :label="item.label" :value="item.code" />
+          </el-select>
+        </el-form-item>
+      </template>
       <dynamic-fields-form
-        v-if="form.type === 'page' && selectedTemplate"
+		v-if="supportsFields && selectedTemplate"
         :fields="selectedTemplate.fields"
-        :model-value="form.settings"
+        :model-value="form.fields"
         :errors="displayedFieldErrors"
-        @update:model-value="form.settings = $event"
+        @update:model-value="form.fields = $event"
       />
     </el-form>
     <template #footer>

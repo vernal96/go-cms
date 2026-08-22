@@ -104,6 +104,12 @@ func Compile(
 				definition.Type,
 			)
 		}
+		if _, ok := valueType.(StorageValueType); !ok {
+			return nil, fmt.Errorf(
+				"field type %q returned value type without storage semantics",
+				definition.Type,
+			)
+		}
 
 		rules, err := compileRules(valueType.Rules(), definition.Rules)
 		if err != nil {
@@ -140,6 +146,43 @@ func Compile(
 	}
 
 	return schema, nil
+}
+
+// StoredValues converts already normalized values to adapter-neutral typed
+// rows. Validation remains owned by Schema.Validate.
+func (s *Schema) StoredValues(values map[string]any) ([]StoredValue, error) {
+	if s == nil {
+		return nil, errors.New("field schema is nil")
+	}
+	result := make([]StoredValue, 0, len(values))
+	for _, definition := range s.definitions {
+		value, exists := values[definition.Key]
+		if !exists {
+			continue
+		}
+		compiled := s.fields[definition.Key]
+		storage, ok := compiled.valueType.(StorageValueType)
+		if !ok {
+			return nil, fmt.Errorf("field %q has no storage semantics", definition.Key)
+		}
+		if !storage.Multiple() {
+			result = append(result, StoredValue{Key: definition.Key, Kind: storage.StorageKind(), Value: value})
+			continue
+		}
+		switch items := value.(type) {
+		case []string:
+			for position, item := range items {
+				result = append(result, StoredValue{Key: definition.Key, Position: position, Kind: storage.StorageKind(), Multiple: true, Value: item})
+			}
+		case []any:
+			for position, item := range items {
+				result = append(result, StoredValue{Key: definition.Key, Position: position, Kind: storage.StorageKind(), Multiple: true, Value: item})
+			}
+		default:
+			return nil, fmt.Errorf("field %q normalized multi-value has type %T", definition.Key, value)
+		}
+	}
+	return result, nil
 }
 
 func (s *Schema) Definitions() []Definition {

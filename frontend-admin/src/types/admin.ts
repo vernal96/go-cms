@@ -226,11 +226,30 @@ export interface ResourceChildrenResponse {
 }
 
 export interface ResourceMetadata {
-  types: Array<{ code: 'page' | 'link'; label: string }>
+  types: ResourceTypeMetadata[]
   templates: ResourceTemplate[]
   widgets: WidgetDefinition[]
   extensions: ResourceExtensionMetadata[]
 }
+
+export type ResourceTypeCode = 'page' | 'link' | 'resource_link' | 'library'
+export interface ResourceTypeCapabilities {
+  SupportsTemplate?: boolean
+  SupportsContent?: boolean
+  SupportsWidgets?: boolean
+  SupportsFields?: boolean
+  MutableType?: boolean
+  OwnsLibraryItems?: boolean
+  DefaultIcon?: string
+  supports_template?: boolean
+  supports_content?: boolean
+  supports_widgets?: boolean
+  supports_fields?: boolean
+  mutable_type?: boolean
+  owns_library_items?: boolean
+  default_icon?: string
+}
+export interface ResourceTypeMetadata { code: ResourceTypeCode; label: string; capabilities: ResourceTypeCapabilities }
 
 export type WidgetArea = 'body' | 'sidebar'
 
@@ -272,7 +291,7 @@ export interface ResourceWidget {
 export interface ResourceExtensionMetadata {
   code: string
   title: string
-  applies_to: Array<'page' | 'link'>
+  applies_to: ResourceTypeCode[]
   fields: Array<{
     key: string
     label: string
@@ -307,20 +326,21 @@ export interface SEOPreview {
 
 export interface ResourceCreatePayload {
   parent_id: number | null
-  type: 'page' | 'link'
+  type: ResourceTypeCode
   template_code?: string | null
   title: string
   menu_title: string
   slug: string
   external_url?: string
-  settings: Record<string, unknown>
+  fields: Record<string, unknown>
+  type_settings: Record<string, unknown>
 }
 
 export interface Resource {
   id: number
   site_id: number
   parent_id: number | null
-  type: 'page' | 'link'
+  type: ResourceTypeCode
   template_code: string | null
   title: string
   menu_title: string
@@ -339,7 +359,8 @@ export interface Resource {
   unpublished_at: string | null
   deleted: boolean
   deleted_at: string | null
-  settings: Record<string, unknown>
+  fields: Record<string, unknown>
+  type_settings: Record<string, unknown>
   widgets: ResourceWidget[]
 }
 
@@ -351,6 +372,7 @@ export interface ResourceDetailsResponse {
 export interface ResourceOption {
   id: number
   parent_id: number | null
+  type: ResourceTypeCode
   display_title: string
   path: string | null
 }
@@ -366,7 +388,7 @@ export interface ResourceLookupResponse {
 
 export interface ResourceUpdatePayload {
   parent_id: number | null
-  type: 'page' | 'link'
+  type: ResourceTypeCode
   template_code: string | null
   title: string
   menu_title: string
@@ -382,7 +404,43 @@ export interface ResourceUpdatePayload {
   sort: number
   published_at: string | null
   unpublished_at: string | null
-  settings: Record<string, unknown>
+  fields: Record<string, unknown>
+  type_settings: Record<string, unknown>
+}
+
+export interface LibraryItem {
+  id: number
+  site_id: number
+  library_id: number
+  template_code: string | null
+  title: string
+  slug: string
+  annotation: string
+  content_type: string | null
+  content: string
+  is_public: boolean
+  is_searchable: boolean
+  published_at: string | null
+  unpublished_at: string | null
+  deleted: boolean
+  deleted_at: string | null
+  fields: Record<string, unknown>
+  widgets: ResourceWidget[]
+  effective_url: string
+}
+export interface LibraryItemDetailsResponse { item: LibraryItem; permissions: { update: boolean; delete: boolean; restore: boolean } }
+export interface LibraryItemsResponse { items: LibraryItem[]; next_cursor: string }
+export interface LibraryItemPayload {
+  template_code: string | null
+  title: string
+  slug: string
+  annotation: string
+  content: string
+  is_public: boolean
+  is_searchable: boolean
+  published_at: string | null
+  unpublished_at: string | null
+  fields: Record<string, unknown>
 }
 
 export interface AdminTableColumn {

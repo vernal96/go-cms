@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres/medialock"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
@@ -40,7 +41,8 @@ func (r *Repository) Query(ctx context.Context, query resource.Query) (resource.
 	if err != nil {
 		return resource.Page{}, err
 	}
-	order, err := resourceQueryOrder(query.Sort)
+	whereArgs := append([]any(nil), args...)
+	order, args, err := resourceQueryOrder(query.Sort, args)
 	if err != nil {
 		return resource.Page{}, err
 	}
@@ -57,7 +59,7 @@ func (r *Repository) Query(ctx context.Context, query resource.Query) (resource.
 SELECT id, site_id, parent_id, type, template, content_type,
        title, menu_title, slug, path, annotation, content, image_media_id,
        target_resource_id, external_url, is_public, is_searchable, in_menu,
-       in_sitemap, sort, published_at, unpublished_at, settings, created_at,
+       in_sitemap, sort, published_at, unpublished_at, type_settings, created_at,
        updated_at, created_by, updated_by, deleted_at, deleted_by
 FROM core.resources r
 WHERE `+where+`
@@ -78,9 +80,13 @@ LIMIT `+limit+offset+`;`, limitArg...)
 	if err := rows.Err(); err != nil {
 		return resource.Page{}, fmt.Errorf("iterate resources: %w", err)
 	}
+	rows.Close()
+	if err := loadResourceFields(ctx, r.connector.Pool(), items); err != nil {
+		return resource.Page{}, err
+	}
 	result := resource.Page{Items: items}
 	if query.PerPage > 0 {
-		if err := r.connector.Pool().QueryRow(ctx, `SELECT count(*) FROM core.resources r WHERE `+where+`;`, args...).Scan(&result.Total); err != nil {
+		if err := r.connector.Pool().QueryRow(ctx, `SELECT count(*) FROM core.resources r WHERE `+where+`;`, whereArgs...).Scan(&result.Total); err != nil {
 			return resource.Page{}, fmt.Errorf("count resources: %w", err)
 		}
 	}
@@ -122,20 +128,20 @@ func resourceQueryFilter(condition resource.FilterCondition, add func(any) strin
 	column, custom := resourceQueryColumn(condition.Field)
 	if custom {
 		key := strings.TrimPrefix(string(condition.Field), "resource.field.")
-		value, err := json.Marshal(condition.Value)
+		kind, value, err := filterStorageValue(condition.Kind, condition.Value)
 		if err != nil {
-			return "", fmt.Errorf("encode custom filter: %w", err)
+			return "", err
 		}
-		if condition.Operator == resource.FilterGreaterThan || condition.Operator == resource.FilterGreaterThanOrEqual || condition.Operator == resource.FilterLessThan || condition.Operator == resource.FilterLessThanOrEqual {
-			return "jsonb_typeof(r.settings -> " + add(key) + ") = 'number' AND (r.settings ->> " + add(key) + ")::numeric " + filterOperatorSQL(condition.Operator) + " " + add(string(value)) + "::numeric", nil
+		column, err := fieldValueColumn(kind)
+		if err != nil {
+			return "", err
 		}
-		if condition.Operator == resource.FilterIn {
-			return "EXISTS (SELECT 1 FROM jsonb_array_elements(" + add(string(value)) + "::jsonb) candidate WHERE r.settings -> " + add(key) + " = candidate)", nil
+		operator := filterOperatorSQL(condition.Operator)
+		comparison := "value." + column + " " + operator + " " + add(value)
+		if condition.Operator == resource.FilterIn || condition.Operator == resource.FilterNotIn {
+			comparison = "value." + column + " " + operator + " (" + add(value) + ")"
 		}
-		if condition.Operator == resource.FilterNotIn {
-			return "NOT EXISTS (SELECT 1 FROM jsonb_array_elements(" + add(string(value)) + "::jsonb) candidate WHERE r.settings -> " + add(key) + " = candidate)", nil
-		}
-		return "r.settings -> " + add(key) + " " + filterOperatorSQL(condition.Operator) + " " + add(string(value)) + "::jsonb", nil
+		return "EXISTS (SELECT 1 FROM core.resource_field_values value WHERE value.resource_id = r.id AND value.site_id = r.site_id AND value.field_key = " + add(key) + " AND value.value_kind = " + add(kind) + " AND " + comparison + ")", nil
 	}
 	operator := filterOperatorSQL(condition.Operator)
 	if condition.Operator == resource.FilterIn || condition.Operator == resource.FilterNotIn {
@@ -153,6 +159,69 @@ func resourceQueryFilter(condition resource.FilterCondition, add func(any) strin
 		return column + " " + operator + " (" + add(values) + "::text[])", nil
 	}
 	return column + " " + operator + " " + add(condition.Value), nil
+}
+
+func filterStorageValue(explicit field.StorageKind, value any) (field.StorageKind, any, error) {
+	if explicit != "" {
+		if !resource.ValidStorageKind(explicit) {
+			return "", nil, fmt.Errorf("resource field storage kind %q is invalid", explicit)
+		}
+		return explicit, value, nil
+	}
+	switch typed := value.(type) {
+	case string:
+		return field.StorageString, typed, nil
+	case bool:
+		return field.StorageBoolean, typed, nil
+	case int:
+		return field.StorageInteger, int64(typed), nil
+	case int64:
+		return field.StorageInteger, typed, nil
+	case float64:
+		return field.StorageFloat, typed, nil
+	case json.Number:
+		if integer, err := typed.Int64(); err == nil {
+			return field.StorageInteger, integer, nil
+		}
+		floatValue, err := typed.Float64()
+		if err != nil {
+			return "", nil, errors.New("resource field numeric filter is invalid")
+		}
+		return field.StorageFloat, floatValue, nil
+	case []string:
+		return field.StorageString, typed, nil
+	case []int64:
+		return field.StorageInteger, typed, nil
+	case []any:
+		if text, ok := textValues(typed); ok {
+			return field.StorageString, text, nil
+		}
+		if integers, ok := integerValues(typed); ok {
+			return field.StorageInteger, integers, nil
+		}
+	}
+	return "", nil, fmt.Errorf("cannot infer resource field storage kind from %T", value)
+}
+
+func fieldValueColumn(kind field.StorageKind) (string, error) {
+	switch kind {
+	case field.StorageString:
+		return "value_string", nil
+	case field.StorageInteger:
+		return "value_integer", nil
+	case field.StorageFloat:
+		return "value_float", nil
+	case field.StorageBoolean:
+		return "value_boolean", nil
+	case field.StorageTimestamp:
+		return "value_timestamp", nil
+	case field.StorageReference:
+		return "value_reference", nil
+	case field.StorageJSON:
+		return "value_json", nil
+	default:
+		return "", fmt.Errorf("resource field storage kind %q is invalid", kind)
+	}
 }
 
 func resourceQueryColumn(field resource.FieldPath) (string, bool) {
@@ -246,19 +315,34 @@ func integerValues(value any) ([]int64, bool) {
 	}
 	return result, true
 }
-func resourceQueryOrder(sorts []resource.Sort) (string, error) {
+func resourceQueryOrder(sorts []resource.Sort, args []any) (string, []any, error) {
 	parts := make([]string, 0, len(sorts)+1)
 	seenID := false
 	for _, sort := range sorts {
 		if !resource.SortableField(sort.Field) {
-			return "", errors.New("resource query sort field is invalid")
+			return "", nil, errors.New("resource query sort field is invalid")
 		}
-		column, _ := resourceQueryColumn(sort.Field)
+		column, custom := resourceQueryColumn(sort.Field)
+		if custom {
+			if !resource.ValidStorageKind(sort.Kind) {
+				return "", nil, errors.New("resource query custom sort storage kind is required")
+			}
+			valueColumn, err := fieldValueColumn(sort.Kind)
+			if err != nil {
+				return "", nil, err
+			}
+			key := strings.TrimPrefix(string(sort.Field), "resource.field.")
+			args = append(args, key)
+			keyArg := "$" + strconv.Itoa(len(args))
+			args = append(args, sort.Kind)
+			kindArg := "$" + strconv.Itoa(len(args))
+			column = "(SELECT value." + valueColumn + " FROM core.resource_field_values value WHERE value.resource_id=r.id AND value.site_id=r.site_id AND value.field_key=" + keyArg + " AND value.value_kind=" + kindArg + " ORDER BY value.position LIMIT 1)"
+		}
 		direction := "ASC"
 		if sort.Direction == resource.SortDescending {
 			direction = "DESC"
 		}
-		parts = append(parts, column+" "+direction)
+		parts = append(parts, column+" "+direction+" NULLS LAST")
 		if sort.Field == resource.FieldID {
 			seenID = true
 		}
@@ -266,7 +350,7 @@ func resourceQueryOrder(sorts []resource.Sort) (string, error) {
 	if !seenID {
 		parts = append(parts, "r.id ASC")
 	}
-	return strings.Join(parts, ", "), nil
+	return strings.Join(parts, ", "), args, nil
 }
 
 type Repository struct {
@@ -355,17 +439,26 @@ WHERE site_id = $1
 		}
 	}
 
-	rawSettings, err := json.Marshal(item.Settings)
+	if item.TypeSettings == nil {
+		item.TypeSettings = map[string]any{}
+	}
+	rawSettings, err := json.Marshal(item.TypeSettings)
 	if err != nil {
 		return resource.Resource{}, fmt.Errorf(
-			"encode resource settings: %w",
+			"encode resource type_settings: %w",
 			err,
 		)
 	}
 
 	result, err := scanResource(transaction.QueryRow(ctx, `
+WITH entity AS (
+    INSERT INTO core.resource_entities (site_id, storage_kind)
+    VALUES ($1, 'tree')
+    RETURNING id
+)
 INSERT INTO core.resources
 (
+    id,
     site_id,
     parent_id,
     type,
@@ -387,12 +480,13 @@ INSERT INTO core.resources
     sort,
     published_at,
     unpublished_at,
-    settings,
+    type_settings,
     created_by,
     updated_by
 )
 VALUES
 (
+	    (SELECT id FROM entity),
 	    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
 	    $11, $12, $13, $14, $15, $16, $17, $18, $19,
 	    $20, $21, $22::jsonb, $23, $23
@@ -402,7 +496,7 @@ RETURNING
 	    title, menu_title, slug, path, annotation, content, image_media_id,
     target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
-    sort, published_at, unpublished_at, settings, created_at,
+    sort, published_at, unpublished_at, type_settings, created_at,
 	    updated_at, created_by, updated_by, deleted_at, deleted_by;
 `,
 		item.SiteID,
@@ -435,6 +529,11 @@ RETURNING
 	if err := replaceFileReferences(ctx, transaction, result.ID, item.FileReferences); err != nil {
 		return resource.Resource{}, err
 	}
+	if err := replaceResourceFields(ctx, transaction, result.ID, result.SiteID, item.FieldValues); err != nil {
+		return resource.Resource{}, err
+	}
+	result.Fields = cloneFieldMap(item.Fields)
+	result.FieldValues = append([]field.StoredValue(nil), item.FieldValues...)
 	result.FileReferences = cloneFileReferences(item.FileReferences)
 
 	if err := transaction.Commit(ctx); err != nil {
@@ -459,7 +558,7 @@ SELECT
 	    title, menu_title, slug, path, annotation, content, image_media_id,
     target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
-    sort, published_at, unpublished_at, settings, created_at,
+    sort, published_at, unpublished_at, type_settings, created_at,
 	    updated_at, created_by, updated_by, deleted_at, deleted_by
 FROM core.resources
 WHERE id = $1;
@@ -480,6 +579,9 @@ WHERE id = $1;
 		r.connector.Pool(),
 		items,
 	); err != nil {
+		return resource.Resource{}, err
+	}
+	if err := loadResourceFields(ctx, r.connector.Pool(), items); err != nil {
 		return resource.Resource{}, err
 	}
 
@@ -503,7 +605,7 @@ SELECT
 	    title, menu_title, slug, path, annotation, content, image_media_id,
     target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
-    sort, published_at, unpublished_at, settings, created_at,
+    sort, published_at, unpublished_at, type_settings, created_at,
 	    updated_at, created_by, updated_by, deleted_at, deleted_by
 FROM core.resources
 WHERE site_id = $1
@@ -527,6 +629,9 @@ WHERE site_id = $1
 	); err != nil {
 		return resource.Resource{}, err
 	}
+	if err := loadResourceFields(ctx, r.connector.Pool(), items); err != nil {
+		return resource.Resource{}, err
+	}
 
 	return items[0], nil
 }
@@ -545,7 +650,7 @@ SELECT
 	    title, menu_title, slug, path, annotation, content, image_media_id,
     target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
-    sort, published_at, unpublished_at, settings, created_at,
+    sort, published_at, unpublished_at, type_settings, created_at,
 	    updated_at, created_by, updated_by, deleted_at, deleted_by
 FROM core.resources
 WHERE site_id = $1
@@ -573,6 +678,9 @@ ORDER BY parent_id NULLS FIRST, sort, id;
 		r.connector.Pool(),
 		result,
 	); err != nil {
+		return nil, err
+	}
+	if err := loadResourceFields(ctx, r.connector.Pool(), result); err != nil {
 		return nil, err
 	}
 
@@ -958,10 +1066,13 @@ SELECT EXISTS
 		return resource.Resource{}, err
 	}
 
-	rawSettings, err := json.Marshal(item.Settings)
+	if item.TypeSettings == nil {
+		item.TypeSettings = map[string]any{}
+	}
+	rawSettings, err := json.Marshal(item.TypeSettings)
 	if err != nil {
 		return resource.Resource{}, fmt.Errorf(
-			"encode resource settings: %w",
+			"encode resource type_settings: %w",
 			err,
 		)
 	}
@@ -989,7 +1100,7 @@ SET
 	    sort = $19,
 	    published_at = $20,
 	    unpublished_at = $21,
-	    settings = $22::jsonb,
+	    type_settings = $22::jsonb,
 	    updated_at = now(),
 	    updated_by = $23
 WHERE id = $1
@@ -998,7 +1109,7 @@ RETURNING
 	    title, menu_title, slug, path, annotation, content, image_media_id,
     target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
-    sort, published_at, unpublished_at, settings, created_at,
+    sort, published_at, unpublished_at, type_settings, created_at,
 	    updated_at, created_by, updated_by, deleted_at, deleted_by;
 `,
 		item.ID,
@@ -1066,6 +1177,11 @@ WHERE item.id = tree.id
 	if err := replaceFileReferences(ctx, transaction, updated.ID, item.FileReferences); err != nil {
 		return resource.Resource{}, err
 	}
+	if err := replaceResourceFields(ctx, transaction, updated.ID, updated.SiteID, item.FieldValues); err != nil {
+		return resource.Resource{}, err
+	}
+	updated.Fields = cloneFieldMap(item.Fields)
+	updated.FieldValues = append([]field.StoredValue(nil), item.FieldValues...)
 	updated.FileReferences = cloneFileReferences(item.FileReferences)
 
 	if !sameMediaID(current.ImageMediaID, item.ImageMediaID) &&
@@ -1235,6 +1351,11 @@ func (r *Repository) Delete(
 	if !exists {
 		return resource.ErrNotFound
 	}
+	libraryMediaIDs, err := treeLibraryItemMediaIDs(ctx, transaction, id, false)
+	if err != nil {
+		return err
+	}
+	observedMediaIDs = append(observedMediaIDs, libraryMediaIDs...)
 	if err := medialock.Lock(
 		ctx,
 		transaction,
@@ -1255,6 +1376,11 @@ func (r *Repository) Delete(
 	if !exists {
 		return resource.ErrNotFound
 	}
+	libraryMediaIDs, err = treeLibraryItemMediaIDs(ctx, transaction, id, true)
+	if err != nil {
+		return err
+	}
+	actualMediaIDs = append(actualMediaIDs, libraryMediaIDs...)
 	if !mediaIDsContained(actualMediaIDs, observedMediaIDs) {
 		return resource.ErrConflict
 	}
@@ -1267,14 +1393,44 @@ WITH RECURSIVE tree AS
     JOIN tree AS parent ON child.parent_id = parent.id
 )
 DELETE FROM core.file_field_references
-WHERE owner_kind = 'resource' AND owner_id IN (SELECT id FROM tree);
+WHERE owner_kind = 'resource' AND owner_id IN (
+    SELECT id FROM tree
+    UNION ALL
+    SELECT route.resource_id
+    FROM core.library_item_routes route
+    JOIN tree library ON library.id = route.library_id
+);
 `, id); err != nil {
+		return translateDeleteError(err)
+	}
+	if _, err := transaction.Exec(ctx, `
+WITH RECURSIVE tree AS (
+    SELECT id FROM core.resources WHERE id = $1
+    UNION ALL
+    SELECT child.id FROM core.resources child JOIN tree parent ON child.parent_id = parent.id
+)
+DELETE FROM core.resource_entities entity
+WHERE entity.storage_kind = 'library_item'
+  AND entity.id IN (
+      SELECT route.resource_id
+      FROM core.library_item_routes route
+      JOIN tree library ON library.id = route.library_id
+  );`, id); err != nil {
 		return translateDeleteError(err)
 	}
 
 	commandTag, err := transaction.Exec(ctx, `
-DELETE FROM core.resources
-WHERE id = $1;
+WITH RECURSIVE tree AS (
+    SELECT id FROM core.resources WHERE id = $1
+    UNION ALL
+    SELECT child.id FROM core.resources child JOIN tree parent ON child.parent_id = parent.id
+), deleted AS (
+    DELETE FROM core.resources item
+    WHERE item.id IN (SELECT id FROM tree)
+    RETURNING item.id
+)
+DELETE FROM core.resource_entities entity
+WHERE entity.storage_kind = 'tree' AND entity.id IN (SELECT id FROM deleted);
 `, id)
 	if err != nil {
 		return translateDeleteError(err)
@@ -1644,15 +1800,25 @@ func (r *Repository) ReorderWidgets(
 
 func lockWidgetResource(ctx context.Context, tx pgx.Tx, resourceID resource.ID) error {
 	var id resource.ID
-	if err := tx.QueryRow(ctx, `SELECT id FROM core.resources WHERE id = $1 FOR UPDATE;`, resourceID).Scan(&id); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT id FROM core.resource_entities WHERE id = $1 FOR UPDATE;`, resourceID).Scan(&id); err != nil {
 		return translateError(err)
 	}
 	return nil
 }
 
 func touchWidgetResource(ctx context.Context, tx pgx.Tx, resourceID resource.ID) error {
-	if _, err := tx.Exec(ctx, `UPDATE core.resources SET updated_at = now() WHERE id = $1;`, resourceID); err != nil {
+	command, err := tx.Exec(ctx, `UPDATE core.resources SET updated_at = now() WHERE id = $1;`, resourceID)
+	if err != nil {
 		return translateError(err)
+	}
+	if command.RowsAffected() == 0 {
+		command, err = tx.Exec(ctx, `UPDATE core.library_items SET updated_at = now() WHERE id = $1;`, resourceID)
+		if err != nil {
+			return translateError(err)
+		}
+	}
+	if command.RowsAffected() == 0 {
+		return resource.ErrNotFound
 	}
 	return nil
 }
@@ -1771,6 +1937,113 @@ ORDER BY resource_id, area, position, id;
 	return nil
 }
 
+func loadResourceFields(ctx context.Context, queryer rowQueryer, items []resource.Resource) error {
+	if len(items) == 0 {
+		return nil
+	}
+	indexes := make(map[resource.ID]int, len(items))
+	ids := make([]int64, len(items))
+	for index := range items {
+		indexes[items[index].ID] = index
+		ids[index] = int64(items[index].ID)
+		items[index].Fields = map[string]any{}
+		items[index].FieldValues = nil
+	}
+	rows, err := queryer.Query(ctx, `
+SELECT resource_id, field_key, position, is_multi, value_kind,
+       value_string, value_integer, value_float, value_boolean,
+       value_timestamp, value_reference, value_json
+FROM core.resource_field_values
+WHERE resource_id = ANY($1::bigint[])
+ORDER BY resource_id, field_key, position;`, ids)
+	if err != nil {
+		return fmt.Errorf("query resource fields: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			resourceID     resource.ID
+			stored         field.StoredValue
+			stringValue    *string
+			integerValue   *int64
+			floatValue     *float64
+			booleanValue   *bool
+			timestampValue *time.Time
+			referenceValue *int64
+			rawJSON        []byte
+		)
+		if err := rows.Scan(&resourceID, &stored.Key, &stored.Position, &stored.Multiple, &stored.Kind,
+			&stringValue, &integerValue, &floatValue, &booleanValue,
+			&timestampValue, &referenceValue, &rawJSON); err != nil {
+			return fmt.Errorf("scan resource field: %w", err)
+		}
+		switch stored.Kind {
+		case field.StorageString:
+			if stringValue == nil {
+				return errors.New("stored string resource field is empty")
+			}
+			stored.Value = *stringValue
+		case field.StorageInteger:
+			if integerValue == nil {
+				return errors.New("stored integer resource field is empty")
+			}
+			stored.Value = *integerValue
+		case field.StorageFloat:
+			if floatValue == nil {
+				return errors.New("stored float resource field is empty")
+			}
+			stored.Value = *floatValue
+		case field.StorageBoolean:
+			if booleanValue == nil {
+				return errors.New("stored boolean resource field is empty")
+			}
+			stored.Value = *booleanValue
+		case field.StorageTimestamp:
+			if timestampValue == nil {
+				return errors.New("stored timestamp resource field is empty")
+			}
+			stored.Value = *timestampValue
+		case field.StorageReference:
+			if referenceValue == nil {
+				return errors.New("stored reference resource field is empty")
+			}
+			stored.Value = *referenceValue
+		case field.StorageJSON:
+			decoder := json.NewDecoder(bytes.NewReader(rawJSON))
+			decoder.UseNumber()
+			if err := decoder.Decode(&stored.Value); err != nil {
+				return fmt.Errorf("decode resource field JSON: %w", err)
+			}
+		default:
+			return fmt.Errorf("stored resource field has invalid kind %q", stored.Kind)
+		}
+		index, exists := indexes[resourceID]
+		if !exists {
+			return fmt.Errorf("resource field references unexpected resource %d", resourceID)
+		}
+		items[index].FieldValues = append(items[index].FieldValues, stored)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate resource fields: %w", err)
+	}
+	for index := range items {
+		for _, stored := range items[index].FieldValues {
+			if !stored.Multiple {
+				items[index].Fields[stored.Key] = stored.Value
+				continue
+			}
+			if stored.Kind == field.StorageString {
+				values, _ := items[index].Fields[stored.Key].([]string)
+				items[index].Fields[stored.Key] = append(values, stored.Value.(string))
+			} else {
+				values, _ := items[index].Fields[stored.Key].([]any)
+				items[index].Fields[stored.Key] = append(values, stored.Value)
+			}
+		}
+	}
+	return nil
+}
+
 func scanResource(scanner rowScanner) (resource.Resource, error) {
 	var (
 		item             resource.Resource
@@ -1838,13 +2111,13 @@ func scanResource(scanner rowScanner) (resource.Resource, error) {
 	}
 	item.ExternalURL = externalURL
 
-	item.Settings = make(map[string]any)
+	item.TypeSettings = make(map[string]any)
 	if len(rawSettings) > 0 {
 		decoder := json.NewDecoder(bytes.NewReader(rawSettings))
 		decoder.UseNumber()
-		if err := decoder.Decode(&item.Settings); err != nil {
+		if err := decoder.Decode(&item.TypeSettings); err != nil {
 			return resource.Resource{}, fmt.Errorf(
-				"decode settings for resource %d: %w",
+				"decode type_settings for resource %d: %w",
 				item.ID,
 				err,
 			)
@@ -1868,6 +2141,13 @@ SELECT EXISTS
     FROM core.resources
     WHERE image_media_id = $1
       AND ($2 = 0 OR id <> $2)
+
+    UNION ALL
+
+    SELECT 1
+	FROM core.library_items
+	WHERE image_media_id = $1
+	  AND ($2 = 0 OR id <> $2)
 
     UNION ALL
 
@@ -1963,6 +2243,41 @@ FOR UPDATE OF item`
 	return result, exists, nil
 }
 
+func treeLibraryItemMediaIDs(ctx context.Context, transaction pgx.Tx, id resource.ID, lock bool) ([]media.ID, error) {
+	query := `
+WITH RECURSIVE tree AS (
+    SELECT id FROM core.resources WHERE id=$1
+    UNION ALL
+    SELECT child.id FROM core.resources child JOIN tree parent ON child.parent_id=parent.id
+)
+SELECT item.image_media_id
+FROM core.library_items item
+JOIN tree library ON library.id=item.library_id
+WHERE item.image_media_id IS NOT NULL`
+	if lock {
+		query += ` FOR UPDATE OF item`
+	}
+	rows, err := transaction.Query(ctx, query+`;`, id)
+	if err != nil {
+		return nil, fmt.Errorf("query library item media for resource tree: %w", err)
+	}
+	defer rows.Close()
+	seen := map[media.ID]struct{}{}
+	result := make([]media.ID, 0)
+	for rows.Next() {
+		var raw int64
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		mediaID := media.ID(raw)
+		if _, exists := seen[mediaID]; !exists {
+			seen[mediaID] = struct{}{}
+			result = append(result, mediaID)
+		}
+	}
+	return result, rows.Err()
+}
+
 func mediaIDsContained(
 	actual []media.ID,
 	locked []media.ID,
@@ -2010,7 +2325,7 @@ SELECT
 	    title, menu_title, slug, path, annotation, content, image_media_id,
     target_resource_id,
     external_url, is_public, is_searchable, in_menu, in_sitemap,
-    sort, published_at, unpublished_at, settings, created_at,
+    sort, published_at, unpublished_at, type_settings, created_at,
 	    updated_at, created_by, updated_by, deleted_at, deleted_by
 FROM core.resources
 WHERE id = $1
@@ -2073,6 +2388,72 @@ VALUES ('resource', $1, $2, $3);`, ownerID, key, id); err != nil {
 	return nil
 }
 
+func replaceResourceFields(ctx context.Context, tx pgx.Tx, resourceID resource.ID, siteID site.ID, values []field.StoredValue) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM core.resource_field_values WHERE resource_id = $1;`, resourceID); err != nil {
+		return fmt.Errorf("delete resource fields: %w", err)
+	}
+	for _, stored := range values {
+		var stringValue, integerValue, floatValue, booleanValue, timestampValue, referenceValue, jsonValue any
+		switch stored.Kind {
+		case field.StorageString:
+			value, ok := stored.Value.(string)
+			if !ok {
+				return fmt.Errorf("resource field %q string value has type %T", stored.Key, stored.Value)
+			}
+			stringValue = value
+		case field.StorageInteger:
+			value, ok := stored.Value.(int64)
+			if !ok {
+				return fmt.Errorf("resource field %q integer value has type %T", stored.Key, stored.Value)
+			}
+			integerValue = value
+		case field.StorageFloat:
+			value, ok := stored.Value.(float64)
+			if !ok {
+				return fmt.Errorf("resource field %q float value has type %T", stored.Key, stored.Value)
+			}
+			floatValue = value
+		case field.StorageBoolean:
+			value, ok := stored.Value.(bool)
+			if !ok {
+				return fmt.Errorf("resource field %q boolean value has type %T", stored.Key, stored.Value)
+			}
+			booleanValue = value
+		case field.StorageTimestamp:
+			value, ok := stored.Value.(time.Time)
+			if !ok {
+				return fmt.Errorf("resource field %q timestamp value has type %T", stored.Key, stored.Value)
+			}
+			timestampValue = value
+		case field.StorageReference:
+			value, ok := stored.Value.(int64)
+			if !ok {
+				return fmt.Errorf("resource field %q reference value has type %T", stored.Key, stored.Value)
+			}
+			referenceValue = value
+		case field.StorageJSON:
+			raw, err := json.Marshal(stored.Value)
+			if err != nil {
+				return fmt.Errorf("encode resource field %q JSON: %w", stored.Key, err)
+			}
+			jsonValue = string(raw)
+		default:
+			return fmt.Errorf("resource field %q has invalid storage kind %q", stored.Key, stored.Kind)
+		}
+		if _, err := tx.Exec(ctx, `
+INSERT INTO core.resource_field_values (
+    resource_id, site_id, field_key, position, is_multi, value_kind,
+    value_string, value_integer, value_float, value_boolean,
+    value_timestamp, value_reference, value_json
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb);`,
+			resourceID, siteID, stored.Key, stored.Position, stored.Multiple, stored.Kind,
+			stringValue, integerValue, floatValue, booleanValue, timestampValue, referenceValue, jsonValue); err != nil {
+			return fmt.Errorf("insert resource field %q: %w", stored.Key, translateError(err))
+		}
+	}
+	return nil
+}
+
 func cloneFileReferences(source map[string]file.ID) map[string]file.ID {
 	if source == nil {
 		return nil
@@ -2082,6 +2463,10 @@ func cloneFileReferences(source map[string]file.ID) map[string]file.ID {
 		result[key] = value
 	}
 	return result
+}
+
+func cloneFieldMap(source map[string]any) map[string]any {
+	return resource.Clone(resource.Resource{Fields: source}).Fields
 }
 
 var _ resource.Repository = (*Repository)(nil)

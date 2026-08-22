@@ -12,6 +12,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
@@ -141,7 +142,8 @@ func (s *Service) Create(
 		Sort:             input.Sort,
 		PublishedAt:      cloneTime(input.PublishedAt),
 		UnpublishedAt:    cloneTime(input.UnpublishedAt),
-		Settings:         cloneMap(input.Settings),
+		Fields:           cloneMap(input.Fields),
+		TypeSettings:     cloneMap(input.TypeSettings),
 		CreatedBy:        actor.AuditUserID(),
 		UpdatedBy:        actor.AuditUserID(),
 	}
@@ -281,6 +283,13 @@ func (s *Service) Update(
 			current.SiteID,
 		)
 	}
+	currentType, exists := siteRuntime.Profile().Registry().ResourceType(current.Type)
+	if !exists {
+		return Resource{}, fmt.Errorf("resource references unknown current type %q", current.Type)
+	}
+	if current.Type != input.Type && (!currentType.Capabilities().MutableType || input.Type == resourcetype.Library) {
+		return Resource{}, fmt.Errorf("%w: resource type %q is immutable", ErrInvalid, current.Type)
+	}
 
 	item := Resource{
 		ID:               current.ID,
@@ -304,7 +313,8 @@ func (s *Service) Update(
 		Sort:             input.Sort,
 		PublishedAt:      cloneTime(input.PublishedAt),
 		UnpublishedAt:    cloneTime(input.UnpublishedAt),
-		Settings:         cloneMap(input.Settings),
+		Fields:           cloneMap(input.Fields),
+		TypeSettings:     cloneMap(input.TypeSettings),
 		Widgets:          widget.CloneBindings(current.Widgets),
 		CreatedAt:        current.CreatedAt,
 		UpdatedAt:        current.UpdatedAt,
@@ -440,7 +450,7 @@ func (s *Service) Move(ctx context.Context, actor security.Actor, id ID, parentI
 		ExternalURL: current.ExternalURL, IsPublic: current.IsPublic, IsSearchable: current.IsSearchable,
 		InMenu: current.InMenu, InSitemap: current.InSitemap, Sort: position,
 		PublishedAt: current.PublishedAt, UnpublishedAt: current.UnpublishedAt,
-		Settings: current.Settings,
+		Fields: current.Fields, TypeSettings: current.TypeSettings,
 	})
 }
 
@@ -613,12 +623,41 @@ func (s *Service) widgetMutationContext(
 		return Resource{}, nil, nil, errors.New("resource id is invalid")
 	}
 	stored, err := s.repository.ByID(ctx, resourceID)
+	libraryItemProjection := false
+	if errors.Is(err, ErrNotFound) {
+		libraryRepository, ok := s.repository.(LibraryItemRepository)
+		if !ok {
+			return Resource{}, nil, nil, fmt.Errorf("get resource %d for widget mutation: %w", resourceID, err)
+		}
+		libraryItem, itemErr := libraryRepository.LibraryItemByID(ctx, resourceID)
+		if itemErr != nil {
+			return Resource{}, nil, nil, fmt.Errorf("get resource %d for widget mutation: %w", resourceID, itemErr)
+		}
+		stored = Resource{
+			ID: libraryItem.ID, SiteID: libraryItem.SiteID, Type: resourcetype.Page,
+			Template: libraryItem.Template, ContentType: libraryItem.ContentType,
+			Title: libraryItem.Title, Slug: libraryItem.Slug,
+			Annotation: libraryItem.Annotation, Content: libraryItem.Content,
+			ImageMediaID: libraryItem.ImageMediaID, IsPublic: libraryItem.IsPublic,
+			IsSearchable: libraryItem.IsSearchable, PublishedAt: libraryItem.PublishedAt,
+			UnpublishedAt: libraryItem.UnpublishedAt, Fields: libraryItem.Fields,
+			FieldValues: libraryItem.FieldValues, Widgets: libraryItem.Widgets,
+			CreatedAt: libraryItem.CreatedAt, UpdatedAt: libraryItem.UpdatedAt,
+			CreatedBy: libraryItem.CreatedBy, UpdatedBy: libraryItem.UpdatedBy,
+			DeletedAt: libraryItem.DeletedAt, DeletedBy: libraryItem.DeletedBy,
+		}
+		libraryItemProjection = true
+		err = nil
+	}
 	if err != nil {
 		return Resource{}, nil, nil, fmt.Errorf("get resource %d for widget mutation: %w", resourceID, err)
 	}
-	current, err := s.validateStored(ctx, stored)
-	if err != nil {
-		return Resource{}, nil, nil, err
+	current := stored
+	if !libraryItemProjection {
+		current, err = s.validateStored(ctx, stored)
+		if err != nil {
+			return Resource{}, nil, nil, err
+		}
 	}
 	siteRuntime, exists := s.sites.RuntimeByID(current.SiteID)
 	if !exists || current.Template == nil {
@@ -802,6 +841,17 @@ func (s *Service) normalize(
 			item.Type,
 		)
 	}
+	if item.Type == resourcetype.Library {
+		if value, ok := item.TypeSettings["default_item_template"]; ok && value != "" {
+			code, ok := value.(string)
+			if !ok {
+				return Resource{}, errors.New("library default item template is invalid")
+			}
+			if _, exists := profileRuntime.Template(template.Code(code)); !exists {
+				return Resource{}, fmt.Errorf("library references unknown default item template %q", code)
+			}
+		}
+	}
 
 	parent, err := s.relatedResource(
 		ctx,
@@ -823,7 +873,8 @@ func (s *Service) normalize(
 		Content:          item.Content,
 		TargetResourceID: resourceTypeID(item.TargetResourceID),
 		ExternalURL:      cloneString(item.ExternalURL),
-		Settings:         cloneMap(item.Settings),
+		Fields:           cloneMap(item.Fields),
+		TypeSettings:     cloneMap(item.TypeSettings),
 	}
 	payload, err = resourceType.Normalize(payload)
 	if err != nil {
@@ -856,12 +907,12 @@ func (s *Service) normalize(
 		if len(item.Widgets) != 0 {
 			return Resource{}, errors.New("resource without template has widgets")
 		}
-		if len(payload.Settings) != 0 {
+		if len(payload.Fields) != 0 {
 			return Resource{}, errors.New(
-				"resource without template has settings",
+				"resource without template has fields",
 			)
 		}
-		payload.Settings = map[string]any{}
+		payload.Fields = map[string]any{}
 	} else {
 		templateRuntime, exists := profileRuntime.Template(
 			*payload.Template,
@@ -878,18 +929,22 @@ func (s *Service) normalize(
 		}
 		item.Widgets = widgets
 
-		settings, err := templateRuntime.FieldSchema().Validate(
-			payload.Settings,
+		fields, err := templateRuntime.FieldSchema().Validate(
+			payload.Fields,
 		)
 		if err != nil {
 			return Resource{}, fmt.Errorf(
-				"validate resource template %q settings: %w",
+				"validate resource template %q fields: %w",
 				*payload.Template,
 				err,
 			)
 		}
-		payload.Settings = settings
-		fileReferences, err := templateRuntime.FieldSchema().FileReferences(settings)
+		payload.Fields = fields
+		item.FieldValues, err = templateRuntime.FieldSchema().StoredValues(fields)
+		if err != nil {
+			return Resource{}, fmt.Errorf("encode resource template %q fields: %w", *payload.Template, err)
+		}
+		fileReferences, err := templateRuntime.FieldSchema().FileReferences(fields)
 		if err != nil {
 			return Resource{}, fmt.Errorf("collect resource file references: %w", err)
 		}
@@ -920,7 +975,8 @@ func (s *Service) normalize(
 	item.Content = payload.Content
 	item.TargetResourceID = resourceID(payload.TargetResourceID)
 	item.ExternalURL = cloneString(payload.ExternalURL)
-	item.Settings = cloneMap(payload.Settings)
+	item.Fields = cloneMap(payload.Fields)
+	item.TypeSettings = cloneMap(payload.TypeSettings)
 	return item, nil
 }
 

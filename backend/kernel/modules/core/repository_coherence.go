@@ -516,6 +516,125 @@ func (r *invalidatingResourceRepository) Restore(
 	})
 }
 
+func (r *invalidatingResourceRepository) libraryItems() (resource.LibraryItemRepository, error) {
+	repository, ok := r.base.(resource.LibraryItemRepository)
+	if !ok {
+		return nil, errors.New("library item repository is unavailable")
+	}
+	return repository, nil
+}
+
+func libraryItemTags(item resource.LibraryItem) []cache.Tag {
+	return []cache.Tag{siteResourcesTag(item.SiteID), resourceTag(item.LibraryID), resourceTag(item.ID)}
+}
+
+func (r *invalidatingResourceRepository) CreateLibraryItem(ctx context.Context, actorID *security.UserID, item resource.LibraryItem) (resource.LibraryItem, error) {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
+	var result resource.LibraryItem
+	err = withRepositoryCacheWrite(r.policy, []cache.Tag{siteResourcesTag(item.SiteID), resourceTag(item.LibraryID)}, func() error {
+		var writeErr error
+		result, writeErr = repository.CreateLibraryItem(ctx, actorID, item)
+		if writeErr == nil {
+			r.policy.invalidate(ctx, libraryItemTags(result)...)
+		}
+		return writeErr
+	})
+	return result, err
+}
+func (r *invalidatingResourceRepository) LibraryItemByID(ctx context.Context, id resource.ID) (resource.LibraryItem, error) {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
+	return repository.LibraryItemByID(ctx, id)
+}
+func (r *invalidatingResourceRepository) UpdateLibraryItem(ctx context.Context, actorID *security.UserID, current, item resource.LibraryItem) (resource.LibraryItem, error) {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
+	var result resource.LibraryItem
+	tags := libraryItemTags(current)
+	err = withRepositoryCacheWrite(r.policy, tags, func() error {
+		var writeErr error
+		result, writeErr = repository.UpdateLibraryItem(ctx, actorID, current, item)
+		if writeErr == nil {
+			r.policy.invalidate(ctx, append(tags, libraryItemTags(result)...)...)
+		}
+		return writeErr
+	})
+	return result, err
+}
+func (r *invalidatingResourceRepository) mutateLibraryItem(ctx context.Context, id resource.ID, mutate func(resource.LibraryItemRepository) error) error {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return err
+	}
+	current, err := repository.LibraryItemByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	tags := libraryItemTags(current)
+	return withRepositoryCacheWrite(r.policy, tags, func() error {
+		if err := mutate(repository); err != nil {
+			return err
+		}
+		r.policy.invalidate(ctx, tags...)
+		return nil
+	})
+}
+func (r *invalidatingResourceRepository) SoftDeleteLibraryItem(ctx context.Context, actorID *security.UserID, id resource.ID) error {
+	return r.mutateLibraryItem(ctx, id, func(repository resource.LibraryItemRepository) error {
+		return repository.SoftDeleteLibraryItem(ctx, actorID, id)
+	})
+}
+func (r *invalidatingResourceRepository) RestoreLibraryItem(ctx context.Context, actorID *security.UserID, id resource.ID) error {
+	return r.mutateLibraryItem(ctx, id, func(repository resource.LibraryItemRepository) error {
+		return repository.RestoreLibraryItem(ctx, actorID, id)
+	})
+}
+func (r *invalidatingResourceRepository) DeleteLibraryItem(ctx context.Context, id resource.ID) error {
+	return r.mutateLibraryItem(ctx, id, func(repository resource.LibraryItemRepository) error { return repository.DeleteLibraryItem(ctx, id) })
+}
+func (r *invalidatingResourceRepository) MoveLibraryItem(ctx context.Context, actorID *security.UserID, id, target resource.ID) (resource.LibraryItem, error) {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
+	current, err := repository.LibraryItemByID(ctx, id)
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
+	tags := append(libraryItemTags(current), resourceTag(target))
+	var result resource.LibraryItem
+	err = withRepositoryCacheWrite(r.policy, tags, func() error {
+		var writeErr error
+		result, writeErr = repository.MoveLibraryItem(ctx, actorID, id, target)
+		if writeErr == nil {
+			r.policy.invalidate(ctx, append(tags, libraryItemTags(result)...)...)
+		}
+		return writeErr
+	})
+	return result, err
+}
+func (r *invalidatingResourceRepository) QueryLibraryItems(ctx context.Context, query resource.LibraryItemQuery) (resource.LibraryItemPage, error) {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return resource.LibraryItemPage{}, err
+	}
+	return withRepositoryCacheRead(r.policy, []cache.Tag{siteResourcesTag(query.SiteID), resourceTag(query.LibraryID)}, func() (resource.LibraryItemPage, error) { return repository.QueryLibraryItems(ctx, query) })
+}
+func (r *invalidatingResourceRepository) ResolveLibraryItemRoute(ctx context.Context, siteID site.ID, path string) (resource.LibraryItem, resource.Resource, error) {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return resource.LibraryItem{}, resource.Resource{}, err
+	}
+	return repository.ResolveLibraryItemRoute(ctx, siteID, path)
+}
+
 var _ Database = (*coherentDatabase)(nil)
 var _ site.ManagementRepository = (*invalidatingSiteRepository)(nil)
 var _ site.StatisticsRepository = (*invalidatingSiteRepository)(nil)
@@ -524,3 +643,4 @@ var _ resource.WidgetRepository = (*invalidatingResourceRepository)(nil)
 var _ resource.LifecycleRepository = (*invalidatingResourceRepository)(nil)
 var _ resource.StatisticsRepository = (*invalidatingResourceRepository)(nil)
 var _ resource.QueryRepository = (*invalidatingResourceRepository)(nil)
+var _ resource.LibraryItemRepository = (*invalidatingResourceRepository)(nil)

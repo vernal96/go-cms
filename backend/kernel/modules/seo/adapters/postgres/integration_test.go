@@ -86,8 +86,8 @@ func TestPostgresMigrationsRepositoryScopeAndCascade(t *testing.T) {
 	).Scan(&table); err != nil {
 		t.Fatal(err)
 	}
-	if table != nil {
-		t.Fatalf("table after down = %q", *table)
+	if table == nil || *table != "seo.resource_metadata" {
+		t.Fatalf("table after identity migration down = %#v", table)
 	}
 	if err := manager.Up(ctx, seoPlan); err != nil {
 		t.Fatalf("SEO migration restore: %v", err)
@@ -114,8 +114,13 @@ RETURNING id;
 	})
 	var resourceID resource.ID
 	if err := connector.Pool().QueryRow(ctx, `
-INSERT INTO core.resources (site_id, type, title, slug, path, settings)
-VALUES ($1, 'page', 'Page', '', '/', '{}'::jsonb)
+WITH entity AS (
+    INSERT INTO core.resource_entities (site_id, storage_kind)
+    VALUES ($1, 'tree')
+    RETURNING id
+)
+INSERT INTO core.resources (id, site_id, type, title, slug, path, type_settings)
+VALUES ((SELECT id FROM entity), $1, 'page', 'Page', '', '/', '{}'::jsonb)
 RETURNING id;
 `, firstSiteID).Scan(&resourceID); err != nil {
 		t.Fatal(err)
@@ -144,7 +149,7 @@ RETURNING id;
 	}
 	if _, err := connector.Pool().Exec(
 		ctx,
-		`DELETE FROM core.resources WHERE id = $1;`,
+		`DELETE FROM core.resource_entities WHERE id = $1;`,
 		resourceID,
 	); err != nil {
 		t.Fatal(err)

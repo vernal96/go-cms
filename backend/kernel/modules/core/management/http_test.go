@@ -246,7 +246,7 @@ func contentHTTPWidgetFixture(t *testing.T) (*Resources, *extensionTestResources
 	path := "/"
 	repository := &extensionTestResources{item: resource.Resource{
 		ID: 9, SiteID: 7, Type: resourcetype.Page, Template: &templateCode,
-		ContentType: &contentType, Title: "Home", Path: &path, Settings: map[string]any{},
+		ContentType: &contentType, Title: "Home", Path: &path, Fields: map[string]any{},
 	}}
 	authorizer := managementAuthorizer{denied: map[permission.Code]error{}}
 	resources, err := resource.NewService(

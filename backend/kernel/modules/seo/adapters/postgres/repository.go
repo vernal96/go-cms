@@ -71,7 +71,7 @@ INSERT INTO seo.resource_metadata
 SELECT
     resources.id, resources.site_id, $3, $4, $5, $6, $7, $8,
     $9, $10, $11, $12
-FROM core.resources AS resources
+FROM core.resource_entities AS resources
 WHERE resources.id = $1 AND resources.site_id = $2
 ON CONFLICT (resource_id) DO UPDATE SET
     title_template = EXCLUDED.title_template,

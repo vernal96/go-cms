@@ -82,7 +82,7 @@ func (r *Runtime) Metadata() resourceextension.Metadata {
 	return resourceextension.Metadata{
 		Code:      "seo",
 		Title:     "SEO",
-		AppliesTo: []resourcetype.Code{resourcetype.Page},
+		AppliesTo: []resourcetype.Code{resourcetype.Page, resourcetype.Library},
 		Fields: []resourceextension.Field{
 			{Key: "title_template", Label: "Title", Control: "text"},
 			{Key: "description_template", Label: "Description", Control: "textarea", Rows: 3},
@@ -98,7 +98,7 @@ func (r *Runtime) Metadata() resourceextension.Metadata {
 }
 
 func (*Runtime) AppliesTo(code resourcetype.Code) bool {
-	return code == resourcetype.Page
+	return code == resourcetype.Page || code == resourcetype.Library
 }
 
 func (r *Runtime) Read(

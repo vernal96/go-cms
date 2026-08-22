@@ -227,6 +227,14 @@ FROM
     UNION ALL
 
     SELECT
+		'resource.image'::text AS kind,
+		id AS owner_id
+	FROM core.library_items
+	WHERE image_media_id = $1
+
+    UNION ALL
+
+    SELECT
         'user.avatar'::text AS kind,
         id AS owner_id
     FROM core.users

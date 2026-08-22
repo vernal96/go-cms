@@ -43,6 +43,9 @@ func (jsonType) Compile(options any) (ValueType, error) {
 
 type jsonValue struct{}
 
+func (jsonValue) StorageKind() StorageKind { return StorageJSON }
+func (jsonValue) Multiple() bool           { return false }
+
 func (jsonValue) Normalize(value any) (any, error) {
 	switch typed := value.(type) {
 	case []any, map[string]any:
@@ -118,6 +121,9 @@ func (fileType) Compile(options any) (ValueType, error) {
 }
 
 type fileValue struct{}
+
+func (fileValue) StorageKind() StorageKind { return StorageReference }
+func (fileValue) Multiple() bool           { return false }
 
 func (fileValue) Normalize(value any) (any, error) {
 	result, ok := normalizeInteger(value)
@@ -200,6 +206,9 @@ type stringValue struct {
 	rules []string
 }
 
+func (stringValue) StorageKind() StorageKind { return StorageString }
+func (stringValue) Multiple() bool           { return false }
+
 func (v stringValue) Normalize(value any) (any, error) {
 	result, ok := value.(string)
 	if !ok {
@@ -245,6 +254,9 @@ func (integerType) Compile(options any) (ValueType, error) {
 }
 
 type integerValue struct{}
+
+func (integerValue) StorageKind() StorageKind { return StorageInteger }
+func (integerValue) Multiple() bool           { return false }
 
 func (integerValue) Normalize(value any) (any, error) {
 	result, ok := normalizeInteger(value)
@@ -292,6 +304,9 @@ func (floatType) Compile(options any) (ValueType, error) {
 
 type floatValue struct{}
 
+func (floatValue) StorageKind() StorageKind { return StorageFloat }
+func (floatValue) Multiple() bool           { return false }
+
 func (floatValue) Normalize(value any) (any, error) {
 	result, ok := normalizeFloat(value)
 	if !ok {
@@ -332,6 +347,9 @@ func (boolType) Compile(options any) (ValueType, error) {
 }
 
 type boolValue struct{}
+
+func (boolValue) StorageKind() StorageKind { return StorageBoolean }
+func (boolValue) Multiple() bool           { return false }
 
 func (boolValue) Normalize(value any) (any, error) {
 	result, ok := value.(bool)
@@ -413,6 +431,9 @@ type choiceValue struct {
 	allowed  map[string]struct{}
 	multiple bool
 }
+
+func (choiceValue) StorageKind() StorageKind { return StorageString }
+func (v choiceValue) Multiple() bool         { return v.multiple }
 
 func (v choiceValue) Normalize(value any) (any, error) {
 	if !v.multiple {
@@ -518,6 +539,9 @@ type phoneValue struct {
 	pattern *regexp.Regexp
 	rules   []string
 }
+
+func (phoneValue) StorageKind() StorageKind { return StorageString }
+func (phoneValue) Multiple() bool           { return false }
 
 func (phoneValue) Normalize(value any) (any, error) {
 	result, ok := value.(string)

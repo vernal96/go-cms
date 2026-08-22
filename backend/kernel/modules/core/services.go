@@ -23,6 +23,7 @@ import (
 type Services struct {
 	Sites         *site.Catalog
 	Resources     *resource.Service
+	LibraryItems  *resource.LibraryService
 	Files         file.ManagementService
 	Media         media.Service
 	Users         user.Service
@@ -161,9 +162,18 @@ func (s *Services) BuildContent(
 	if err != nil {
 		return err
 	}
+	libraryRepository, ok := s.database.Resources().(resource.LibraryItemRepository)
+	if !ok {
+		return errors.New("core library item repository is unavailable")
+	}
+	libraryItems, err := resource.NewLibraryService(libraryRepository, resources)
+	if err != nil {
+		return err
+	}
 
 	s.Sites = catalog
 	s.Resources = resources
+	s.LibraryItems = libraryItems
 	return nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 )
@@ -52,11 +53,13 @@ type FilterCondition struct {
 	Field    FieldPath
 	Operator FilterOperator
 	Value    any
+	Kind     field.StorageKind
 }
 
 type Sort struct {
 	Field     FieldPath
 	Direction SortDirection
+	Kind      field.StorageKind
 }
 
 // Query expresses resource selection without leaking adapter/SQL concerns.
@@ -155,6 +158,9 @@ func (q Query) Validate() error {
 		if !SortableField(item.Field) || (item.Direction != SortAscending && item.Direction != SortDescending) {
 			return errors.New("resource query sort is invalid")
 		}
+		if strings.HasPrefix(string(item.Field), "resource.field.") && !ValidStorageKind(item.Kind) {
+			return errors.New("resource query custom sort storage kind is required")
+		}
 	}
 	return nil
 }
@@ -174,7 +180,24 @@ func (c FilterCondition) Validate() error {
 	if (c.Operator == FilterGreaterThan || c.Operator == FilterGreaterThanOrEqual || c.Operator == FilterLessThan || c.Operator == FilterLessThanOrEqual) && !numericField(c.Field) {
 		return fmt.Errorf("resource query filter %q does not support ordering", c.Field)
 	}
+	if strings.HasPrefix(string(c.Field), "resource.field.") && c.Kind != "" &&
+		(c.Operator == FilterGreaterThan || c.Operator == FilterGreaterThanOrEqual || c.Operator == FilterLessThan || c.Operator == FilterLessThanOrEqual) &&
+		c.Kind != field.StorageString && c.Kind != field.StorageInteger && c.Kind != field.StorageFloat && c.Kind != field.StorageTimestamp {
+		return fmt.Errorf("resource query field %q storage kind %q does not support ordering", c.Field, c.Kind)
+	}
+	if strings.HasPrefix(string(c.Field), "resource.field.") && c.Kind != "" && !ValidStorageKind(c.Kind) {
+		return fmt.Errorf("resource query field %q has invalid storage kind %q", c.Field, c.Kind)
+	}
 	return nil
+}
+
+func ValidStorageKind(kind field.StorageKind) bool {
+	switch kind {
+	case field.StorageString, field.StorageInteger, field.StorageFloat, field.StorageBoolean, field.StorageTimestamp, field.StorageReference, field.StorageJSON:
+		return true
+	default:
+		return false
+	}
 }
 
 func ValidFieldPath(field FieldPath) bool {
@@ -190,7 +213,7 @@ func SortableField(field FieldPath) bool {
 	case FieldID, FieldTitle, FieldMenuTitle, FieldSlug, FieldPathValue, FieldType, FieldTemplate, FieldSort:
 		return true
 	}
-	return false
+	return strings.HasPrefix(string(field), "resource.field.")
 }
 func numericField(field FieldPath) bool {
 	return field == FieldID || field == FieldSort || strings.HasPrefix(string(field), "resource.field.")

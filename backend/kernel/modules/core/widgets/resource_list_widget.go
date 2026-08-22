@@ -219,7 +219,7 @@ func projectResource(item resource.Resource, fields []resource.FieldPath) map[st
 					fields = map[string]any{}
 					output["fields"] = fields
 				}
-				fields[key] = item.Settings[key]
+				fields[key] = item.Fields[key]
 			}
 		}
 	}
@@ -353,7 +353,8 @@ func resourceFilters(value any) ([]resource.FilterCondition, error) {
 		}
 		fieldValue, _ := object["field"].(string)
 		operator, _ := object["operator"].(string)
-		result[index] = resource.FilterCondition{Field: resource.FieldPath(fieldValue), Operator: resource.FilterOperator(operator), Value: object["value"]}
+		kind, _ := object["value_kind"].(string)
+		result[index] = resource.FilterCondition{Field: resource.FieldPath(fieldValue), Operator: resource.FilterOperator(operator), Value: object["value"], Kind: field.StorageKind(kind)}
 		if err := result[index].Validate(); err != nil {
 			return nil, err
 		}
@@ -376,7 +377,8 @@ func resourceSorting(value any) ([]resource.Sort, error) {
 		}
 		fieldValue, _ := object["field"].(string)
 		direction, _ := object["direction"].(string)
-		result[index] = resource.Sort{Field: resource.FieldPath(fieldValue), Direction: resource.SortDirection(direction)}
+		kind, _ := object["value_kind"].(string)
+		result[index] = resource.Sort{Field: resource.FieldPath(fieldValue), Direction: resource.SortDirection(direction), Kind: field.StorageKind(kind)}
 		if !resource.SortableField(result[index].Field) || (result[index].Direction != resource.SortAscending && result[index].Direction != resource.SortDescending) {
 			return nil, errors.New("sort is invalid")
 		}

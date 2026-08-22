@@ -50,7 +50,7 @@ func TestRendererSubstitutesEveryVariableAndStripsHTML(t *testing.T) {
 		Resource: resource.Resource{
 			Title: "<strong>Контакты</strong>", MenuTitle: "Меню",
 			Annotation: "Свяжитесь", Slug: "contacts", Path: &path,
-			Settings: map[string]any{"subtitle": "О нас"},
+			Fields: map[string]any{"subtitle": "О нас"},
 		},
 	})
 	if err != nil {

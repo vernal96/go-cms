@@ -410,6 +410,78 @@ func (r *cachedResourceRepository) Restore(
 	return nil
 }
 
+func (r *cachedResourceRepository) libraryItems() (resource.LibraryItemRepository, error) {
+	repository, ok := r.base.(resource.LibraryItemRepository)
+	if !ok {
+		return nil, errors.New("library item repository is unavailable")
+	}
+	return repository, nil
+}
+
+func (r *cachedResourceRepository) CreateLibraryItem(ctx context.Context, actorID *security.UserID, item resource.LibraryItem) (resource.LibraryItem, error) {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
+	return repository.CreateLibraryItem(ctx, actorID, item)
+}
+func (r *cachedResourceRepository) LibraryItemByID(ctx context.Context, id resource.ID) (resource.LibraryItem, error) {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
+	return repository.LibraryItemByID(ctx, id)
+}
+func (r *cachedResourceRepository) UpdateLibraryItem(ctx context.Context, actorID *security.UserID, current, item resource.LibraryItem) (resource.LibraryItem, error) {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
+	return repository.UpdateLibraryItem(ctx, actorID, current, item)
+}
+func (r *cachedResourceRepository) SoftDeleteLibraryItem(ctx context.Context, actorID *security.UserID, id resource.ID) error {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return err
+	}
+	return repository.SoftDeleteLibraryItem(ctx, actorID, id)
+}
+func (r *cachedResourceRepository) RestoreLibraryItem(ctx context.Context, actorID *security.UserID, id resource.ID) error {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return err
+	}
+	return repository.RestoreLibraryItem(ctx, actorID, id)
+}
+func (r *cachedResourceRepository) DeleteLibraryItem(ctx context.Context, id resource.ID) error {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return err
+	}
+	return repository.DeleteLibraryItem(ctx, id)
+}
+func (r *cachedResourceRepository) MoveLibraryItem(ctx context.Context, actorID *security.UserID, id, target resource.ID) (resource.LibraryItem, error) {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
+	return repository.MoveLibraryItem(ctx, actorID, id, target)
+}
+func (r *cachedResourceRepository) QueryLibraryItems(ctx context.Context, query resource.LibraryItemQuery) (resource.LibraryItemPage, error) {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return resource.LibraryItemPage{}, err
+	}
+	return repository.QueryLibraryItems(ctx, query)
+}
+func (r *cachedResourceRepository) ResolveLibraryItemRoute(ctx context.Context, siteID site.ID, path string) (resource.LibraryItem, resource.Resource, error) {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return resource.LibraryItem{}, resource.Resource{}, err
+	}
+	return repository.ResolveLibraryItemRoute(ctx, siteID, path)
+}
+
 func siteTag(id site.ID) cache.Tag {
 	return cache.Tag(fmt.Sprintf("site:%d", id))
 }
@@ -455,3 +527,4 @@ var _ resource.WidgetRepository = (*cachedResourceRepository)(nil)
 var _ resource.ManagementRepository = (*cachedResourceRepository)(nil)
 var _ resource.StatisticsRepository = (*cachedResourceRepository)(nil)
 var _ resource.QueryRepository = (*cachedResourceRepository)(nil)
+var _ resource.LibraryItemRepository = (*cachedResourceRepository)(nil)

@@ -160,6 +160,39 @@ func TestSchemaNormalizesStandardTypes(t *testing.T) {
 	}
 }
 
+func TestSchemaStoredValuesPreserveKindsAndMultiValueOrder(t *testing.T) {
+	schema, err := field.Compile([]field.Definition{
+		{Key: "count", Type: field.TypeInteger, Label: "Count"},
+		{Key: "roles", Type: field.TypeSelect, Label: "Roles", Options: field.SelectOptions{
+			Multiple: true,
+			Choices:  []field.Choice{{Value: "editor", Label: "Editor"}, {Value: "author", Label: "Author"}},
+		}},
+		{Key: "attachment", Type: field.TypeFile, Label: "Attachment"},
+	}, standardResolver())
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized, err := schema.Validate(map[string]any{
+		"count": 3, "roles": []any{"editor", "author"}, "attachment": 42,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := schema.StoredValues(normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []field.StoredValue{
+		{Key: "count", Kind: field.StorageInteger, Value: int64(3)},
+		{Key: "roles", Position: 0, Kind: field.StorageString, Multiple: true, Value: "editor"},
+		{Key: "roles", Position: 1, Kind: field.StorageString, Multiple: true, Value: "author"},
+		{Key: "attachment", Kind: field.StorageReference, Value: int64(42)},
+	}
+	if !reflect.DeepEqual(stored, want) {
+		t.Fatalf("stored values = %#v, want %#v", stored, want)
+	}
+}
+
 func TestSchemaRequiredAndStrictValidation(t *testing.T) {
 	schema, err := field.Compile(
 		[]field.Definition{

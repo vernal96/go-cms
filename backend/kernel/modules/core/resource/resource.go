@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
@@ -16,6 +17,20 @@ import (
 )
 
 type ID int64
+
+type StorageKind string
+
+const (
+	StorageTree        StorageKind = "tree"
+	StorageLibraryItem StorageKind = "library_item"
+)
+
+// Ref is the stable identity shared by tree resources and LibraryItems.
+type Ref struct {
+	ID          ID
+	SiteID      site.ID
+	StorageKind StorageKind
+}
 
 const ImageMediaUsage media.UsageKind = "resource.image"
 
@@ -51,7 +66,9 @@ type Resource struct {
 	Sort             int
 	PublishedAt      *time.Time
 	UnpublishedAt    *time.Time
-	Settings         map[string]any
+	Fields           map[string]any
+	TypeSettings     map[string]any
+	FieldValues      []field.StoredValue
 	Widgets          []widget.Binding
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
@@ -83,7 +100,8 @@ type CreateInput struct {
 	Sort             int
 	PublishedAt      *time.Time
 	UnpublishedAt    *time.Time
-	Settings         map[string]any
+	Fields           map[string]any
+	TypeSettings     map[string]any
 }
 
 type UpdateInput struct {
@@ -107,7 +125,8 @@ type UpdateInput struct {
 	Sort             int
 	PublishedAt      *time.Time
 	UnpublishedAt    *time.Time
-	Settings         map[string]any
+	Fields           map[string]any
+	TypeSettings     map[string]any
 }
 
 type CreateWidgetInput struct {
@@ -220,7 +239,9 @@ func Clone(item Resource) Resource {
 	item.ExternalURL = cloneString(item.ExternalURL)
 	item.PublishedAt = cloneTime(item.PublishedAt)
 	item.UnpublishedAt = cloneTime(item.UnpublishedAt)
-	item.Settings = cloneMap(item.Settings)
+	item.Fields = cloneMap(item.Fields)
+	item.TypeSettings = cloneMap(item.TypeSettings)
+	item.FieldValues = cloneStoredValues(item.FieldValues)
 	item.Widgets = widget.CloneBindings(item.Widgets)
 	item.CreatedBy = cloneUserID(item.CreatedBy)
 	item.UpdatedBy = cloneUserID(item.UpdatedBy)
@@ -228,6 +249,18 @@ func Clone(item Resource) Resource {
 	item.DeletedBy = cloneUserID(item.DeletedBy)
 	item.FileReferences = cloneFileReferences(item.FileReferences)
 	return item
+}
+
+func cloneStoredValues(source []field.StoredValue) []field.StoredValue {
+	if source == nil {
+		return nil
+	}
+	result := make([]field.StoredValue, len(source))
+	copy(result, source)
+	for index := range result {
+		result[index].Value = cloneValue(result[index].Value)
+	}
+	return result
 }
 
 func cloneFileReferences(source map[string]file.ID) map[string]file.ID {

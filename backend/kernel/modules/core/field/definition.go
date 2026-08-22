@@ -9,6 +9,20 @@ import (
 
 type TypeCode string
 
+// StorageKind describes persistence and comparison semantics independently
+// from a field's semantic type and editor.
+type StorageKind string
+
+const (
+	StorageString    StorageKind = "string"
+	StorageInteger   StorageKind = "integer"
+	StorageFloat     StorageKind = "float"
+	StorageBoolean   StorageKind = "boolean"
+	StorageTimestamp StorageKind = "timestamp"
+	StorageReference StorageKind = "reference"
+	StorageJSON      StorageKind = "json"
+)
+
 const (
 	TypeString   TypeCode = "string"
 	TypeInteger  TypeCode = "int"
@@ -87,6 +101,23 @@ type ValueType interface {
 	Validate(any) error
 	Rules() []string
 	Example() any
+}
+
+// StorageValueType is implemented by compiled value types that can be stored
+// as typed resource-field rows. Multiple reports whether a normalized slice is
+// persisted as ordered rows rather than as opaque JSON.
+type StorageValueType interface {
+	ValueType
+	StorageKind() StorageKind
+	Multiple() bool
+}
+
+type StoredValue struct {
+	Key      string
+	Position int
+	Kind     StorageKind
+	Multiple bool
+	Value    any
 }
 
 type TypeResolver interface {
