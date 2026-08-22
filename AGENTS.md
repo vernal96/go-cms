@@ -65,6 +65,8 @@ Load a skill only when its scope matches:
 - `go-cms-architecture-review`: architecture/refactor/PR/commit review.
 - `go-cms-admin-ui`: backend-driven admin extensibility/navigation/frontend plugin work.
 - `go-cms-widgets`: widget definitions, layouts, persistence, editing or rendering.
+- `go-cms-resources`: resource types/tree/identity, Library/LibraryItem architecture, resource paths/routing, storage/lifecycle/moves or resource admin capabilities.
+- `go-cms-resource-fields`: template/resource field values, typed persistence, filtering/sorting/indexing, storage kinds or migration away from JSONB resource settings.
 
 For a focused local bug fix or routine CRUD change, root/backend instructions plus the affected code are normally enough.
 
