@@ -347,7 +347,10 @@ func (s *Service) Update(
 		current.FileReferences,
 	)
 	if err != nil {
-		return Resource{}, err
+		if errors.Is(err, errPersistence) {
+			return Resource{}, err
+		}
+		return Resource{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if current.Path != nil && normalized.Path == nil {
 		if err := s.ensureNoRouteDescendants(

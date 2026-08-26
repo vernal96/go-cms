@@ -304,16 +304,13 @@ func (r *RuntimeRegistry) addResourceType(
 		)
 	}
 
-	metadata := resourceType.Metadata()
+	compiledResourceType, err := resourcetype.Compile(resourceType, r)
+	if err != nil {
+		return fmt.Errorf("resource type %q %w", code, err)
+	}
+	metadata := compiledResourceType.Metadata()
 	if metadata.Label == "" || strings.TrimSpace(metadata.Label) != metadata.Label {
 		return fmt.Errorf("resource type %q has invalid label %q", code, metadata.Label)
-	}
-	settingsSchema, err := field.Compile(metadata.SettingsFields, r)
-	if err != nil {
-		return fmt.Errorf("resource type %q settings metadata: %w", code, err)
-	}
-	if _, err := settingsSchema.Validate(metadata.SettingsDefaults); err != nil {
-		return fmt.Errorf("resource type %q settings defaults: %w", code, err)
 	}
 	seenContentTypes := make(map[string]struct{}, len(metadata.ContentTypes))
 	for index, option := range metadata.ContentTypes {
@@ -321,6 +318,15 @@ func (r *RuntimeRegistry) addResourceType(
 			option.Label == "" || strings.TrimSpace(option.Label) != option.Label ||
 			option.Editor == "" || strings.TrimSpace(string(option.Editor)) != string(option.Editor) {
 			return fmt.Errorf("resource type %q content type at index %d is invalid", code, index)
+		}
+		if option.Editor != resourcetype.ContentEditorHTML &&
+			option.Editor != resourcetype.ContentEditorTextarea {
+			return fmt.Errorf(
+				"resource type %q content type %q has unsupported editor %q",
+				code,
+				option.Code,
+				option.Editor,
+			)
 		}
 		if _, exists := seenContentTypes[option.Code]; exists {
 			return fmt.Errorf("resource type %q content type %q is duplicated", code, option.Code)
@@ -331,7 +337,7 @@ func (r *RuntimeRegistry) addResourceType(
 		return fmt.Errorf("resource type %q content capability and metadata disagree", code)
 	}
 
-	r.resourceTypes[code] = resourceType
+	r.resourceTypes[code] = compiledResourceType
 	return nil
 }
 

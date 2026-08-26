@@ -285,6 +285,23 @@ func (s *Schema) FileReferences(values map[string]any) ([]FileReference, error) 
 func (s *Schema) Validate(
 	values map[string]any,
 ) (map[string]any, error) {
+	return s.validate(values, true)
+}
+
+// ValidatePartial validates and normalizes only supplied values. It is useful
+// for partial configuration such as defaults, where required fields may be
+// intentionally omitted and are enforced only after the final values are
+// assembled.
+func (s *Schema) ValidatePartial(
+	values map[string]any,
+) (map[string]any, error) {
+	return s.validate(values, false)
+}
+
+func (s *Schema) validate(
+	values map[string]any,
+	requireAll bool,
+) (map[string]any, error) {
 	if s == nil {
 		return nil, errors.New("field schema is nil")
 	}
@@ -311,7 +328,7 @@ func (s *Schema) Validate(
 		value, exists := values[definition.Key]
 
 		if !exists || inputEmpty(value) {
-			if compiled.required {
+			if requireAll && compiled.required {
 				validationErrors = append(
 					validationErrors,
 					ValidationError{

@@ -1140,6 +1140,75 @@ func TestProfileRuntimeCollectsResourceTypesBeforeModuleBuild(
 	}
 }
 
+func TestProfileRuntimeFreezesResourceTypeMetadataAndAcceptsPartialDefaults(t *testing.T) {
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		testRuntimeServices(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	required := true
+	metadata := &resourcetype.Metadata{
+		Label:        "Custom",
+		Capabilities: resourcetype.Capabilities{SupportsContent: true, MutableType: true},
+		SettingsFields: []field.Definition{
+			{Key: "catalog_id", Type: field.TypeString, Label: "Catalog", Required: &required},
+			{Key: "mode", Type: field.TypeString, Label: "Mode"},
+			{Key: "config", Type: field.TypeJSON, Label: "Config"},
+		},
+		SettingsDefaults: map[string]any{
+			"mode":   "standard",
+			"config": map[string]any{"nested": []any{"original"}},
+		},
+		ContentTypes: []resourcetype.ContentTypeOption{
+			{Code: "html", Label: "HTML", Editor: resourcetype.ContentEditorHTML},
+		},
+	}
+	runtime, err := buildProfileRuntime(factory, context.Background(), kernel.Profile{
+		Code: "custom",
+		Modules: []kernel.ProfileModule{{Module: registryModule{
+			code: "provider", fieldTypes: field.StandardTypes(),
+			resourceTypes: []resourcetype.Type{customResourceType{
+				code: "custom", pathMode: resourcetype.PathRoute, metadata: metadata,
+			}},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("required setting without default did not register: %v", err)
+	}
+
+	registered, exists := runtime.Registry().ResourceType("custom")
+	if !exists {
+		t.Fatal("custom resource type is unavailable")
+	}
+	metadata.SettingsFields[0].Label = "Mutated source"
+	metadata.SettingsDefaults["mode"] = "mutated-source"
+	metadata.SettingsDefaults["config"].(map[string]any)["nested"].([]any)[0] = "mutated-source"
+	metadata.ContentTypes[0].Editor = "mutated-source"
+	exposed := registered.Metadata()
+	exposed.SettingsFields[0].Label = "Mutated response"
+	exposed.SettingsDefaults["mode"] = "mutated-response"
+	exposed.SettingsDefaults["config"].(map[string]any)["nested"].([]any)[0] = "mutated-response"
+	exposed.ContentTypes[0].Editor = "mutated-response"
+
+	frozen := registered.Metadata()
+	if frozen.SettingsFields[0].Label != "Catalog" || frozen.SettingsDefaults["mode"] != "standard" ||
+		frozen.SettingsDefaults["config"].(map[string]any)["nested"].([]any)[0] != "original" ||
+		frozen.ContentTypes[0].Editor != resourcetype.ContentEditorHTML {
+		t.Fatalf("registered metadata was mutated: %#v", frozen)
+	}
+	if _, err := registered.Normalize(resourcetype.Payload{TypeSettings: map[string]any{}}); err == nil {
+		t.Fatal("required setting was not enforced for a resource payload")
+	}
+	normalized, err := registered.Normalize(resourcetype.Payload{
+		TypeSettings: map[string]any{"catalog_id": "main"},
+	})
+	if err != nil || normalized.TypeSettings["catalog_id"] != "main" || normalized.TypeSettings["mode"] != "standard" {
+		t.Fatalf("normalized settings = %#v, %v", normalized.TypeSettings, err)
+	}
+}
+
 func TestProfileRuntimeRejectsInvalidResourceTypeRegistrations(
 	t *testing.T,
 ) {
@@ -1208,6 +1277,18 @@ func TestProfileRuntimeRejectsInvalidResourceTypeRegistrations(
 			contains: "settings defaults",
 		},
 		{
+			name: "unsupported settings lifecycle",
+			types: []resourcetype.Type{customResourceType{
+				code: "custom", pathMode: resourcetype.PathRoute,
+				metadata: &resourcetype.Metadata{
+					Label:            "Custom",
+					SettingsFields:   []field.Definition{{Key: "asset", Type: field.TypeFile, Label: "Asset"}},
+					SettingsDefaults: map[string]any{},
+				},
+			}},
+			contains: "unsupported reference lifecycle",
+		},
+		{
 			name: "duplicate content type",
 			types: []resourcetype.Type{customResourceType{
 				code: "custom", pathMode: resourcetype.PathRoute,
@@ -1231,6 +1312,17 @@ func TestProfileRuntimeRejectsInvalidResourceTypeRegistrations(
 				},
 			}},
 			contains: "content type at index 0 is invalid",
+		},
+		{
+			name: "unknown content editor",
+			types: []resourcetype.Type{customResourceType{
+				code: "custom", pathMode: resourcetype.PathRoute,
+				metadata: &resourcetype.Metadata{
+					Label: "Custom", Capabilities: resourcetype.Capabilities{SupportsContent: true}, SettingsDefaults: map[string]any{},
+					ContentTypes: []resourcetype.ContentTypeOption{{Code: "markdown", Label: "Markdown", Editor: "markdown"}},
+				},
+			}},
+			contains: "unsupported editor",
 		},
 		{
 			name: "content capability mismatch",

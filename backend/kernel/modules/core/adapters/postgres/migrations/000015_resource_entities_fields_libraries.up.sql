@@ -49,6 +49,7 @@ CREATE TABLE core.resource_field_values
 (
     resource_id     BIGINT           NOT NULL,
     site_id         BIGINT           NOT NULL,
+    library_id      BIGINT           NULL,
     field_key       TEXT             NOT NULL
         CHECK (field_key = btrim(field_key) AND field_key <> ''),
     position        INTEGER          NOT NULL DEFAULT 0 CHECK (position >= 0),
@@ -66,6 +67,10 @@ CREATE TABLE core.resource_field_values
     CONSTRAINT fk_resource_field_values_entity_site
         FOREIGN KEY (resource_id, site_id)
             REFERENCES core.resource_entities (id, site_id)
+            ON DELETE CASCADE,
+    CONSTRAINT fk_resource_field_values_library_site
+        FOREIGN KEY (library_id, site_id)
+            REFERENCES core.resources (id, site_id)
             ON DELETE CASCADE,
     CONSTRAINT ck_resource_field_values_typed
         CHECK (num_nonnulls(
@@ -92,6 +97,19 @@ CREATE INDEX idx_resource_field_values_timestamp
 CREATE INDEX idx_resource_field_values_reference
     ON core.resource_field_values (site_id, field_key, value_reference, resource_id)
     WHERE value_kind = 'reference';
+
+CREATE INDEX idx_resource_field_values_library_string
+    ON core.resource_field_values (site_id, library_id, field_key, value_string, resource_id)
+    WHERE library_id IS NOT NULL AND value_kind = 'string' AND position = 0 AND NOT is_multi;
+CREATE INDEX idx_resource_field_values_library_integer
+    ON core.resource_field_values (site_id, library_id, field_key, value_integer, resource_id)
+    WHERE library_id IS NOT NULL AND value_kind = 'integer' AND position = 0 AND NOT is_multi;
+CREATE INDEX idx_resource_field_values_library_float
+    ON core.resource_field_values (site_id, library_id, field_key, value_float, resource_id)
+    WHERE library_id IS NOT NULL AND value_kind = 'float' AND position = 0 AND NOT is_multi;
+CREATE INDEX idx_resource_field_values_library_timestamp
+    ON core.resource_field_values (site_id, library_id, field_key, value_timestamp, resource_id)
+    WHERE library_id IS NOT NULL AND value_kind = 'timestamp' AND position = 0 AND NOT is_multi;
 
 CREATE TABLE core.library_item_routes
 (

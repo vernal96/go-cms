@@ -342,6 +342,28 @@ func TestSchemaRequiredAndStrictValidation(t *testing.T) {
 	}
 }
 
+func TestSchemaValidatePartialAllowsOmittedRequiredValues(t *testing.T) {
+	required := true
+	schema, err := field.Compile([]field.Definition{
+		{Key: "catalog_id", Type: field.TypeString, Label: "Catalog", Required: &required},
+		{Key: "limit", Type: field.TypeInteger, Label: "Limit"},
+	}, standardResolver())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	partial, err := schema.ValidatePartial(map[string]any{"limit": json.Number("7")})
+	if err != nil || partial["limit"] != int64(7) {
+		t.Fatalf("partial values = %#v, %v", partial, err)
+	}
+	if _, err := schema.Validate(map[string]any{"limit": int64(7)}); err == nil {
+		t.Fatal("full validation accepted an omitted required value")
+	}
+	if _, err := schema.ValidatePartial(map[string]any{"unknown": true}); err == nil {
+		t.Fatal("partial validation accepted an unknown value")
+	}
+}
+
 func TestSchemaPhonePatternAndStepMetadata(t *testing.T) {
 	floatStep := 0.25
 	schema, err := field.Compile(

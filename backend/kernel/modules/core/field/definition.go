@@ -310,7 +310,7 @@ func cloneOptions(options any) any {
 		return &result
 
 	default:
-		return typed
+		return cloneEditorValue(typed)
 	}
 }
 

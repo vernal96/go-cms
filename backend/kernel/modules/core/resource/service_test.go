@@ -62,6 +62,7 @@ func (testModule) Registry() kernel.ModuleRegistry {
 			resourcetype.StandardTypes(),
 			noPathType{},
 			genericPayloadType{},
+			settingsContractType{},
 		),
 	}
 }
@@ -133,6 +134,33 @@ func (noPathType) Code() resourcetype.Code {
 }
 
 type genericPayloadType struct{}
+
+type settingsContractType struct{}
+
+func (settingsContractType) Code() resourcetype.Code { return "settings_contract" }
+func (settingsContractType) PathMode() resourcetype.PathMode {
+	return resourcetype.PathRoute
+}
+func (settingsContractType) Metadata() resourcetype.Metadata {
+	required := true
+	return resourcetype.Metadata{
+		Label:        "Settings contract",
+		Capabilities: resourcetype.Capabilities{MutableType: true},
+		SettingsFields: []field.Definition{
+			{Key: "catalog_id", Type: field.TypeString, Label: "Catalog", Required: &required},
+			{Key: "mode", Type: field.TypeString, Label: "Mode"},
+		},
+		SettingsDefaults: map[string]any{"mode": "standard"},
+	}
+}
+func (settingsContractType) Normalize(payload resourcetype.Payload) (resourcetype.Payload, error) {
+	mode, ok := payload.TypeSettings["mode"].(string)
+	if !ok {
+		return resourcetype.Payload{}, errors.New("settings mode is unavailable")
+	}
+	payload.TypeSettings["mode"] = strings.ToUpper(mode)
+	return payload, nil
+}
 
 func (genericPayloadType) Code() resourcetype.Code { return "generic_payload" }
 func (genericPayloadType) PathMode() resourcetype.PathMode {
@@ -225,6 +253,40 @@ type memoryLibraryRepository struct {
 	nextID              ID
 	lastQuery           LibraryItemQuery
 	templateCodeLookups int
+}
+
+type memoryRevisionRepository struct {
+	*memoryLibraryRepository
+	revision     Revision
+	restoreCalls int
+}
+
+func (*memoryRevisionRepository) ListRevisions(context.Context, site.ID, ID, int, int) (RevisionPage, error) {
+	return RevisionPage{}, nil
+}
+func (r *memoryRevisionRepository) Revision(context.Context, site.ID, ID, int64) (Revision, error) {
+	return r.revision, nil
+}
+func (*memoryRevisionRepository) PurgeRevisions(context.Context, site.ID, ID) (int64, error) {
+	return 0, nil
+}
+func (*memoryRevisionRepository) CountRevisions(context.Context) (int64, error) {
+	return 0, nil
+}
+func (*memoryRevisionRepository) PurgeAllRevisions(context.Context) (int64, error) {
+	return 0, nil
+}
+func (r *memoryRevisionRepository) RestoreRevision(_ context.Context, _ *security.UserID, current, candidate Resource, _ int64) (Resource, error) {
+	r.restoreCalls++
+	candidate.Version = current.Version + 1
+	r.memoryRepository.items[candidate.ID] = Clone(candidate)
+	return Clone(candidate), nil
+}
+func (r *memoryRevisionRepository) RestoreLibraryItemRevision(_ context.Context, _ *security.UserID, current, candidate LibraryItem, _ int64) (LibraryItem, error) {
+	r.restoreCalls++
+	candidate.Version = current.Version + 1
+	r.items[candidate.ID] = cloneLibraryItem(candidate)
+	return cloneLibraryItem(candidate), nil
 }
 
 func (r *memoryLibraryRepository) CreateLibraryItem(_ context.Context, _ *security.UserID, item LibraryItem, _ bool) (LibraryItem, error) {
@@ -1030,6 +1092,122 @@ func TestServiceTransportsGenericRegisteredTypePayload(t *testing.T) {
 		*created.ContentType != contentType || created.TargetResourceID == nil ||
 		*created.TargetResourceID != target.ID || created.TypeSettings["custom_option"] != "preserved" {
 		t.Fatalf("created generic resource = %#v", created)
+	}
+}
+
+func TestServiceAppliesAndValidatesResourceTypeSettingsContract(t *testing.T) {
+	service, _, _ := newTestService(t)
+	ctx := context.Background()
+
+	_, err := service.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, Type: "settings_contract", Title: "Missing", Slug: "missing",
+		TypeSettings: map[string]any{},
+	})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), `field "catalog_id"`) {
+		t.Fatalf("missing required create setting error = %v", err)
+	}
+
+	created, err := service.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, Type: "settings_contract", Title: "Configured", Slug: "configured",
+		TypeSettings: map[string]any{"catalog_id": "primary"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.TypeSettings["catalog_id"] != "primary" || created.TypeSettings["mode"] != "STANDARD" {
+		t.Fatalf("server defaults/normalization = %#v", created.TypeSettings)
+	}
+
+	explicit, err := service.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, Type: "settings_contract", Title: "Explicit", Slug: "explicit",
+		TypeSettings: map[string]any{"catalog_id": "secondary", "mode": "compact"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit.TypeSettings["mode"] != "COMPACT" {
+		t.Fatalf("explicit setting did not override default: %#v", explicit.TypeSettings)
+	}
+
+	for name, settings := range map[string]map[string]any{
+		"unknown": {"catalog_id": "primary", "other": true},
+		"invalid": {"catalog_id": int64(7)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, createErr := service.Create(ctx, security.System(), CreateInput{
+				SiteID: 1, Type: "settings_contract", Title: name, Slug: name,
+				TypeSettings: settings,
+			})
+			if !errors.Is(createErr, ErrInvalid) {
+				t.Fatalf("invalid settings error = %v", createErr)
+			}
+		})
+	}
+
+	_, err = service.Update(ctx, security.System(), UpdateInput{
+		ID: created.ID, ExpectedVersion: created.Version, Type: created.Type,
+		Title: created.Title, Slug: created.Slug, IsPublic: created.IsPublic,
+		IsSearchable: created.IsSearchable, InMenu: created.InMenu,
+		InSitemap: created.InSitemap, Fields: created.Fields,
+		TypeSettings: map[string]any{},
+	})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), `field "catalog_id"`) {
+		t.Fatalf("missing required update setting error = %v", err)
+	}
+}
+
+func TestRevisionRestoreUsesCurrentResourceTypeSettingsContract(t *testing.T) {
+	service, treeRepository, _ := newTestService(t)
+	ctx := context.Background()
+	home, err := service.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, Type: resourcetype.Page, Title: "Home",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := service.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, ParentID: &home.ID, Type: "settings_contract",
+		Title: "Configured", Slug: "configured",
+		TypeSettings: map[string]any{"catalog_id": "current"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repository := &memoryRevisionRepository{memoryLibraryRepository: &memoryLibraryRepository{
+		memoryRepository: treeRepository,
+		items:            map[ID]LibraryItem{},
+	}}
+	service.repository = repository
+	libraryService, err := NewLibraryService(repository, service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisions, err := NewRevisionService(repository, service, libraryService, testAuthorizer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := Snapshot{
+		StorageKind: StorageTree, ParentID: cloneID(current.ParentID), Type: current.Type,
+		Title: current.Title, Slug: current.Slug, IsPublic: current.IsPublic,
+		IsSearchable: current.IsSearchable, InMenu: current.InMenu, InSitemap: current.InSitemap,
+		Fields: map[string]any{}, TypeSettings: map[string]any{},
+	}
+	repository.revision = Revision{
+		ResourceID: current.ID, SiteID: current.SiteID, Version: 1, Snapshot: &snapshot,
+	}
+	_, err = revisions.Restore(ctx, security.System(), current.SiteID, current.ID, 1, current.Version)
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), `field "catalog_id"`) || repository.restoreCalls != 0 {
+		t.Fatalf("invalid historical settings restore = %v, calls = %d", err, repository.restoreCalls)
+	}
+
+	snapshot.TypeSettings = map[string]any{"catalog_id": "historical", "mode": "compact"}
+	restored, err := revisions.Restore(ctx, security.System(), current.SiteID, current.ID, 1, current.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repository.restoreCalls != 1 || restored.TypeSettings["catalog_id"] != "historical" || restored.TypeSettings["mode"] != "COMPACT" {
+		t.Fatalf("restored normalized settings = %#v, calls = %d", restored.TypeSettings, repository.restoreCalls)
 	}
 }
 

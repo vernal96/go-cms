@@ -90,7 +90,7 @@ RETURNING `+libraryItemColumns+`;`, item.ID, item.SiteID, item.LibraryID, partit
 	if err := ensureLibraryItemTemplateUsage(ctx, tx, stored.SiteID, stored.LibraryID, stored.Template); err != nil {
 		return resource.LibraryItem{}, err
 	}
-	if err := replaceResourceFields(ctx, tx, stored.ID, stored.SiteID, item.FieldValues); err != nil {
+	if err := replaceResourceFields(ctx, tx, stored.ID, stored.SiteID, &stored.LibraryID, item.FieldValues); err != nil {
 		return resource.LibraryItem{}, err
 	}
 	if err := replaceFileReferences(ctx, tx, stored.ID, item.FileReferences); err != nil {
@@ -232,7 +232,7 @@ RETURNING `+libraryItemColumns+`;`, item.ID, partitionAt, item.Template, item.Co
 			return resource.LibraryItem{}, err
 		}
 	}
-	if err := replaceResourceFields(ctx, tx, updated.ID, updated.SiteID, item.FieldValues); err != nil {
+	if err := replaceResourceFields(ctx, tx, updated.ID, updated.SiteID, &updated.LibraryID, item.FieldValues); err != nil {
 		return resource.LibraryItem{}, err
 	}
 	if err := replaceFileReferences(ctx, tx, updated.ID, item.FileReferences); err != nil {
@@ -390,6 +390,9 @@ func (r *Repository) moveLibraryItemOnce(ctx context.Context, actorID *security.
 	if err := ensureLibraryItemTemplateUsage(ctx, tx, moved.SiteID, moved.LibraryID, moved.Template); err != nil {
 		return resource.LibraryItem{}, err
 	}
+	if _, err := tx.Exec(ctx, `UPDATE core.resource_field_values SET library_id=$2 WHERE resource_id=$1;`, id, targetLibraryID); err != nil {
+		return resource.LibraryItem{}, translateError(err)
+	}
 	if err := pruneLibraryItemTemplateUsage(ctx, tx, item.SiteID, item.LibraryID, item.Template); err != nil {
 		return resource.LibraryItem{}, err
 	}
@@ -498,13 +501,14 @@ func (r *Repository) queryLibraryItemBranch(ctx context.Context, query resource.
 			key := strings.TrimPrefix(string(item.Field), "resource.field.")
 			if primaryCustom && index == 0 && *customValues {
 				from = "core.resource_field_values " + alias +
-					" JOIN core.library_item_routes route ON route.resource_id=" + alias + ".resource_id AND route.site_id=" + alias + ".site_id" +
+					" JOIN core.library_item_routes route ON route.resource_id=" + alias + ".resource_id AND route.site_id=" + alias + ".site_id AND route.library_id=" + alias + ".library_id" +
 					" JOIN core.library_items item ON item.id=route.resource_id AND item.site_id=route.site_id AND item.library_id=route.library_id" +
 					" JOIN core.resources library ON library.id=item.library_id AND library.site_id=item.site_id"
 			} else {
 				fieldKey := add(key)
 				joins = append(joins, "LEFT JOIN core.resource_field_values "+alias+
 					" ON "+alias+".resource_id=item.id AND "+alias+".site_id=item.site_id"+
+					" AND "+alias+".library_id=item.library_id"+
 					" AND "+alias+".field_key="+fieldKey+" AND "+alias+".value_kind="+kindLiteral+
 					" AND "+alias+".position=0 AND NOT "+alias+".is_multi")
 			}
@@ -571,6 +575,7 @@ func (r *Repository) queryLibraryItemBranch(ctx context.Context, query resource.
 			}
 			where = append(where,
 				alias+".site_id=item.site_id",
+				alias+".library_id="+add(query.LibraryID),
 				alias+".field_key="+add(strings.TrimPrefix(string(sorts[0].Field), "resource.field.")),
 				alias+".value_kind="+kindLiteral,
 				alias+".position=0", "NOT "+alias+".is_multi",
@@ -585,7 +590,13 @@ func (r *Repository) queryLibraryItemBranch(ctx context.Context, query resource.
 		if err != nil {
 			return nil, err
 		}
-		where = append(where, libraryItemKeysetPredicate(expressions, cursor, idDirection, add))
+		where = append(where, libraryItemKeysetPredicate(
+			expressions,
+			cursor,
+			idDirection,
+			primaryCustom && *customValues,
+			add,
+		))
 	}
 	limit := add(limitValue)
 	rows, err := r.connector.Pool().Query(ctx, `SELECT `+libraryItemColumns+` FROM `+from+` `+strings.Join(joins, " ")+` WHERE `+strings.Join(where, " AND ")+` ORDER BY `+strings.Join(order, ", ")+` LIMIT `+limit+`;`, args...)
@@ -640,6 +651,16 @@ ON CONFLICT DO NOTHING;`, siteID, libraryID, *code); err != nil {
 func pruneLibraryItemTemplateUsage(ctx context.Context, tx pgx.Tx, siteID site.ID, libraryID resource.ID, code *template.Code) error {
 	if code == nil {
 		return nil
+	}
+	// Serialize cleanup for one usage tuple. Without this lock, two items can
+	// concurrently leave the same template, each observe the other's
+	// uncommitted old row, and both incorrectly retain stale metadata.
+	if _, err := tx.Exec(ctx, `
+SELECT 1
+FROM core.library_item_template_usage
+WHERE site_id=$1 AND library_id=$2 AND template=$3
+FOR UPDATE;`, siteID, libraryID, *code); err != nil {
+		return translateError(err)
 	}
 	if _, err := tx.Exec(ctx, `
 DELETE FROM core.library_item_template_usage usage
@@ -752,7 +773,7 @@ func libraryItemPartitionFilter(condition resource.FilterCondition) bool {
 	}
 }
 
-func libraryItemKeysetPredicate(expressions []libraryItemSortExpression, cursor resource.LibraryCursor, idDirection resource.SortDirection, add func(any) string) string {
+func libraryItemKeysetPredicate(expressions []libraryItemSortExpression, cursor resource.LibraryCursor, idDirection resource.SortDirection, primaryCustomPresent bool, add func(any) string) string {
 	branches := make([]string, 0, len(expressions)+1)
 	prefix := make([]string, 0, len(expressions))
 	for index, expression := range expressions {
@@ -762,7 +783,10 @@ func libraryItemKeysetPredicate(expressions []libraryItemSortExpression, cursor 
 			if expression.sort.Direction == resource.SortDescending {
 				operator = "<"
 			}
-			comparison := "(" + expression.sql + operator + add(value) + " OR " + expression.sql + " IS NULL)"
+			comparison := expression.sql + operator + add(value)
+			if !(primaryCustomPresent && index == 0) {
+				comparison = "(" + comparison + " OR " + expression.sql + " IS NULL)"
+			}
 			branches = append(branches, "("+strings.Join(append(append([]string(nil), prefix...), comparison), " AND ")+")")
 		}
 		if value == nil {

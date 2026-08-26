@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -156,7 +157,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 		sslMode = "disable"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	connector, err := connectorpostgres.New(ctx, connectorpostgres.Config{
@@ -216,8 +217,8 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 			dirty,
 		)
 	}
-	var hashPartitions, rangePartitions, defaultPartitions, searchIndexes int
-	var legacySettingsColumn bool
+	var hashPartitions, rangePartitions, defaultPartitions, searchIndexes, scopedFieldIndexes int
+	var legacySettingsColumn, libraryFieldScopeColumn bool
 	if err := connector.Pool().QueryRow(ctx, `
 SELECT
     (SELECT count(*) FROM pg_inherits WHERE inhparent='core.library_items'::regclass),
@@ -232,13 +233,19 @@ SELECT
       'idx_library_items_library_template', 'idx_library_items_title_trgm',
       'idx_library_items_slug_trgm'
     )),
-    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='core' AND table_name='resources' AND column_name='settings');
-`).Scan(&hashPartitions, &rangePartitions, &defaultPartitions, &searchIndexes, &legacySettingsColumn); err != nil {
+    (SELECT count(*) FROM pg_indexes WHERE schemaname='core' AND indexname IN (
+      'idx_resource_field_values_library_string', 'idx_resource_field_values_library_integer',
+      'idx_resource_field_values_library_float', 'idx_resource_field_values_library_timestamp'
+    )),
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='core' AND table_name='resources' AND column_name='settings'),
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='core' AND table_name='resource_field_values' AND column_name='library_id');
+`).Scan(&hashPartitions, &rangePartitions, &defaultPartitions, &searchIndexes, &scopedFieldIndexes, &legacySettingsColumn, &libraryFieldScopeColumn); err != nil {
 		t.Fatal(err)
 	}
-	if hashPartitions != 8 || rangePartitions != 104 || defaultPartitions != 8 || searchIndexes != 5 || legacySettingsColumn {
-		t.Fatalf("migration topology = hash:%d range:%d default:%d indexes:%d legacy_settings:%t",
-			hashPartitions, rangePartitions, defaultPartitions, searchIndexes, legacySettingsColumn)
+	if hashPartitions != 8 || rangePartitions != 104 || defaultPartitions != 8 || searchIndexes != 5 ||
+		scopedFieldIndexes != 4 || legacySettingsColumn || !libraryFieldScopeColumn {
+		t.Fatalf("migration topology = hash:%d range:%d default:%d indexes:%d scoped_field_indexes:%d legacy_settings:%t library_field_scope:%t",
+			hashPartitions, rangePartitions, defaultPartitions, searchIndexes, scopedFieldIndexes, legacySettingsColumn, libraryFieldScopeColumn)
 	}
 
 	var sitesTable *string
@@ -1838,6 +1845,129 @@ WHERE library_id=$1
 	if err != nil || len(missingRankPage.Items) != 1 || missingRankPage.Items[0].ID != loadedLibraryItem.ID {
 		t.Fatalf("same-field negative filter and sort = %#v, %v", missingRankPage, err)
 	}
+
+	sortPath := "/cursor-sort"
+	sortLibrary, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: siteIDs["localhost"], Type: resourcetype.Library,
+		Title: "Cursor sort", Slug: "cursor-sort", Path: &sortPath,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+		TypeSettings: map[string]any{"item_url_pattern": "/{slug}"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createSortItem := func(title, slug string, salary, rank *int64) resource.LibraryItem {
+		t.Helper()
+		values := make([]field.StoredValue, 0, 2)
+		fields := make(map[string]any, 2)
+		if salary != nil {
+			fields["salary"] = *salary
+			values = append(values, field.StoredValue{Key: "salary", Kind: field.StorageInteger, Value: *salary})
+		}
+		if rank != nil {
+			fields["rank"] = *rank
+			values = append(values, field.StoredValue{Key: "rank", Kind: field.StorageInteger, Value: *rank})
+		}
+		item, createErr := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
+			SiteID: siteIDs["localhost"], LibraryID: sortLibrary.ID,
+			Title: title, Slug: slug, ContentType: &contentType,
+			IsPublic: true, IsSearchable: true, Fields: fields, FieldValues: values,
+		}, false)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		return item
+	}
+	integer := func(value int64) *int64 { return &value }
+	salary10 := createSortItem("Ten", "ten", integer(10), integer(1))
+	salary20Bravo := createSortItem("Bravo", "twenty-bravo", integer(20), integer(1))
+	salary20Alpha := createSortItem("Alpha", "twenty-alpha", integer(20), integer(3))
+	salary30 := createSortItem("Thirty", "thirty", integer(30), integer(2))
+	missingFirst := createSortItem("Missing A", "missing-a", nil, integer(2))
+	missingSecond := createSortItem("Missing B", "missing-b", nil, integer(3))
+	missingThird := createSortItem("Missing C", "missing-c", nil, integer(1))
+
+	collectPages := func(sorts []resource.Sort) []resource.LibraryItem {
+		t.Helper()
+		items := make([]resource.LibraryItem, 0, 7)
+		seen := make(map[resource.ID]struct{}, 7)
+		cursor := ""
+		for pageNumber := 0; pageNumber < 10; pageNumber++ {
+			page, queryErr := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+				SiteID: siteIDs["localhost"], LibraryID: sortLibrary.ID,
+				Limit: 2, Cursor: cursor, Sort: sorts,
+			})
+			if queryErr != nil || len(page.Items) == 0 {
+				t.Fatalf("custom sort cursor page %d = %#v, %v", pageNumber, page, queryErr)
+			}
+			for _, item := range page.Items {
+				if _, duplicate := seen[item.ID]; duplicate {
+					t.Fatalf("custom sort returned duplicate item %d", item.ID)
+				}
+				seen[item.ID] = struct{}{}
+				items = append(items, item)
+			}
+			if page.NextCursor == "" {
+				return items
+			}
+			cursor = page.NextCursor
+		}
+		t.Fatal("custom sort cursor did not terminate")
+		return nil
+	}
+	salaryAscending := []resource.Sort{{Field: "resource.field.salary", Direction: resource.SortAscending, Kind: field.StorageInteger}}
+	ascendingItems := collectPages(salaryAscending)
+	wantAscending := []resource.ID{salary10.ID, salary20Bravo.ID, salary20Alpha.ID, salary30.ID, missingFirst.ID, missingSecond.ID, missingThird.ID}
+	ascendingIDs := make([]resource.ID, len(ascendingItems))
+	for index, item := range ascendingItems {
+		ascendingIDs[index] = item.ID
+	}
+	if !reflect.DeepEqual(ascendingIDs, wantAscending) {
+		t.Fatalf("salary ASC cursor order = %#v, want %#v", ascendingIDs, wantAscending)
+	}
+
+	salaryDescending := []resource.Sort{{Field: "resource.field.salary", Direction: resource.SortDescending, Kind: field.StorageInteger}}
+	descendingItems := collectPages(salaryDescending)
+	wantDescending := []resource.ID{salary30.ID, salary20Bravo.ID, salary20Alpha.ID, salary10.ID, missingFirst.ID, missingSecond.ID, missingThird.ID}
+	descendingIDs := make([]resource.ID, len(descendingItems))
+	for index, item := range descendingItems {
+		descendingIDs[index] = item.ID
+	}
+	if !reflect.DeepEqual(descendingIDs, wantDescending) {
+		t.Fatalf("salary DESC cursor order = %#v, want %#v", descendingIDs, wantDescending)
+	}
+
+	filteredSalary, err := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+		SiteID: siteIDs["localhost"], LibraryID: sortLibrary.ID, Limit: 10,
+		Filters: []resource.FilterCondition{{Field: "resource.field.salary", Operator: resource.FilterGreaterThanOrEqual, Value: int64(20), Kind: field.StorageInteger}},
+		Sort:    salaryAscending,
+	})
+	if err != nil || len(filteredSalary.Items) != 3 || filteredSalary.Items[0].ID != salary20Bravo.ID ||
+		filteredSalary.Items[1].ID != salary20Alpha.ID || filteredSalary.Items[2].ID != salary30.ID {
+		t.Fatalf("salary filter + sort = %#v, %v", filteredSalary, err)
+	}
+
+	titleSecondary, err := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+		SiteID: siteIDs["localhost"], LibraryID: sortLibrary.ID, Limit: 10,
+		Sort: []resource.Sort{
+			{Field: "resource.field.salary", Direction: resource.SortAscending, Kind: field.StorageInteger},
+			{Field: resource.FieldTitle, Direction: resource.SortAscending},
+		},
+	})
+	if err != nil || len(titleSecondary.Items) != 7 || titleSecondary.Items[1].ID != salary20Alpha.ID || titleSecondary.Items[2].ID != salary20Bravo.ID {
+		t.Fatalf("salary ASC, title ASC = %#v, %v", titleSecondary, err)
+	}
+	rankSecondary, err := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+		SiteID: siteIDs["localhost"], LibraryID: sortLibrary.ID, Limit: 10,
+		Sort: []resource.Sort{
+			{Field: "resource.field.salary", Direction: resource.SortAscending, Kind: field.StorageInteger},
+			{Field: "resource.field.rank", Direction: resource.SortDescending, Kind: field.StorageInteger},
+		},
+	})
+	if err != nil || len(rankSecondary.Items) != 7 || rankSecondary.Items[1].ID != salary20Alpha.ID || rankSecondary.Items[2].ID != salary20Bravo.ID {
+		t.Fatalf("salary ASC, rank DESC = %#v, %v", rankSecondary, err)
+	}
+
 	usageAlpha := template.Code("usage_alpha")
 	usageBeta := template.Code("usage_beta")
 	usageFirst, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
@@ -1864,32 +1994,123 @@ WHERE library_id=$1
 		}
 	}
 	assertTemplateCodes(archive.ID, usageAlpha)
-	currentUsageFirst := usageFirst
-	usageFirst.Template = &usageBeta
-	usageFirst, err = libraryItems.UpdateLibraryItem(ctx, nil, currentUsageFirst, usageFirst, false)
+	templateCandidate := usageFirst
+	templateCandidate.Template = &usageBeta
+	usageFirst, err = revisionRepository.RestoreLibraryItemRevision(ctx, nil, usageFirst, templateCandidate, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertTemplateCodes(archive.ID, usageAlpha, usageBeta)
-	if err := libraryItems.DeleteLibraryItem(ctx, usageSecond.ID); err != nil {
+
+	usageGamma := template.Code("usage_gamma")
+	bothCandidate := usageFirst
+	bothCandidate.LibraryID = library.ID
+	bothCandidate.Template = &usageGamma
+	usageFirst, err = revisionRepository.RestoreLibraryItemRevision(ctx, nil, usageFirst, bothCandidate, 1)
+	if err != nil {
 		t.Fatal(err)
 	}
-	assertTemplateCodes(archive.ID, usageBeta)
-	usageFirst, err = libraryItems.MoveLibraryItem(ctx, nil, usageFirst.ID, library.ID, usageFirst.Version, false)
+	assertTemplateCodes(archive.ID, usageAlpha)
+	assertTemplateCodes(library.ID, usageGamma)
+
+	libraryCandidate := usageSecond
+	libraryCandidate.LibraryID = library.ID
+	usageSecond, err = revisionRepository.RestoreLibraryItemRevision(ctx, nil, usageSecond, libraryCandidate, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertTemplateCodes(archive.ID)
-	assertTemplateCodes(library.ID, usageBeta)
+	assertTemplateCodes(library.ID, usageAlpha, usageGamma)
+
 	if err := libraryItems.DeleteLibraryItem(ctx, usageFirst.ID); err != nil {
 		t.Fatal(err)
 	}
+	assertTemplateCodes(library.ID, usageAlpha)
+	if err := libraryItems.DeleteLibraryItem(ctx, usageSecond.ID); err != nil {
+		t.Fatal(err)
+	}
 	assertTemplateCodes(library.ID)
+
+	concurrentOld := template.Code("concurrent_old")
+	concurrentNewA := template.Code("concurrent_new_a")
+	concurrentNewB := template.Code("concurrent_new_b")
+	concurrentA, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Template: &concurrentOld,
+		Title: "Concurrent A", Slug: "concurrent-a", ContentType: &contentType,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	concurrentB, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Template: &concurrentOld,
+		Title: "Concurrent B", Slug: "concurrent-b", ContentType: &contentType,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startUpdates := make(chan struct{})
+	updateErrors := make(chan error, 2)
+	var usageWait sync.WaitGroup
+	for _, mutation := range []struct {
+		current resource.LibraryItem
+		code    template.Code
+	}{{current: concurrentA, code: concurrentNewA}, {current: concurrentB, code: concurrentNewB}} {
+		usageWait.Add(1)
+		go func(mutation struct {
+			current resource.LibraryItem
+			code    template.Code
+		}) {
+			defer usageWait.Done()
+			<-startUpdates
+			candidate := mutation.current
+			candidate.Template = &mutation.code
+			_, updateErr := libraryItems.UpdateLibraryItem(ctx, nil, mutation.current, candidate, false)
+			updateErrors <- updateErr
+		}(mutation)
+	}
+	close(startUpdates)
+	usageWait.Wait()
+	close(updateErrors)
+	for updateErr := range updateErrors {
+		if updateErr != nil {
+			t.Fatalf("concurrent template update: %v", updateErr)
+		}
+	}
+	assertTemplateCodes(archive.ID, concurrentNewA, concurrentNewB)
+	if err := libraryItems.DeleteLibraryItem(ctx, concurrentA.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := libraryItems.DeleteLibraryItem(ctx, concurrentB.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertTemplateCodes(archive.ID)
 
 	perfPath := "/sort-performance"
 	perfLibrary, err := resourceRepository.Create(ctx, nil, resource.Resource{
 		SiteID: siteIDs["localhost"], Type: resourcetype.Library,
 		Title: "Sort performance", Slug: "sort-performance", Path: &perfPath,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+		TypeSettings: map[string]any{"item_url_pattern": "/{slug}"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noiseAPath := "/sort-performance-noise-a"
+	noiseLibraryA, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: siteIDs["localhost"], Type: resourcetype.Library,
+		Title: "Sort performance noise A", Slug: "sort-performance-noise-a", Path: &noiseAPath,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+		TypeSettings: map[string]any{"item_url_pattern": "/{slug}"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noiseBPath := "/sort-performance-noise-b"
+	noiseLibraryB, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: siteIDs["localhost"], Type: resourcetype.Library,
+		Title: "Sort performance noise B", Slug: "sort-performance-noise-b", Path: &noiseBPath,
 		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
 		TypeSettings: map[string]any{"item_url_pattern": "/{slug}"},
 	}, nil)
@@ -1904,24 +2125,52 @@ WHERE library_id=$1
 CREATE TEMP TABLE perf_library_item_ids AS
 WITH inserted AS (
     INSERT INTO core.resource_entities (site_id, storage_kind)
-    SELECT $1, 'library_item' FROM generate_series(1, 20000)
+    SELECT $1, 'library_item' FROM generate_series(1, 10000)
+    RETURNING id
+)
+SELECT id, row_number() OVER () AS ordinal FROM inserted;`, args: []any{siteIDs["localhost"]}},
+		{sql: `
+CREATE TEMP TABLE perf_noise_a_ids AS
+WITH inserted AS (
+    INSERT INTO core.resource_entities (site_id, storage_kind)
+    SELECT $1, 'library_item' FROM generate_series(1, 10000)
+    RETURNING id
+)
+SELECT id, row_number() OVER () AS ordinal FROM inserted;`, args: []any{siteIDs["localhost"]}},
+		{sql: `
+CREATE TEMP TABLE perf_noise_b_ids AS
+WITH inserted AS (
+    INSERT INTO core.resource_entities (site_id, storage_kind)
+    SELECT $1, 'library_item' FROM generate_series(1, 10000)
     RETURNING id
 )
 SELECT id, row_number() OVER () AS ordinal FROM inserted;`, args: []any{siteIDs["localhost"]}},
 		{sql: `INSERT INTO core.library_item_routes (resource_id, site_id, library_id, slug)
-SELECT id, $1, $2, 'perf-' || ordinal FROM perf_library_item_ids;`, args: []any{siteIDs["localhost"], perfLibrary.ID}},
+SELECT id, $1::bigint, $2::bigint, 'perf-' || ordinal FROM perf_library_item_ids
+UNION ALL
+SELECT id, $1::bigint, $3::bigint, 'noise-a-' || ordinal FROM perf_noise_a_ids
+UNION ALL
+SELECT id, $1::bigint, $4::bigint, 'noise-b-' || ordinal FROM perf_noise_b_ids;`, args: []any{siteIDs["localhost"], perfLibrary.ID, noiseLibraryA.ID, noiseLibraryB.ID}},
 		{sql: `INSERT INTO core.library_items (
     id, site_id, library_id, partition_at, template, content_type, title, slug,
     is_public, is_searchable
 )
-SELECT id, $1, $2, now(), 'perf', 'html', 'Performance ' || ordinal,
-       'perf-' || ordinal, true, true
-FROM perf_library_item_ids;`, args: []any{siteIDs["localhost"], perfLibrary.ID}},
+SELECT id, $1::bigint, $2::bigint, now(), 'perf', 'html', 'Performance ' || ordinal,
+       'perf-' || ordinal, true, true FROM perf_library_item_ids
+UNION ALL
+SELECT id, $1::bigint, $3::bigint, now(), 'perf', 'html', 'Noise A ' || ordinal,
+       'noise-a-' || ordinal, true, true FROM perf_noise_a_ids
+UNION ALL
+SELECT id, $1::bigint, $4::bigint, now(), 'perf', 'html', 'Noise B ' || ordinal,
+       'noise-b-' || ordinal, true, true FROM perf_noise_b_ids;`, args: []any{siteIDs["localhost"], perfLibrary.ID, noiseLibraryA.ID, noiseLibraryB.ID}},
 		{sql: `INSERT INTO core.resource_field_values (
-    resource_id, site_id, field_key, position, is_multi, value_kind, value_integer
+    resource_id, site_id, library_id, field_key, position, is_multi, value_kind, value_integer
 )
-SELECT id, $1, 'salary', 0, false, 'integer', ordinal % 5000
-FROM perf_library_item_ids;`, args: []any{siteIDs["localhost"]}},
+SELECT id, $1::bigint, $2::bigint, 'salary', 0, false, 'integer', ordinal % 5000 FROM perf_library_item_ids
+UNION ALL
+SELECT id, $1::bigint, $3::bigint, 'salary', 0, false, 'integer', ordinal % 5000 FROM perf_noise_a_ids
+UNION ALL
+SELECT id, $1::bigint, $4::bigint, 'salary', 0, false, 'integer', ordinal % 5000 FROM perf_noise_b_ids;`, args: []any{siteIDs["localhost"], perfLibrary.ID, noiseLibraryA.ID, noiseLibraryB.ID}},
 		{sql: `ANALYZE core.resource_field_values;`},
 		{sql: `ANALYZE core.library_item_routes;`},
 		{sql: `ANALYZE core.library_items;`},
@@ -1931,11 +2180,26 @@ FROM perf_library_item_ids;`, args: []any{siteIDs["localhost"]}},
 			t.Fatal(err)
 		}
 	}
-	explainCustomSort := func(direction string, cursor bool) string {
+	var totalSalaryRows, targetSalaryRows int
+	if err := connector.Pool().QueryRow(ctx, `
+SELECT count(*), count(*) FILTER (WHERE library_id=$2)
+FROM core.resource_field_values
+WHERE site_id=$1 AND field_key='salary';`, siteIDs["localhost"], perfLibrary.ID).Scan(&totalSalaryRows, &targetSalaryRows); err != nil {
+		t.Fatal(err)
+	}
+	if totalSalaryRows-targetSalaryRows < 20000 || targetSalaryRows != 10000 {
+		t.Fatalf("multi-Library salary fixture = total:%d target:%d", totalSalaryRows, targetSalaryRows)
+	}
+
+	explainCustomSort := func(direction string, cursor, filtered bool) string {
 		t.Helper()
 		cursorSQL := ""
 		if cursor {
-			cursorSQL = "AND (sort_value.value_integer > 2500 OR sort_value.value_integer IS NULL)"
+			cursorSQL = "AND sort_value.value_integer > 2500"
+		}
+		filterSQL := ""
+		if filtered {
+			filterSQL = "AND sort_value.value_integer >= 1000"
 		}
 		rows, queryErr := connector.Pool().Query(ctx, `
 EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
@@ -1943,17 +2207,20 @@ SELECT item.id
 FROM core.resource_field_values sort_value
 JOIN core.library_item_routes route
   ON route.resource_id=sort_value.resource_id AND route.site_id=sort_value.site_id
+ AND route.library_id=sort_value.library_id
 JOIN core.library_items item
   ON item.id=route.resource_id AND item.site_id=route.site_id AND item.library_id=route.library_id
 JOIN core.resources library
   ON library.id=item.library_id AND library.site_id=item.site_id
 WHERE sort_value.site_id=$1
+  AND sort_value.library_id=$2
   AND sort_value.field_key='salary'
   AND sort_value.value_kind='integer'
   AND sort_value.position=0 AND NOT sort_value.is_multi
   AND item.library_id=$2
   AND library.type='library' AND library.deleted_at IS NULL
   `+cursorSQL+`
+  `+filterSQL+`
 ORDER BY sort_value.value_integer `+direction+`, item.id ASC
 LIMIT 101;`, siteIDs["localhost"], perfLibrary.ID)
 		if queryErr != nil {
@@ -1974,20 +2241,45 @@ LIMIT 101;`, siteIDs["localhost"], perfLibrary.ID)
 		}
 		return plan.String()
 	}
-	ascendingPlan := explainCustomSort("ASC", false)
-	if !strings.Contains(ascendingPlan, "idx_resource_field_values_integer") ||
+	scopedIndexRows := func(plan string) int {
+		t.Helper()
+		matcher := regexp.MustCompile(`actual [^)]* rows=([0-9]+)(\.[0-9]+)? loops=1`)
+		for _, line := range strings.Split(plan, "\n") {
+			if !strings.Contains(line, "idx_resource_field_values_library_integer") {
+				continue
+			}
+			matches := matcher.FindStringSubmatch(line)
+			if len(matches) >= 2 {
+				rows, parseErr := strconv.Atoi(matches[1])
+				if parseErr == nil {
+					return rows
+				}
+			}
+		}
+		return -1
+	}
+	ascendingPlan := explainCustomSort("ASC", false, false)
+	t.Logf("multi-Library salary ASC EXPLAIN (ANALYZE, BUFFERS):\n%s", ascendingPlan)
+	if !strings.Contains(ascendingPlan, "idx_resource_field_values_library_integer") ||
 		!strings.Contains(ascendingPlan, "Limit") || strings.Contains(ascendingPlan, "SubPlan") ||
-		!strings.Contains(ascendingPlan, "library_item_routes") {
+		!strings.Contains(ascendingPlan, "library_item_routes") || scopedIndexRows(ascendingPlan) < 1 || scopedIndexRows(ascendingPlan) > 110 {
 		t.Fatalf("custom salary ASC plan = %s", ascendingPlan)
 	}
-	descendingPlan := explainCustomSort("DESC", false)
-	if !strings.Contains(descendingPlan, "idx_resource_field_values_integer") ||
+	descendingPlan := explainCustomSort("DESC", false, false)
+	t.Logf("multi-Library salary DESC EXPLAIN (ANALYZE, BUFFERS):\n%s", descendingPlan)
+	if !strings.Contains(descendingPlan, "idx_resource_field_values_library_integer") ||
 		!strings.Contains(descendingPlan, "Backward") {
 		t.Fatalf("custom salary DESC plan = %s", descendingPlan)
 	}
-	cursorPlan := explainCustomSort("ASC", true)
-	if !strings.Contains(cursorPlan, "idx_resource_field_values_integer") || strings.Contains(cursorPlan, "SubPlan") {
+	cursorPlan := explainCustomSort("ASC", true, false)
+	t.Logf("multi-Library salary cursor EXPLAIN (ANALYZE, BUFFERS):\n%s", cursorPlan)
+	if !strings.Contains(cursorPlan, "idx_resource_field_values_library_integer") || strings.Contains(cursorPlan, "SubPlan") || scopedIndexRows(cursorPlan) > 110 {
 		t.Fatalf("custom salary cursor plan = %s", cursorPlan)
+	}
+	filteredPlan := explainCustomSort("ASC", false, true)
+	t.Logf("multi-Library salary filter + sort EXPLAIN (ANALYZE, BUFFERS):\n%s", filteredPlan)
+	if !strings.Contains(filteredPlan, "idx_resource_field_values_library_integer") || strings.Contains(filteredPlan, "SubPlan") || scopedIndexRows(filteredPlan) > 110 {
+		t.Fatalf("custom salary filter + sort plan = %s", filteredPlan)
 	}
 	usagePlanRows, err := connector.Pool().Query(ctx, `EXPLAIN (COSTS OFF) SELECT template FROM core.library_item_template_usage WHERE site_id=$1 AND library_id=$2 ORDER BY template;`, siteIDs["localhost"], perfLibrary.ID)
 	if err != nil {

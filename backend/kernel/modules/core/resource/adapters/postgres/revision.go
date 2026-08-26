@@ -273,7 +273,7 @@ WHERE id=$1 AND site_id=$2;`, candidate.ID, candidate.SiteID, candidate.ParentID
 	if command.RowsAffected() != 1 {
 		return resource.Resource{}, resource.ErrNotFound
 	}
-	if err := replaceResourceFields(ctx, tx, candidate.ID, candidate.SiteID, candidate.FieldValues); err != nil {
+	if err := replaceResourceFields(ctx, tx, candidate.ID, candidate.SiteID, nil, candidate.FieldValues); err != nil {
 		return resource.Resource{}, err
 	}
 	if err := replaceFileReferences(ctx, tx, candidate.ID, candidate.FileReferences); err != nil {
@@ -379,7 +379,15 @@ WHERE id=$1 RETURNING `+libraryItemColumns+`;`, candidate.ID, candidate.LibraryI
 	if err != nil {
 		return resource.LibraryItem{}, translateError(err)
 	}
-	if err := replaceResourceFields(ctx, tx, candidate.ID, candidate.SiteID, candidate.FieldValues); err != nil {
+	if err := ensureLibraryItemTemplateUsage(ctx, tx, restored.SiteID, restored.LibraryID, restored.Template); err != nil {
+		return resource.LibraryItem{}, err
+	}
+	if locked.LibraryID != restored.LibraryID || !sameTemplateCode(locked.Template, restored.Template) {
+		if err := pruneLibraryItemTemplateUsage(ctx, tx, locked.SiteID, locked.LibraryID, locked.Template); err != nil {
+			return resource.LibraryItem{}, err
+		}
+	}
+	if err := replaceResourceFields(ctx, tx, candidate.ID, candidate.SiteID, &candidate.LibraryID, candidate.FieldValues); err != nil {
 		return resource.LibraryItem{}, err
 	}
 	if err := replaceFileReferences(ctx, tx, candidate.ID, candidate.FileReferences); err != nil {

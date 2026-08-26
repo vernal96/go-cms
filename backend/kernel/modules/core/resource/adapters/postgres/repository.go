@@ -649,7 +649,7 @@ RETURNING
 	if err := replaceFileReferences(ctx, transaction, result.ID, item.FileReferences); err != nil {
 		return resource.Resource{}, err
 	}
-	if err := replaceResourceFields(ctx, transaction, result.ID, result.SiteID, item.FieldValues); err != nil {
+	if err := replaceResourceFields(ctx, transaction, result.ID, result.SiteID, nil, item.FieldValues); err != nil {
 		return resource.Resource{}, err
 	}
 	result.Fields = cloneFieldMap(item.Fields)
@@ -1337,7 +1337,7 @@ WHERE item.id = tree.id
 	if err := replaceFileReferences(ctx, transaction, updated.ID, item.FileReferences); err != nil {
 		return resource.Resource{}, err
 	}
-	if err := replaceResourceFields(ctx, transaction, updated.ID, updated.SiteID, item.FieldValues); err != nil {
+	if err := replaceResourceFields(ctx, transaction, updated.ID, updated.SiteID, nil, item.FieldValues); err != nil {
 		return resource.Resource{}, err
 	}
 	updated.Fields = cloneFieldMap(item.Fields)
@@ -2617,7 +2617,7 @@ VALUES ('resource', $1, $2, $3);`, ownerID, key, id); err != nil {
 	return nil
 }
 
-func replaceResourceFields(ctx context.Context, tx pgx.Tx, resourceID resource.ID, siteID site.ID, values []field.StoredValue) error {
+func replaceResourceFields(ctx context.Context, tx pgx.Tx, resourceID resource.ID, siteID site.ID, libraryID *resource.ID, values []field.StoredValue) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM core.resource_field_values WHERE resource_id = $1;`, resourceID); err != nil {
 		return fmt.Errorf("delete resource fields: %w", err)
 	}
@@ -2671,11 +2671,11 @@ func replaceResourceFields(ctx context.Context, tx pgx.Tx, resourceID resource.I
 		}
 		if _, err := tx.Exec(ctx, `
 INSERT INTO core.resource_field_values (
-    resource_id, site_id, field_key, position, is_multi, value_kind,
+    resource_id, site_id, library_id, field_key, position, is_multi, value_kind,
     value_string, value_integer, value_float, value_boolean,
     value_timestamp, value_reference, value_json
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb);`,
-			resourceID, siteID, stored.Key, stored.Position, stored.Multiple, stored.Kind,
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb);`,
+			resourceID, siteID, libraryID, stored.Key, stored.Position, stored.Multiple, stored.Kind,
 			stringValue, integerValue, floatValue, booleanValue, timestampValue, referenceValue, jsonValue); err != nil {
 			return fmt.Errorf("insert resource field %q: %w", stored.Key, translateError(err))
 		}

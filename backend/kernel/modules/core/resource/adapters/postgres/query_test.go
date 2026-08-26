@@ -128,15 +128,22 @@ func TestLibraryKeysetUsesMissingLastAndStableID(t *testing.T) {
 	predicate := libraryItemKeysetPredicate([]libraryItemSortExpression{{
 		sort: resource.Sort{Field: resource.FieldPublishedAt, Direction: resource.SortDescending},
 		sql:  "item.published_at",
-	}}, resource.LibraryCursor{Values: []any{int64(7)}, ID: 12}, resource.SortAscending, add)
+	}}, resource.LibraryCursor{Values: []any{int64(7)}, ID: 12}, resource.SortAscending, false, add)
 	if !strings.Contains(predicate, "item.published_at<$x OR item.published_at IS NULL") || !strings.Contains(predicate, "item.id>$x") {
 		t.Fatalf("keyset SQL = %s", predicate)
 	}
 	nullPredicate := libraryItemKeysetPredicate([]libraryItemSortExpression{{
 		sort: resource.Sort{Field: resource.FieldPublishedAt, Direction: resource.SortAscending},
 		sql:  "item.published_at",
-	}}, resource.LibraryCursor{Values: []any{nil}, ID: 12}, resource.SortAscending, add)
+	}}, resource.LibraryCursor{Values: []any{nil}, ID: 12}, resource.SortAscending, false, add)
 	if strings.Contains(nullPredicate, "published_at>") || !strings.Contains(nullPredicate, "published_at IS NULL") {
 		t.Fatalf("null keyset SQL = %s", nullPredicate)
+	}
+	presentCustom := libraryItemKeysetPredicate([]libraryItemSortExpression{{
+		sort: resource.Sort{Field: "resource.field.salary", Direction: resource.SortAscending},
+		sql:  "sort_value_0.value_integer",
+	}}, resource.LibraryCursor{Values: []any{int64(20)}, ID: 12}, resource.SortAscending, true, add)
+	if strings.Contains(presentCustom, "value_integer IS NULL") || !strings.Contains(presentCustom, "value_integer>$x") {
+		t.Fatalf("present custom keyset SQL = %s", presentCustom)
 	}
 }
