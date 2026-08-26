@@ -245,7 +245,19 @@ export interface ResourceTypeCapabilities {
   owns_library_items?: boolean
   default_icon?: string
 }
-export interface ResourceTypeMetadata { code: ResourceTypeCode; label: string; capabilities: ResourceTypeCapabilities }
+export interface ResourceContentTypeOption {
+  code: string
+  label: string
+  editor: string
+}
+export interface ResourceTypeMetadata {
+  code: ResourceTypeCode
+  label: string
+  capabilities: ResourceTypeCapabilities
+  settings_fields: FieldDefinition[]
+  settings_defaults: Record<string, unknown>
+  content_types: ResourceContentTypeOption[]
+}
 
 export type WidgetArea = 'body' | 'sidebar'
 

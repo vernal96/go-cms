@@ -27,6 +27,36 @@ func TestCustomNegativeFilterUsesNotExists(t *testing.T) {
 	}
 }
 
+func TestCustomSortAliasFilterReusesJoinedValue(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		operator  resource.FilterOperator
+		value     any
+		want      string
+		forbidden string
+	}{
+		{name: "positive", operator: resource.FilterEqual, value: int64(7), want: "rank.value_integer = $1", forbidden: "EXISTS"},
+		{name: "negative includes missing", operator: resource.FilterNotIn, value: []int64{7, 8}, want: "rank.resource_id IS NULL", forbidden: "NOT EXISTS"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := []any{}
+			add := func(value any) string {
+				args = append(args, value)
+				return "$" + string(rune('0'+len(args)))
+			}
+			fragment, err := libraryItemSortAliasFilter(resource.FilterCondition{
+				Field: "resource.field.rank", Operator: test.operator, Value: test.value, Kind: field.StorageInteger,
+			}, libraryItemSortAlias{name: "rank", valueColumn: "value_integer"}, add)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(fragment, test.want) || strings.Contains(fragment, test.forbidden) || len(args) != 1 {
+				t.Fatalf("alias filter SQL/args = %s / %#v", fragment, args)
+			}
+		})
+	}
+}
+
 func TestPublishedAtPartitionFilterOnlyUsesPrunableOperators(t *testing.T) {
 	for _, operator := range []resource.FilterOperator{
 		resource.FilterEqual, resource.FilterIn, resource.FilterGreaterThan,

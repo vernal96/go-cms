@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, type PropType } from 'vue'
+import { computed } from 'vue'
 import { ElAlert } from 'element-plus'
 import type { FieldDefinition } from '../../types/admin'
 import CheckboxField from './CheckboxField.vue'
@@ -13,19 +13,21 @@ import JsonField from './JsonField.vue'
 import ResourcePickerField from './ResourcePickerField.vue'
 import RichTextEditor from '../RichTextEditor.vue'
 
-defineProps({
-  field: { type: Object as PropType<FieldDefinition>, required: true },
-  siteId: { type: Number, default: 0 },
-  accessToken: { type: String, default: '' },
-})
+defineProps<{
+	field: FieldDefinition
+	siteId?: number
+	accessToken?: string
+	resourceTemplates?: Array<{ code: string; label: string }>
+}>()
 const model = defineModel<unknown>()
 const resourceIDs = computed<number[]>(() => Array.isArray(model.value) ? model.value.filter((item): item is number => typeof item === 'number') : [])
 </script>
 
 <template>
 	<rich-text-editor v-if="field.editor === 'html'" :model-value="typeof model === 'string' ? model : ''" @update:model-value="model = $event" />
-	<resource-picker-field v-else-if="field.editor === 'resource-picker'" :model-value="typeof model === 'number' ? model : undefined" :site-id="siteId" :access-token="accessToken" @update:model-value="model = $event" />
-	<resource-picker-field v-else-if="field.editor === 'resource-multi-picker'" :model-value="resourceIDs" :site-id="siteId" :access-token="accessToken" multiple @update:model-value="model = $event" />
+	<select-field v-else-if="field.editor === 'resource-template'" v-model="model" :choices="(resourceTemplates ?? []).map((item) => ({ value: item.code, label: item.label }))" :multiple="false" />
+	<resource-picker-field v-else-if="field.editor === 'resource-picker'" :model-value="typeof model === 'number' ? model : undefined" :site-id="siteId ?? 0" :access-token="accessToken ?? ''" @update:model-value="model = $event" />
+	<resource-picker-field v-else-if="field.editor === 'resource-multi-picker'" :model-value="resourceIDs" :site-id="siteId ?? 0" :access-token="accessToken ?? ''" multiple @update:model-value="model = $event" />
 	<json-field v-else-if="field.type === 'json'" v-model="model" />
   <text-field
     v-else-if="

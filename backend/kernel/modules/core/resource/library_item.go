@@ -271,66 +271,93 @@ func (s *LibraryService) Query(ctx context.Context, actor security.Actor, query 
 }
 
 func (s *LibraryService) resolveLibraryQuery(ctx context.Context, library Resource, runtime *site.Runtime, query *LibraryItemQuery) error {
-	kinds := make(map[FieldPath]field.StorageKind)
-	resolve := func(path FieldPath) (field.StorageKind, error) {
-		if kind, exists := kinds[path]; exists {
-			return kind, nil
-		}
-		if !IsCustomFieldPath(path) {
-			kind, err := BuiltinFieldStorageKind(path)
-			if err == nil {
-				kinds[path] = kind
-			}
-			return kind, err
-		}
-		codes, err := s.repository.LibraryItemTemplateCodes(ctx, library.SiteID, library.ID)
+	custom := false
+	for _, condition := range query.Filters {
+		custom = custom || IsCustomFieldPath(condition.Field)
+	}
+	for _, item := range query.Sort {
+		custom = custom || IsCustomFieldPath(item.Field)
+	}
+
+	codes := []template.Code(nil)
+	if custom {
+		var err error
+		codes, err = s.repository.LibraryItemTemplateCodes(ctx, library.SiteID, library.ID)
 		if err != nil {
-			return "", err
+			return err
 		}
 		if len(codes) == 0 {
 			if code, ok := library.TypeSettings["default_item_template"].(string); ok && code != "" {
 				codes = []template.Code{template.Code(code)}
 			}
 		}
+	}
+
+	metadata := make(map[FieldPath]field.StorageMetadata)
+	resolve := func(path FieldPath) (field.StorageMetadata, error) {
+		if resolved, exists := metadata[path]; exists {
+			return resolved, nil
+		}
+		if !IsCustomFieldPath(path) {
+			kind, err := BuiltinFieldStorageKind(path)
+			if err == nil {
+				metadata[path] = field.StorageMetadata{Kind: kind}
+			}
+			return field.StorageMetadata{Kind: kind}, err
+		}
 		key := strings.TrimPrefix(string(path), "resource.field.")
-		var resolved field.StorageKind
+		var resolved field.StorageMetadata
+		found := false
 		for _, code := range codes {
 			templateRuntime, exists := runtime.Profile().Template(code)
 			if !exists {
-				return "", fmt.Errorf("library item template %q is unavailable", code)
+				return field.StorageMetadata{}, fmt.Errorf("library item template %q is unavailable", code)
 			}
-			kind, exists := templateRuntime.FieldSchema().StorageKind(key)
+			candidate, exists := templateRuntime.FieldSchema().Storage(key)
 			if !exists {
 				continue
 			}
-			if resolved != "" && resolved != kind {
-				return "", fmt.Errorf("field %q has incompatible storage kinds %q and %q", path, resolved, kind)
+			if found && resolved.Kind != candidate.Kind {
+				return field.StorageMetadata{}, fmt.Errorf(
+					"field %q has incompatible storage kinds %q and %q",
+					path, resolved.Kind, candidate.Kind,
+				)
 			}
-			resolved = kind
+			if found && resolved.Multiple != candidate.Multiple {
+				return field.StorageMetadata{}, fmt.Errorf(
+					"field %q has incompatible multiplicity %t and %t",
+					path, resolved.Multiple, candidate.Multiple,
+				)
+			}
+			resolved = candidate
+			found = true
 		}
-		if resolved == "" {
-			return "", fmt.Errorf("field %q is not defined by LibraryItem templates", path)
+		if !found {
+			return field.StorageMetadata{}, fmt.Errorf("field %q is not defined by LibraryItem templates", path)
 		}
-		kinds[path] = resolved
+		metadata[path] = resolved
 		return resolved, nil
 	}
 	for index := range query.Filters {
-		kind, err := resolve(query.Filters[index].Field)
+		resolved, err := resolve(query.Filters[index].Field)
 		if err != nil {
 			return err
 		}
-		query.Filters[index].Kind = kind
-		query.Filters[index].Value, err = normalizeQueryFilterValue(kind, query.Filters[index].Operator, query.Filters[index].Value)
+		query.Filters[index].Kind = resolved.Kind
+		query.Filters[index].Value, err = normalizeQueryFilterValue(resolved.Kind, query.Filters[index].Operator, query.Filters[index].Value)
 		if err != nil {
 			return fmt.Errorf("field %q: %w", query.Filters[index].Field, err)
 		}
 	}
 	for index := range query.Sort {
-		kind, err := resolve(query.Sort[index].Field)
+		resolved, err := resolve(query.Sort[index].Field)
 		if err != nil {
 			return err
 		}
-		query.Sort[index].Kind = kind
+		if IsCustomFieldPath(query.Sort[index].Field) && resolved.Multiple {
+			return fmt.Errorf("field %q is multi-valued and cannot be sorted", query.Sort[index].Field)
+		}
+		query.Sort[index].Kind = resolved.Kind
 	}
 	return nil
 }

@@ -36,8 +36,8 @@ describe('ResourceCreateDialog', () => {
     requestMock
       .mockResolvedValueOnce({
         types: [
-			{ code: 'page', label: 'Страница', capabilities: { supports_template: true, supports_content: true, supports_fields: true, mutable_type: true } },
-			{ code: 'link', label: 'Ссылка', capabilities: { mutable_type: true } },
+			{ code: 'page', label: 'Страница', capabilities: { supports_template: true, supports_content: true, supports_fields: true, mutable_type: true }, settings_fields: [], settings_defaults: {}, content_types: [{ code: 'html', label: 'HTML', editor: 'html' }] },
+			{ code: 'link', label: 'Ссылка', capabilities: { mutable_type: true }, settings_fields: [], settings_defaults: {}, content_types: [] },
         ],
         templates: [
           {
@@ -100,7 +100,7 @@ describe('ResourceCreateDialog', () => {
       parent_id: null,
       type: 'page',
       template_code: null,
-      content_type: null,
+		content_type: 'html',
       content: '',
       target_resource_id: null,
       title: 'Home',
@@ -115,7 +115,13 @@ describe('ResourceCreateDialog', () => {
   it('uses capabilities for a custom target resource type', async () => {
     requestMock
       .mockResolvedValueOnce({
-        types: [{ code: 'custom_target', label: 'Custom target', capabilities: { supports_target_resource: true, mutable_type: true } }],
+        types: [{
+			code: 'custom_target', label: 'Товар каталога',
+			capabilities: { supports_target_resource: true, supports_content: true, mutable_type: true },
+			settings_fields: [{ key: 'catalog_mode', type: 'string', label: 'Режим каталога', required: true, rules: [] }],
+			settings_defaults: { catalog_mode: 'standard' },
+			content_types: [{ code: 'markdown', label: 'Markdown', editor: 'textarea' }],
+		}],
         templates: [], widgets: [], extensions: [],
       })
       .mockResolvedValueOnce({ items: [{ id: 12, parent_id: null, type: 'page', display_title: 'Target', path: '/target' }] })
@@ -127,6 +133,8 @@ describe('ResourceCreateDialog', () => {
     await (wrapper.vm as unknown as { open(parent: ResourceTreeItem | null): Promise<void> }).open(null)
     await flushPromises()
     const model = wrapper.findComponent({ name: 'ElForm' }).props('model') as Record<string, unknown>
+		expect(model.type_settings).toEqual({ catalog_mode: 'standard' })
+		expect(model.content_type).toBe('markdown')
     Object.assign(model, { title: 'Reference', target_resource_id: 12 })
     const buttons = wrapper.findAllComponents({ name: 'ElButton' })
     buttons[buttons.length - 1]?.vm.$emit('click')
@@ -134,7 +142,8 @@ describe('ResourceCreateDialog', () => {
 
     const init = requestMock.mock.calls[2]?.[2] as RequestInit
     expect(JSON.parse(String(init.body))).toEqual(expect.objectContaining({
-      type: 'custom_target', target_resource_id: 12, template_code: null,
+		type: 'custom_target', target_resource_id: 12, template_code: null,
+		content_type: 'markdown', type_settings: { catalog_mode: 'standard' },
     }))
     expect(wrapper.findAllComponents({ name: 'ElSelect' })).toHaveLength(2)
   })

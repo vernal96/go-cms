@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/eventbus"
@@ -301,6 +302,33 @@ func (r *RuntimeRegistry) addResourceType(
 			code,
 			resourceType.PathMode(),
 		)
+	}
+
+	metadata := resourceType.Metadata()
+	if metadata.Label == "" || strings.TrimSpace(metadata.Label) != metadata.Label {
+		return fmt.Errorf("resource type %q has invalid label %q", code, metadata.Label)
+	}
+	settingsSchema, err := field.Compile(metadata.SettingsFields, r)
+	if err != nil {
+		return fmt.Errorf("resource type %q settings metadata: %w", code, err)
+	}
+	if _, err := settingsSchema.Validate(metadata.SettingsDefaults); err != nil {
+		return fmt.Errorf("resource type %q settings defaults: %w", code, err)
+	}
+	seenContentTypes := make(map[string]struct{}, len(metadata.ContentTypes))
+	for index, option := range metadata.ContentTypes {
+		if option.Code == "" || strings.TrimSpace(option.Code) != option.Code ||
+			option.Label == "" || strings.TrimSpace(option.Label) != option.Label ||
+			option.Editor == "" || strings.TrimSpace(string(option.Editor)) != string(option.Editor) {
+			return fmt.Errorf("resource type %q content type at index %d is invalid", code, index)
+		}
+		if _, exists := seenContentTypes[option.Code]; exists {
+			return fmt.Errorf("resource type %q content type %q is duplicated", code, option.Code)
+		}
+		seenContentTypes[option.Code] = struct{}{}
+	}
+	if metadata.Capabilities.SupportsContent != (len(metadata.ContentTypes) > 0) {
+		return fmt.Errorf("resource type %q content capability and metadata disagree", code)
 	}
 
 	r.resourceTypes[code] = resourceType

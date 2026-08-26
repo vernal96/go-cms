@@ -10,6 +10,7 @@ import (
 
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/eventbus"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
@@ -65,9 +66,30 @@ func (r *extensionTestRuntime) ResourceEditorExtension() resourceextension.Edito
 
 type widgetMetadataModule struct{}
 
+type catalogProductResourceType struct{}
+
+func (catalogProductResourceType) Code() resourcetype.Code         { return "catalog_product" }
+func (catalogProductResourceType) PathMode() resourcetype.PathMode { return resourcetype.PathRoute }
+func (catalogProductResourceType) Metadata() resourcetype.Metadata {
+	return resourcetype.Metadata{
+		Label: "Товар каталога",
+		Capabilities: resourcetype.Capabilities{
+			SupportsTemplate: true, SupportsContent: true, SupportsFields: true,
+			SupportsExternalURL: true, SupportsTargetResource: true, MutableType: true,
+		},
+		SettingsFields:   []field.Definition{{Key: "catalog_mode", Type: field.TypeString, Label: "Режим каталога"}},
+		SettingsDefaults: map[string]any{"catalog_mode": "standard"},
+		ContentTypes:     []resourcetype.ContentTypeOption{{Code: "markdown", Label: "Markdown", Editor: "textarea"}},
+	}
+}
+func (catalogProductResourceType) Normalize(payload resourcetype.Payload) (resourcetype.Payload, error) {
+	return payload, nil
+}
+
 func (widgetMetadataModule) Code() kernel.ModuleCode { return "feature" }
 func (widgetMetadataModule) Registry() kernel.ModuleRegistry {
-	return kernel.ModuleRegistry{ResourceTypes: resourcetype.StandardTypes()}
+	resourceTypes := append(resourcetype.StandardTypes(), catalogProductResourceType{})
+	return kernel.ModuleRegistry{FieldTypes: field.StandardTypes(), ResourceTypes: resourceTypes}
 }
 func (widgetMetadataModule) ModuleDescriptor() kernel.ModuleDescriptor {
 	return kernel.ModuleDescriptor{Label: "Feature widgets", Description: "Feature description"}
@@ -420,8 +442,22 @@ func TestResourceMetadataDescribesTemplateSlotsAndProfileWidgets(t *testing.T) {
 	}
 	if library == nil || !library.Capabilities.SupportsTemplate ||
 		!library.Capabilities.SupportsWidgets || !library.Capabilities.OwnsLibraryItems ||
-		library.Capabilities.MutableType || library.Capabilities.DefaultIcon == "" {
+		library.Capabilities.MutableType || library.Capabilities.DefaultIcon == "" ||
+		len(library.SettingsFields) != 2 || library.SettingsDefaults["item_url_pattern"] != "/{slug}" ||
+		len(library.ContentTypes) != 1 || library.ContentTypes[0].Code != "html" {
 		t.Fatalf("library metadata = %#v", library)
+	}
+	var catalog *ResourceType
+	for index := range metadata.Types {
+		if metadata.Types[index].Code == "catalog_product" {
+			catalog = &metadata.Types[index]
+			break
+		}
+	}
+	if catalog == nil || catalog.Label != "Товар каталога" || len(catalog.SettingsFields) != 1 ||
+		catalog.SettingsDefaults["catalog_mode"] != "standard" || len(catalog.ContentTypes) != 1 ||
+		catalog.ContentTypes[0].Code != "markdown" {
+		t.Fatalf("catalog metadata = %#v", catalog)
 	}
 }
 

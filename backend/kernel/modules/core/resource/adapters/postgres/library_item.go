@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres/medialock"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
@@ -85,6 +86,9 @@ INSERT INTO core.library_items AS item (
 RETURNING `+libraryItemColumns+`;`, item.ID, item.SiteID, item.LibraryID, partitionAt, item.Template, item.ContentType, item.Title, item.Slug, item.Annotation, item.Content, item.ImageMediaID, item.IsPublic, item.IsSearchable, item.PublishedAt, item.UnpublishedAt, item.CreatedAt, actorID))
 	if err != nil {
 		return resource.LibraryItem{}, translateError(err)
+	}
+	if err := ensureLibraryItemTemplateUsage(ctx, tx, stored.SiteID, stored.LibraryID, stored.Template); err != nil {
+		return resource.LibraryItem{}, err
 	}
 	if err := replaceResourceFields(ctx, tx, stored.ID, stored.SiteID, item.FieldValues); err != nil {
 		return resource.LibraryItem{}, err
@@ -220,6 +224,14 @@ RETURNING `+libraryItemColumns+`;`, item.ID, partitionAt, item.Template, item.Co
 	if err != nil {
 		return resource.LibraryItem{}, translateError(err)
 	}
+	if err := ensureLibraryItemTemplateUsage(ctx, tx, updated.SiteID, updated.LibraryID, updated.Template); err != nil {
+		return resource.LibraryItem{}, err
+	}
+	if !sameTemplateCode(locked.Template, updated.Template) {
+		if err := pruneLibraryItemTemplateUsage(ctx, tx, locked.SiteID, locked.LibraryID, locked.Template); err != nil {
+			return resource.LibraryItem{}, err
+		}
+	}
 	if err := replaceResourceFields(ctx, tx, updated.ID, updated.SiteID, item.FieldValues); err != nil {
 		return resource.LibraryItem{}, err
 	}
@@ -314,6 +326,9 @@ func (r *Repository) DeleteLibraryItem(ctx context.Context, id resource.ID) erro
 	if command.RowsAffected() == 0 {
 		return resource.ErrNotFound
 	}
+	if err := pruneLibraryItemTemplateUsage(ctx, tx, item.SiteID, item.LibraryID, item.Template); err != nil {
+		return err
+	}
 	if item.ImageMediaID != nil {
 		if _, err := tx.Exec(ctx, `DELETE FROM core.media WHERE id=$1;`, *item.ImageMediaID); err != nil {
 			return translateDeleteError(err)
@@ -372,6 +387,12 @@ func (r *Repository) moveLibraryItemOnce(ctx context.Context, actorID *security.
 	if err != nil {
 		return resource.LibraryItem{}, translateError(err)
 	}
+	if err := ensureLibraryItemTemplateUsage(ctx, tx, moved.SiteID, moved.LibraryID, moved.Template); err != nil {
+		return resource.LibraryItem{}, err
+	}
+	if err := pruneLibraryItemTemplateUsage(ctx, tx, item.SiteID, item.LibraryID, item.Template); err != nil {
+		return resource.LibraryItem{}, err
+	}
 	moved.Version = item.Version
 	if recordRevision {
 		if err := r.loadLibraryItemFields(ctx, tx, &moved); err != nil {
@@ -394,11 +415,109 @@ func (r *Repository) QueryLibraryItems(ctx context.Context, query resource.Libra
 	if err := query.Validate(); err != nil {
 		return resource.LibraryItemPage{}, err
 	}
+	sorts, _ := resource.LibraryItemSorts(query)
+	primaryCustom := len(sorts) > 0 && resource.IsCustomFieldPath(sorts[0].Field)
+	items := make([]resource.LibraryItem, 0, query.Limit+1)
+	if primaryCustom {
+		cursor, err := resource.DecodeLibraryCursor(query)
+		if err != nil {
+			return resource.LibraryItemPage{}, err
+		}
+		if query.Cursor == "" || len(cursor.Values) == 0 || cursor.Values[0] != nil {
+			present := true
+			loaded, err := r.queryLibraryItemBranch(ctx, query, &present, query.Limit+1)
+			if err != nil {
+				return resource.LibraryItemPage{}, err
+			}
+			items = append(items, loaded...)
+		}
+		if len(items) <= query.Limit {
+			missing := false
+			loaded, err := r.queryLibraryItemBranch(ctx, query, &missing, query.Limit+1-len(items))
+			if err != nil {
+				return resource.LibraryItemPage{}, err
+			}
+			items = append(items, loaded...)
+		}
+	} else {
+		loaded, err := r.queryLibraryItemBranch(ctx, query, nil, query.Limit+1)
+		if err != nil {
+			return resource.LibraryItemPage{}, err
+		}
+		items = loaded
+	}
+
+	page := resource.LibraryItemPage{}
+	hasMore := len(items) > query.Limit
+	if hasMore {
+		items = items[:query.Limit]
+	}
+	if err := r.loadLibraryItemsFields(ctx, r.connector.Pool(), items); err != nil {
+		return resource.LibraryItemPage{}, err
+	}
+	if hasMore {
+		var err error
+		page.NextCursor, err = resource.EncodeLibraryCursor(query, items[len(items)-1])
+		if err != nil {
+			return resource.LibraryItemPage{}, err
+		}
+	}
+	page.Items = items
+	return page, nil
+}
+
+// queryLibraryItemBranch executes either the ordinary query path or one half
+// of a primary custom-field ordering. customValues=true reads present scalar
+// values in typed-index order; false reads the NULL/missing tail.
+func (r *Repository) queryLibraryItemBranch(ctx context.Context, query resource.LibraryItemQuery, customValues *bool, limitValue int) ([]resource.LibraryItem, error) {
 	args := make([]any, 0, 16)
 	add := func(value any) string {
 		args = append(args, value)
 		return "$" + strconv.Itoa(len(args))
 	}
+	sorts, idDirection := resource.LibraryItemSorts(query)
+	primaryCustom := customValues != nil && len(sorts) > 0 && resource.IsCustomFieldPath(sorts[0].Field)
+
+	from := "core.library_items item JOIN core.resources library ON library.id=item.library_id AND library.site_id=item.site_id"
+	joins := make([]string, 0, len(sorts))
+	expressions := make([]libraryItemSortExpression, 0, len(sorts))
+	sortAliases := make(map[resource.FieldPath]libraryItemSortAlias, len(sorts))
+	order := make([]string, 0, len(sorts)+1)
+	for index, item := range sorts {
+		column, custom := libraryItemQueryColumn(item.Field)
+		if custom {
+			valueColumn, err := fieldValueColumn(item.Kind)
+			if err != nil {
+				return nil, err
+			}
+			kindLiteral, err := fieldStorageKindSQL(item.Kind)
+			if err != nil {
+				return nil, err
+			}
+			alias := "sort_value_" + strconv.Itoa(index)
+			key := strings.TrimPrefix(string(item.Field), "resource.field.")
+			if primaryCustom && index == 0 && *customValues {
+				from = "core.resource_field_values " + alias +
+					" JOIN core.library_item_routes route ON route.resource_id=" + alias + ".resource_id AND route.site_id=" + alias + ".site_id" +
+					" JOIN core.library_items item ON item.id=route.resource_id AND item.site_id=route.site_id AND item.library_id=route.library_id" +
+					" JOIN core.resources library ON library.id=item.library_id AND library.site_id=item.site_id"
+			} else {
+				fieldKey := add(key)
+				joins = append(joins, "LEFT JOIN core.resource_field_values "+alias+
+					" ON "+alias+".resource_id=item.id AND "+alias+".site_id=item.site_id"+
+					" AND "+alias+".field_key="+fieldKey+" AND "+alias+".value_kind="+kindLiteral+
+					" AND "+alias+".position=0 AND NOT "+alias+".is_multi")
+			}
+			column = alias + "." + valueColumn
+			if _, exists := sortAliases[item.Field]; !exists {
+				sortAliases[item.Field] = libraryItemSortAlias{name: alias, valueColumn: valueColumn}
+			}
+		}
+		expressions = append(expressions, libraryItemSortExpression{sort: item, sql: column})
+		order = append(order, column+" "+sortDirectionSQL(item.Direction)+" NULLS LAST")
+	}
+	order = append(order, "item.id "+sortDirectionSQL(idDirection))
+
 	where := []string{
 		"item.site_id=" + add(query.SiteID),
 		"item.library_id=" + add(query.LibraryID),
@@ -424,69 +543,72 @@ func (r *Repository) QueryLibraryItems(ctx context.Context, query resource.Libra
 		}
 	}
 	for _, condition := range query.Filters {
-		fragment, err := resourceQueryFilterFor(condition, add, "item", libraryItemQueryColumn)
+		var fragment string
+		var err error
+		if alias, exists := sortAliases[condition.Field]; exists {
+			fragment, err = libraryItemSortAliasFilter(condition, alias, add)
+		} else {
+			fragment, err = resourceQueryFilterFor(condition, add, "item", libraryItemQueryColumn)
+		}
 		if err != nil {
-			return resource.LibraryItemPage{}, err
+			return nil, err
 		}
 		where = append(where, fragment)
 		if libraryItemPartitionFilter(condition) {
 			partitionFragment, err := resourceQueryFilterFor(condition, add, "item", libraryItemPartitionQueryColumn)
 			if err != nil {
-				return resource.LibraryItemPage{}, err
+				return nil, err
 			}
 			where = append(where, partitionFragment)
 		}
 	}
-	sorts, idDirection := resource.LibraryItemSorts(query)
-	expressions, order, err := libraryItemQueryOrder(sorts, idDirection, &args)
-	if err != nil {
-		return resource.LibraryItemPage{}, err
+	if primaryCustom {
+		alias := "sort_value_0"
+		if *customValues {
+			kindLiteral, err := fieldStorageKindSQL(sorts[0].Kind)
+			if err != nil {
+				return nil, err
+			}
+			where = append(where,
+				alias+".site_id=item.site_id",
+				alias+".field_key="+add(strings.TrimPrefix(string(sorts[0].Field), "resource.field.")),
+				alias+".value_kind="+kindLiteral,
+				alias+".position=0", "NOT "+alias+".is_multi",
+				"route.library_id=item.library_id",
+			)
+		} else {
+			where = append(where, alias+".resource_id IS NULL")
+		}
 	}
 	if query.Cursor != "" {
 		cursor, err := resource.DecodeLibraryCursor(query)
 		if err != nil {
-			return resource.LibraryItemPage{}, err
+			return nil, err
 		}
 		where = append(where, libraryItemKeysetPredicate(expressions, cursor, idDirection, add))
 	}
-	limit := add(query.Limit + 1)
-	rows, err := r.connector.Pool().Query(ctx, `SELECT `+libraryItemColumns+` FROM core.library_items item JOIN core.resources library ON library.id=item.library_id AND library.site_id=item.site_id WHERE `+strings.Join(where, " AND ")+` ORDER BY `+order+` LIMIT `+limit+`;`, args...)
+	limit := add(limitValue)
+	rows, err := r.connector.Pool().Query(ctx, `SELECT `+libraryItemColumns+` FROM `+from+` `+strings.Join(joins, " ")+` WHERE `+strings.Join(where, " AND ")+` ORDER BY `+strings.Join(order, ", ")+` LIMIT `+limit+`;`, args...)
 	if err != nil {
-		return resource.LibraryItemPage{}, fmt.Errorf("query library items: %w", err)
+		return nil, fmt.Errorf("query library items: %w", err)
 	}
 	defer rows.Close()
-	items := make([]resource.LibraryItem, 0, query.Limit+1)
+	items := make([]resource.LibraryItem, 0, limitValue)
 	for rows.Next() {
 		item, err := scanLibraryItem(rows)
 		if err != nil {
-			return resource.LibraryItemPage{}, err
+			return nil, err
 		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
-		return resource.LibraryItemPage{}, err
+		return nil, err
 	}
-	rows.Close()
-	page := resource.LibraryItemPage{}
-	hasMore := len(items) > query.Limit
-	if hasMore {
-		items = items[:query.Limit]
-	}
-	if err := r.loadLibraryItemsFields(ctx, r.connector.Pool(), items); err != nil {
-		return resource.LibraryItemPage{}, err
-	}
-	if hasMore {
-		page.NextCursor, err = resource.EncodeLibraryCursor(query, items[len(items)-1])
-		if err != nil {
-			return resource.LibraryItemPage{}, err
-		}
-	}
-	page.Items = items
-	return page, nil
+	return items, nil
 }
 
 func (r *Repository) LibraryItemTemplateCodes(ctx context.Context, siteID site.ID, libraryID resource.ID) ([]template.Code, error) {
-	rows, err := r.connector.Pool().Query(ctx, `SELECT DISTINCT template FROM core.library_items WHERE site_id=$1 AND library_id=$2 AND template IS NOT NULL ORDER BY template;`, siteID, libraryID)
+	rows, err := r.connector.Pool().Query(ctx, `SELECT template FROM core.library_item_template_usage WHERE site_id=$1 AND library_id=$2 ORDER BY template;`, siteID, libraryID)
 	if err != nil {
 		return nil, translateError(err)
 	}
@@ -502,9 +624,85 @@ func (r *Repository) LibraryItemTemplateCodes(ctx context.Context, siteID site.I
 	return result, translateError(rows.Err())
 }
 
+func ensureLibraryItemTemplateUsage(ctx context.Context, tx pgx.Tx, siteID site.ID, libraryID resource.ID, code *template.Code) error {
+	if code == nil {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO core.library_item_template_usage (site_id, library_id, template)
+VALUES ($1, $2, $3)
+ON CONFLICT DO NOTHING;`, siteID, libraryID, *code); err != nil {
+		return translateError(err)
+	}
+	return nil
+}
+
+func pruneLibraryItemTemplateUsage(ctx context.Context, tx pgx.Tx, siteID site.ID, libraryID resource.ID, code *template.Code) error {
+	if code == nil {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+DELETE FROM core.library_item_template_usage usage
+WHERE usage.site_id=$1 AND usage.library_id=$2 AND usage.template=$3
+  AND NOT EXISTS (
+      SELECT 1
+      FROM core.library_items item
+      WHERE item.site_id=$1 AND item.library_id=$2 AND item.template=$3
+  );`, siteID, libraryID, *code); err != nil {
+		return translateError(err)
+	}
+	return nil
+}
+
+func sameTemplateCode(left, right *template.Code) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
 type libraryItemSortExpression struct {
 	sort resource.Sort
 	sql  string
+}
+
+type libraryItemSortAlias struct {
+	name        string
+	valueColumn string
+}
+
+func libraryItemSortAliasFilter(condition resource.FilterCondition, alias libraryItemSortAlias, add func(any) string) (string, error) {
+	if err := condition.Validate(); err != nil {
+		return "", err
+	}
+	kind, value, err := filterStorageValue(condition.Kind, condition.Value)
+	if err != nil {
+		return "", err
+	}
+	column, err := fieldValueColumn(kind)
+	if err != nil {
+		return "", err
+	}
+	if column != alias.valueColumn {
+		return "", fmt.Errorf("sort alias for field %q has incompatible storage kind %q", condition.Field, kind)
+	}
+
+	operator := filterOperatorSQL(condition.Operator)
+	negative := condition.Operator == resource.FilterNotEqual || condition.Operator == resource.FilterNotIn
+	if condition.Operator == resource.FilterNotEqual {
+		operator = filterOperatorSQL(resource.FilterEqual)
+	} else if condition.Operator == resource.FilterNotIn {
+		operator = filterOperatorSQL(resource.FilterIn)
+	}
+	placeholder := add(value)
+	comparison := alias.name + "." + alias.valueColumn + " " + operator + " " + placeholder
+	if condition.Operator == resource.FilterIn || condition.Operator == resource.FilterNotIn {
+		comparison = alias.name + "." + alias.valueColumn + " " + operator + " (" + placeholder + ")"
+	}
+	if negative {
+		return "(" + alias.name + ".resource_id IS NULL OR NOT (" + comparison + "))", nil
+	}
+	return comparison, nil
 }
 
 func libraryItemQueryColumn(path resource.FieldPath) (string, bool) {
@@ -554,25 +752,6 @@ func libraryItemPartitionFilter(condition resource.FilterCondition) bool {
 	}
 }
 
-func libraryItemQueryOrder(sorts []resource.Sort, idDirection resource.SortDirection, args *[]any) ([]libraryItemSortExpression, string, error) {
-	add := func(value any) string {
-		*args = append(*args, value)
-		return "$" + strconv.Itoa(len(*args))
-	}
-	expressions := make([]libraryItemSortExpression, 0, len(sorts))
-	order := make([]string, 0, len(sorts)+1)
-	for _, item := range sorts {
-		column, err := resourceQuerySortExpression(item, add, "item", libraryItemQueryColumn)
-		if err != nil {
-			return nil, "", err
-		}
-		expressions = append(expressions, libraryItemSortExpression{sort: item, sql: column})
-		order = append(order, column+" "+sortDirectionSQL(item.Direction)+" NULLS LAST")
-	}
-	order = append(order, "item.id "+sortDirectionSQL(idDirection))
-	return expressions, strings.Join(order, ", "), nil
-}
-
 func libraryItemKeysetPredicate(expressions []libraryItemSortExpression, cursor resource.LibraryCursor, idDirection resource.SortDirection, add func(any) string) string {
 	branches := make([]string, 0, len(expressions)+1)
 	prefix := make([]string, 0, len(expressions))
@@ -606,6 +785,16 @@ func sortDirectionSQL(direction resource.SortDirection) string {
 		return "DESC"
 	}
 	return "ASC"
+}
+
+func fieldStorageKindSQL(kind field.StorageKind) (string, error) {
+	switch kind {
+	case field.StorageString, field.StorageInteger, field.StorageFloat, field.StorageBoolean,
+		field.StorageTimestamp, field.StorageReference, field.StorageJSON:
+		return "'" + string(kind) + "'", nil
+	default:
+		return "", fmt.Errorf("resource field storage kind %q is invalid", kind)
+	}
 }
 
 func (r *Repository) ResolveLibraryItemRoute(ctx context.Context, siteID site.ID, path string) (resource.LibraryItem, resource.Resource, error) {

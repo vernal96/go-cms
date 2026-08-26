@@ -13,6 +13,7 @@ const props = withDefaults(
     errors?: DynamicFieldErrors
 		siteId?: number
 		accessToken?: string
+		resourceTemplates?: Array<{ code: string; label: string }>
   }>(),
   { errors: () => ({}) },
 )
@@ -45,6 +46,7 @@ function update(key: string, value: unknown): void {
       :model-value="modelValue[field.key]"
 			:site-id="siteId ?? 0"
 			:access-token="accessToken ?? ''"
+			:resource-templates="resourceTemplates ?? []"
       @update:model-value="update(field.key, $event)"
     />
   </el-form-item>

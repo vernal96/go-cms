@@ -575,9 +575,18 @@ type WidgetDefinition struct {
 }
 
 type ResourceType struct {
-	Code         resourcetype.Code        `json:"code"`
-	Label        string                   `json:"label"`
-	Capabilities ResourceTypeCapabilities `json:"capabilities"`
+	Code             resourcetype.Code           `json:"code"`
+	Label            string                      `json:"label"`
+	Capabilities     ResourceTypeCapabilities    `json:"capabilities"`
+	SettingsFields   []FieldDefinition           `json:"settings_fields"`
+	SettingsDefaults map[string]any              `json:"settings_defaults"`
+	ContentTypes     []ResourceContentTypeOption `json:"content_types"`
+}
+
+type ResourceContentTypeOption struct {
+	Code   string           `json:"code"`
+	Label  string           `json:"label"`
+	Editor field.EditorCode `json:"editor"`
 }
 
 type ResourceTypeCapabilities struct {
@@ -650,7 +659,6 @@ func (m *Resources) ResourceMetadata(
 			EditorTabs: tabs, SummaryFields: append([]string{}, definition.SummaryFields...), Views: views,
 		}
 	}
-	labels := map[resourcetype.Code]string{resourcetype.Page: "Страница", resourcetype.Link: "Ссылка", resourcetype.ResourceLink: "Ссылка на ресурс", resourcetype.Library: "Библиотека"}
 	typeCodes := runtime.Profile().Registry().ResourceTypes()
 	types := make([]ResourceType, 0, len(typeCodes))
 	for _, code := range typeCodes {
@@ -658,12 +666,21 @@ func (m *Resources) ResourceMetadata(
 		if !exists {
 			continue
 		}
-		label := labels[code]
-		if label == "" {
-			label = string(code)
+		metadata := resourceType.Metadata()
+		settingsFields, err := fieldDefinitions(metadata.SettingsFields)
+		if err != nil {
+			return ResourceMetadata{}, fmt.Errorf("resource type %q settings metadata: %w", code, err)
 		}
-		capabilities := resourceType.Capabilities()
-		types = append(types, ResourceType{Code: code, Label: label, Capabilities: ResourceTypeCapabilities{SupportsTemplate: capabilities.SupportsTemplate, SupportsContent: capabilities.SupportsContent, SupportsWidgets: capabilities.SupportsWidgets, SupportsFields: capabilities.SupportsFields, SupportsExternalURL: capabilities.SupportsExternalURL, SupportsTargetResource: capabilities.SupportsTargetResource, MutableType: capabilities.MutableType, OwnsLibraryItems: capabilities.OwnsLibraryItems, DefaultIcon: capabilities.DefaultIcon}})
+		contentTypes := make([]ResourceContentTypeOption, len(metadata.ContentTypes))
+		for index, option := range metadata.ContentTypes {
+			contentTypes[index] = ResourceContentTypeOption{Code: option.Code, Label: option.Label, Editor: option.Editor}
+		}
+		capabilities := metadata.Capabilities
+		types = append(types, ResourceType{
+			Code: code, Label: metadata.Label,
+			Capabilities:   ResourceTypeCapabilities{SupportsTemplate: capabilities.SupportsTemplate, SupportsContent: capabilities.SupportsContent, SupportsWidgets: capabilities.SupportsWidgets, SupportsFields: capabilities.SupportsFields, SupportsExternalURL: capabilities.SupportsExternalURL, SupportsTargetResource: capabilities.SupportsTargetResource, MutableType: capabilities.MutableType, OwnsLibraryItems: capabilities.OwnsLibraryItems, DefaultIcon: capabilities.DefaultIcon},
+			SettingsFields: settingsFields, SettingsDefaults: cloneAnyMap(metadata.SettingsDefaults), ContentTypes: contentTypes,
+		})
 	}
 	extensions := make([]resourceextension.Metadata, 0)
 	for _, moduleRuntime := range runtime.Profile().Modules() {
@@ -1891,7 +1908,7 @@ func treeItem(runtime *site.Runtime, item resource.Child, canCreate bool) Resour
 		}
 	} else {
 		if resourceType, exists := runtime.Profile().Registry().ResourceType(item.Type); exists {
-			icon = iconOrDefault(resourceType.Capabilities().DefaultIcon)
+			icon = iconOrDefault(resourceType.Metadata().Capabilities.DefaultIcon)
 		}
 		if item.Template != nil {
 			if templateRuntime, exists := runtime.Profile().Template(*item.Template); exists {
@@ -2021,6 +2038,25 @@ func allowedIcon(icon string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func cloneAnyMap(source map[string]any) map[string]any {
+	result := make(map[string]any, len(source))
+	for key, value := range source {
+		switch typed := value.(type) {
+		case map[string]any:
+			result[key] = cloneAnyMap(typed)
+		case []any:
+			items := make([]any, len(typed))
+			copy(items, typed)
+			result[key] = items
+		case []string:
+			result[key] = append([]string(nil), typed...)
+		default:
+			result[key] = typed
+		}
+	}
+	return result
 }
 
 func validationError(err error) error {

@@ -69,6 +69,7 @@ const deleted = ref(false)
 const deletedAt = ref<string | null>(null)
 const serverFieldErrors = ref<FieldValidationError[]>([])
 const localFieldErrors = ref<DynamicFieldErrors>({})
+const localSettingsErrors = ref<DynamicFieldErrors>({})
 const resourceWidgets = ref<ResourceWidget[]>([])
 const resourcePath = ref<string | null>(null)
 const resourceVersion = ref(0)
@@ -97,7 +98,7 @@ const form = reactive({
   published_at: null as Date | null,
   unpublished_at: null as Date | null,
   fields: {} as Record<string, unknown>,
-  type_settings: { item_url_pattern: '', default_item_template: null as string | null } as Record<string, any>,
+  type_settings: {} as Record<string, unknown>,
 })
 
 const resourceId = computed(() => Number(route.params.resourceId))
@@ -106,6 +107,10 @@ const selectedTemplate = computed(() =>
   metadata.value.templates.find((item) => item.code === form.template_code) ?? null,
 )
 const selectedType = computed(() => metadata.value.types.find((item) => item.code === form.type) ?? null)
+const settingsFields = computed(() => selectedType.value?.settings_fields ?? [])
+const contentTypes = computed(() => selectedType.value?.content_types ?? [])
+const selectedContentType = computed(() => contentTypes.value.find((item) => item.code === form.content_type) ?? null)
+const contentEditor = computed(() => selectedContentType.value?.editor ?? 'textarea')
 function capability(name: keyof ResourceTypeCapabilities): boolean {
   return selectedType.value?.capabilities[name] === true
 }
@@ -190,7 +195,13 @@ async function load(): Promise<void> {
         loadedMetadata.templates.find((template) => template.code === item.template_code)?.fields ?? [],
         item.fields,
       ),
-      type_settings: { ...item.type_settings },
+		type_settings: createFieldValues(
+			loadedMetadata.types.find((type) => type.code === item.type)?.settings_fields ?? [],
+			{
+				...(loadedMetadata.types.find((type) => type.code === item.type)?.settings_defaults ?? {}),
+				...item.type_settings,
+			},
+		),
     })
     document.title = `${item.title} — Админка`
   } catch (error) {
@@ -218,13 +229,14 @@ async function changeType(value: ResourceTypeCode): Promise<void> {
   form.type = value
   serverFieldErrors.value = []
   localFieldErrors.value = {}
+	localSettingsErrors.value = {}
   form.template_code = null
   form.fields = {}
-  form.type_settings = {}
+	form.type_settings = createFieldValues(nextType.settings_fields ?? [], nextType.settings_defaults ?? {})
   if (nextType.capabilities.supports_content !== true) {
     form.content_type = null
     form.content = ''
-  }
+	} else form.content_type = nextType.content_types?.length === 1 ? nextType.content_types[0]!.code : null
   if (nextType.capabilities.supports_external_url !== true) form.external_url = ''
   if (nextType.capabilities.supports_target_resource !== true) form.target_resource_id = null
 	if (activeTab.value.startsWith('extension:') || activeTab.value === 'fields') activeTab.value = 'main'
@@ -248,6 +260,7 @@ async function changeTemplate(value: string | null): Promise<void> {
   form.fields = createFieldValues(selectedTemplate.value?.fields ?? [])
   serverFieldErrors.value = []
   localFieldErrors.value = {}
+	localSettingsErrors.value = {}
   if (!selectedTemplate.value?.supports_resource_widgets && activeTab.value === 'widgets') activeTab.value = 'main'
   if (!selectedTemplate.value?.fields.length && activeTab.value === 'fields') activeTab.value = 'main'
 }
@@ -304,6 +317,16 @@ async function submit(): Promise<void> {
     activeTab.value = showFieldsTab.value ? 'fields' : 'main'
     return
   }
+	if (unsupportedFieldTypes(settingsFields.value).length) {
+		submitError.value = 'Настройки типа содержат неизвестные типы полей.'
+		activeTab.value = 'settings'
+		return
+	}
+	localSettingsErrors.value = validateFieldValues(settingsFields.value, form.type_settings)
+	if (Object.keys(localSettingsErrors.value).length) {
+		activeTab.value = 'settings'
+		return
+	}
 
 	const payload: ResourceUpdatePayload = {
 		expected_version: resourceVersion.value,
@@ -470,8 +493,14 @@ watch(() => [route.params.siteId, route.params.resourceId], () => void load())
               </div>
             </div>
           </div>
+			<el-form-item v-if="supportsContent && contentTypes.length > 1" label="Тип содержимого" required class="resource-content-field">
+				<el-select v-model="form.content_type" class="full-width" :disabled="!canUpdate || deleted">
+					<el-option v-for="item in contentTypes" :key="item.code" :label="item.label" :value="item.code" />
+				</el-select>
+			</el-form-item>
           <el-form-item v-if="supportsContent" label="Контент" class="resource-content-field">
-            <rich-text-editor v-model="form.content" :disabled="!canUpdate" />
+			<rich-text-editor v-if="contentEditor === 'html'" v-model="form.content" :disabled="!canUpdate" />
+			<el-input v-else v-model="form.content" type="textarea" :rows="8" :disabled="!canUpdate" />
           </el-form-item>
           <el-form-item v-if="supportsExternalURL" label="Внешний URL" required class="resource-content-field">
             <el-input v-model="form.external_url" placeholder="https://example.com" :disabled="!canUpdate" />
@@ -512,16 +541,17 @@ watch(() => [route.params.siteId, route.params.resourceId], () => void load())
                   <el-option v-for="item in metadata.types" :key="item.code" :label="item.label" :value="item.code" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="Тип содержимого"><el-input :model-value="form.content_type ?? 'по умолчанию'" disabled /></el-form-item>
+				<el-form-item label="Тип содержимого"><el-input :model-value="selectedContentType?.label ?? form.content_type ?? 'не используется'" disabled /></el-form-item>
               <el-form-item label="Позиция в меню"><el-input-number v-model="form.position" :min="1" :step="1" class="full-width" :disabled="!canUpdate || deleted" /></el-form-item>
-              <template v-if="ownsLibraryItems">
-                <el-form-item label="Шаблон URL ресурса"><el-input v-model="form.type_settings.item_url_pattern" placeholder="/{slug}" :disabled="!canUpdate || deleted" /></el-form-item>
-                <el-form-item label="Шаблон ресурса по умолчанию">
-                  <el-select v-model="form.type_settings.default_item_template" clearable class="full-width" :disabled="!canUpdate || deleted">
-                    <el-option v-for="item in metadata.templates" :key="item.code" :label="item.label" :value="item.code" />
-                  </el-select>
-                </el-form-item>
-              </template>
+				<dynamic-fields-form
+					v-if="settingsFields.length"
+					v-model="form.type_settings"
+					:fields="settingsFields"
+					:errors="localSettingsErrors"
+					:site-id="siteId"
+					:access-token="accessToken"
+					:resource-templates="metadata.templates"
+				/>
             </div>
             <div>
               <el-form-item label="Начало публикации"><el-date-picker v-model="form.published_at" type="datetime" class="full-width" format="DD.MM.YYYY HH:mm" :disabled="!canUpdate" /></el-form-item>

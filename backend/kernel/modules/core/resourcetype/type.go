@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 )
 
@@ -30,6 +31,20 @@ type Capabilities struct {
 	DefaultIcon            string
 }
 
+type ContentTypeOption struct {
+	Code   string
+	Label  string
+	Editor field.EditorCode
+}
+
+type Metadata struct {
+	Label            string
+	Capabilities     Capabilities
+	SettingsFields   []field.Definition
+	SettingsDefaults map[string]any
+	ContentTypes     []ContentTypeOption
+}
+
 type PathMode string
 
 const (
@@ -50,7 +65,7 @@ type Payload struct {
 type Type interface {
 	Code() Code
 	PathMode() PathMode
-	Capabilities() Capabilities
+	Metadata() Metadata
 	Normalize(Payload) (Payload, error)
 }
 
@@ -73,8 +88,13 @@ func (pageType) PathMode() PathMode {
 	return PathRoute
 }
 
-func (pageType) Capabilities() Capabilities {
-	return Capabilities{SupportsTemplate: true, SupportsContent: true, SupportsWidgets: true, SupportsFields: true, MutableType: true, DefaultIcon: "Document"}
+func (pageType) Metadata() Metadata {
+	return Metadata{
+		Label:            "Страница",
+		Capabilities:     Capabilities{SupportsTemplate: true, SupportsContent: true, SupportsWidgets: true, SupportsFields: true, MutableType: true, DefaultIcon: "Document"},
+		SettingsDefaults: map[string]any{},
+		ContentTypes:     []ContentTypeOption{{Code: "html", Label: "HTML", Editor: "html"}},
+	}
 }
 
 func (pageType) Normalize(payload Payload) (Payload, error) {
@@ -117,8 +137,12 @@ func (linkType) PathMode() PathMode {
 	return PathRoute
 }
 
-func (linkType) Capabilities() Capabilities {
-	return Capabilities{SupportsExternalURL: true, MutableType: true, DefaultIcon: "Link"}
+func (linkType) Metadata() Metadata {
+	return Metadata{
+		Label:            "Ссылка",
+		Capabilities:     Capabilities{SupportsExternalURL: true, MutableType: true, DefaultIcon: "Link"},
+		SettingsDefaults: map[string]any{},
+	}
 }
 
 func (linkType) Normalize(payload Payload) (Payload, error) {
@@ -162,8 +186,12 @@ func (resourceLinkType) PathMode() PathMode {
 	return PathRoute
 }
 
-func (resourceLinkType) Capabilities() Capabilities {
-	return Capabilities{SupportsTargetResource: true, MutableType: true, DefaultIcon: "Link"}
+func (resourceLinkType) Metadata() Metadata {
+	return Metadata{
+		Label:            "Ссылка на ресурс",
+		Capabilities:     Capabilities{SupportsTargetResource: true, MutableType: true, DefaultIcon: "Link"},
+		SettingsDefaults: map[string]any{},
+	}
 }
 
 func (resourceLinkType) Normalize(
@@ -211,8 +239,18 @@ type libraryType struct{}
 
 func (libraryType) Code() Code         { return Library }
 func (libraryType) PathMode() PathMode { return PathRoute }
-func (libraryType) Capabilities() Capabilities {
-	return Capabilities{SupportsTemplate: true, SupportsContent: true, SupportsWidgets: true, SupportsFields: true, MutableType: false, OwnsLibraryItems: true, DefaultIcon: "Collection"}
+func (libraryType) Metadata() Metadata {
+	required := true
+	return Metadata{
+		Label:        "Библиотека",
+		Capabilities: Capabilities{SupportsTemplate: true, SupportsContent: true, SupportsWidgets: true, SupportsFields: true, MutableType: false, OwnsLibraryItems: true, DefaultIcon: "Collection"},
+		SettingsFields: []field.Definition{
+			{Key: "item_url_pattern", Type: field.TypeString, Label: "Шаблон URL ресурса", Required: &required},
+			{Key: "default_item_template", Type: field.TypeString, Label: "Шаблон ресурса по умолчанию", Editor: "resource-template"},
+		},
+		SettingsDefaults: map[string]any{"item_url_pattern": DefaultItemURLPattern},
+		ContentTypes:     []ContentTypeOption{{Code: "html", Label: "HTML", Editor: "html"}},
+	}
 }
 func (libraryType) Normalize(payload Payload) (Payload, error) {
 	if payload.Template != nil && *payload.Template == "" {

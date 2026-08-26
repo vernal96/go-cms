@@ -224,18 +224,30 @@ func (s *Schema) Definitions() []Definition {
 }
 
 func (s *Schema) StorageKind(key string) (StorageKind, bool) {
+	metadata, exists := s.Storage(key)
+	return metadata.Kind, exists
+}
+
+// StorageMetadata describes the adapter-neutral persistence shape of a field.
+// Multiple is true when one normalized value is stored as ordered rows.
+type StorageMetadata struct {
+	Kind     StorageKind
+	Multiple bool
+}
+
+func (s *Schema) Storage(key string) (StorageMetadata, bool) {
 	if s == nil {
-		return "", false
+		return StorageMetadata{}, false
 	}
 	compiled, exists := s.fields[key]
 	if !exists {
-		return "", false
+		return StorageMetadata{}, false
 	}
 	storage, ok := compiled.valueType.(StorageValueType)
 	if !ok || !ValidStorageKind(storage.StorageKind()) {
-		return "", false
+		return StorageMetadata{}, false
 	}
-	return storage.StorageKind(), true
+	return StorageMetadata{Kind: storage.StorageKind(), Multiple: storage.Multiple()}, true
 }
 
 type FileReference struct {

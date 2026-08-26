@@ -150,9 +150,10 @@ func resourceQueryFilterFor(condition resource.FilterCondition, add func(any) st
 		} else if condition.Operator == resource.FilterNotIn {
 			operator = filterOperatorSQL(resource.FilterIn)
 		}
-		comparison := "value." + column + " " + operator + " " + add(value)
+		placeholder := add(value)
+		comparison := "value." + column + " " + operator + " " + placeholder
 		if condition.Operator == resource.FilterIn || condition.Operator == resource.FilterNotIn {
-			comparison = "value." + column + " " + operator + " (" + add(value) + ")"
+			comparison = "value." + column + " " + operator + " (" + placeholder + ")"
 		}
 		prefix := "EXISTS"
 		if negative {

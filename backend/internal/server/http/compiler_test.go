@@ -105,8 +105,8 @@ func (compilerResourceType) PathMode() resourcetype.PathMode {
 	return resourcetype.PathRoute
 }
 
-func (compilerResourceType) Capabilities() resourcetype.Capabilities {
-	return resourcetype.Capabilities{MutableType: true}
+func (compilerResourceType) Metadata() resourcetype.Metadata {
+	return resourcetype.Metadata{Label: "Compiler", Capabilities: resourcetype.Capabilities{MutableType: true}, SettingsDefaults: map[string]any{}}
 }
 
 func (compilerResourceType) Normalize(

@@ -41,6 +41,7 @@ describe('DynamicField', () => {
           modelValue: type === 'select' ? [] : '',
 			siteId: 0,
 			accessToken: '',
+			resourceTemplates: [],
         },
       })
       const rendered = wrapper.findComponent({ name: component })
@@ -60,9 +61,21 @@ describe('DynamicField', () => {
 
   it('renders an explicit error instead of a fallback input', () => {
     const wrapper = shallowMount(DynamicField, {
-		props: { field: definition('future'), siteId: 0, accessToken: '' },
+		props: { field: definition('future'), siteId: 0, accessToken: '', resourceTemplates: [] },
     })
     expect(wrapper.findComponent({ name: 'ElAlert' }).exists()).toBe(true)
     expect(wrapper.findComponent({ name: 'ElInput' }).exists()).toBe(false)
   })
+
+	it('renders the semantic resource-template editor from backend metadata', () => {
+		const field = { ...definition('string'), editor: 'resource-template' }
+		const wrapper = shallowMount(DynamicField, {
+			props: {
+				field, siteId: 7, accessToken: 'token', resourceTemplates: [{ code: 'article', label: 'Article' }],
+			},
+		})
+		const select = wrapper.findComponent({ name: 'SelectField' })
+		expect(select.exists()).toBe(true)
+		expect(select.props('choices')).toEqual([{ value: 'article', label: 'Article' }])
+	})
 })

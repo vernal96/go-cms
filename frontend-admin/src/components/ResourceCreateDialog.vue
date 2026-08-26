@@ -12,6 +12,7 @@ import {
 } from 'element-plus'
 
 import { AdminAPIError, adminRequest } from '../api/admin-api'
+import RichTextEditor from './RichTextEditor.vue'
 import type { FieldValidationError } from '../types/auth'
 import type {
   ResourceCreatePayload,
@@ -43,6 +44,7 @@ const metadataLoading = ref(false)
 const errorMessage = ref<string | null>(null)
 const serverFieldErrors = ref<FieldValidationError[]>([])
 const localFieldErrors = ref<DynamicFieldErrors>({})
+const localSettingsErrors = ref<DynamicFieldErrors>({})
 const metadata = ref<ResourceMetadata>({ types: [], templates: [], widgets: [], extensions: [] })
 const options = ref<ResourceOption[]>([])
 const parent = ref<ResourceTreeItem | null>(null)
@@ -58,7 +60,7 @@ const form = reactive({
   content_type: null as string | null,
   content: '',
   fields: {} as Record<string, unknown>,
-  type_settings: { item_url_pattern: '', default_item_template: null as string | null } as Record<string, any>,
+  type_settings: {} as Record<string, unknown>,
 })
 const selectedTemplate = computed(
   () =>
@@ -66,6 +68,10 @@ const selectedTemplate = computed(
     null,
 )
 const selectedType = computed(() => metadata.value.types.find((item) => item.code === form.type) ?? null)
+const settingsFields = computed(() => selectedType.value?.settings_fields ?? [])
+const contentTypes = computed(() => selectedType.value?.content_types ?? [])
+const selectedContentType = computed(() => contentTypes.value.find((item) => item.code === form.content_type) ?? null)
+const contentEditor = computed(() => selectedContentType.value?.editor ?? 'textarea')
 function capability(name: keyof ResourceTypeCapabilities): boolean {
   return selectedType.value?.capabilities[name] === true
 }
@@ -74,7 +80,6 @@ const supportsContent = computed(() => capability('supports_content'))
 const supportsFields = computed(() => capability('supports_fields'))
 const supportsExternalURL = computed(() => capability('supports_external_url'))
 const supportsTargetResource = computed(() => capability('supports_target_resource'))
-const ownsLibraryItems = computed(() => capability('owns_library_items'))
 const displayedFieldErrors = computed<DynamicFieldErrors>(() => {
   const result = { ...localFieldErrors.value }
   for (const error of serverFieldErrors.value) {
@@ -101,11 +106,12 @@ async function open(parentItem: ResourceTreeItem | null): Promise<void> {
     content_type: null,
     content: '',
     fields: {},
-    type_settings: { item_url_pattern: '', default_item_template: null },
+    type_settings: {},
   })
   errorMessage.value = null
   serverFieldErrors.value = []
   localFieldErrors.value = {}
+  localSettingsErrors.value = {}
   visible.value = true
   metadataLoading.value = true
   try {
@@ -118,6 +124,8 @@ async function open(parentItem: ResourceTreeItem | null): Promise<void> {
     form.type = metadata.value.types[0]?.code ?? 'link'
     form.template_code = null
     form.fields = createFieldValues(selectedTemplate.value?.fields ?? [])
+		form.type_settings = createFieldValues(settingsFields.value, selectedType.value?.settings_defaults ?? {})
+		form.content_type = contentTypes.value.length === 1 ? contentTypes.value[0]!.code : null
   } catch (error) {
     errorMessage.value = 'Не удалось загрузить типы ресурсов.'
     emit('error', error)
@@ -146,9 +154,11 @@ watch(
     if (!supportsContent.value) {
       form.content_type = null
       form.content = ''
-    }
+		} else form.content_type = contentTypes.value.length === 1 ? contentTypes.value[0]!.code : null
     if (!supportsExternalURL.value) form.external_url = ''
     if (!supportsTargetResource.value) form.target_resource_id = null
+		form.type_settings = createFieldValues(settingsFields.value, selectedType.value?.settings_defaults ?? {})
+		localSettingsErrors.value = {}
   },
 )
 
@@ -156,6 +166,7 @@ async function submit(): Promise<void> {
   errorMessage.value = null
   serverFieldErrors.value = []
   localFieldErrors.value = {}
+  localSettingsErrors.value = {}
   if (!form.title.trim()) {
     errorMessage.value = 'Заполните заголовок ресурса.'
     return
@@ -176,6 +187,12 @@ async function submit(): Promise<void> {
   }
   localFieldErrors.value = validateFieldValues(fields, form.fields)
   if (Object.keys(localFieldErrors.value).length > 0) return
+	if (unsupportedFieldTypes(settingsFields.value).length > 0) {
+		errorMessage.value = 'Настройки типа содержат неизвестные типы полей.'
+		return
+	}
+	localSettingsErrors.value = validateFieldValues(settingsFields.value, form.type_settings)
+	if (Object.keys(localSettingsErrors.value).length > 0) return
   const payload: ResourceCreatePayload = {
     parent_id: parent.value?.id ?? null,
     type: form.type,
@@ -187,7 +204,7 @@ async function submit(): Promise<void> {
     menu_title: form.menu_title.trim(),
     slug: form.slug.trim(),
     fields: supportsFields.value ? { ...form.fields } : {},
-    type_settings: ownsLibraryItems.value ? { ...form.type_settings } : {},
+    type_settings: { ...form.type_settings },
   }
   payload.external_url = supportsExternalURL.value ? form.external_url.trim() : undefined
 
@@ -256,8 +273,14 @@ defineExpose({ open })
           v-model="form.slug"
           placeholder="Оставьте пустым для генерации по заголовку"
       /></el-form-item>
+		<el-form-item v-if="supportsContent && contentTypes.length > 1" label="Тип содержимого" required>
+			<el-select v-model="form.content_type" class="full-width">
+				<el-option v-for="item in contentTypes" :key="item.code" :label="item.label" :value="item.code" />
+			</el-select>
+		</el-form-item>
       <el-form-item v-if="supportsContent" label="Контент">
-        <el-input v-model="form.content" type="textarea" :rows="6" />
+			<rich-text-editor v-if="contentEditor === 'html'" v-model="form.content" />
+			<el-input v-else v-model="form.content" type="textarea" :rows="6" />
       </el-form-item>
       <el-form-item v-if="supportsExternalURL" label="Адрес ссылки" required>
         <el-input
@@ -270,14 +293,15 @@ defineExpose({ open })
           <el-option v-for="item in options" :key="item.id" :label="item.display_title" :value="item.id" />
         </el-select>
       </el-form-item>
-      <template v-if="ownsLibraryItems">
-        <el-form-item label="Шаблон URL ресурса"><el-input v-model="form.type_settings.item_url_pattern" placeholder="/{slug}" /></el-form-item>
-        <el-form-item label="Шаблон ресурса по умолчанию">
-          <el-select v-model="form.type_settings.default_item_template" clearable class="full-width">
-            <el-option v-for="item in metadata.templates" :key="item.code" :label="item.label" :value="item.code" />
-          </el-select>
-        </el-form-item>
-      </template>
+		<dynamic-fields-form
+			v-if="settingsFields.length"
+			v-model="form.type_settings"
+			:fields="settingsFields"
+			:errors="localSettingsErrors"
+			:site-id="siteId"
+			:access-token="accessToken"
+			:resource-templates="metadata.templates"
+		/>
       <dynamic-fields-form
 		v-if="supportsFields && selectedTemplate"
         :fields="selectedTemplate.fields"

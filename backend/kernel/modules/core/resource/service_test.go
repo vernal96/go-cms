@@ -138,10 +138,16 @@ func (genericPayloadType) Code() resourcetype.Code { return "generic_payload" }
 func (genericPayloadType) PathMode() resourcetype.PathMode {
 	return resourcetype.PathRoute
 }
-func (genericPayloadType) Capabilities() resourcetype.Capabilities {
-	return resourcetype.Capabilities{
-		SupportsTemplate: true, SupportsContent: true, SupportsFields: true,
-		SupportsExternalURL: true, SupportsTargetResource: true, MutableType: true,
+func (genericPayloadType) Metadata() resourcetype.Metadata {
+	return resourcetype.Metadata{
+		Label: "Generic payload",
+		Capabilities: resourcetype.Capabilities{
+			SupportsTemplate: true, SupportsContent: true, SupportsFields: true,
+			SupportsExternalURL: true, SupportsTargetResource: true, MutableType: true,
+		},
+		SettingsFields:   []field.Definition{{Key: "custom_option", Type: field.TypeString, Label: "Custom option"}},
+		SettingsDefaults: map[string]any{},
+		ContentTypes:     []resourcetype.ContentTypeOption{{Code: "markdown", Label: "Markdown", Editor: "textarea"}},
 	}
 }
 func (genericPayloadType) Normalize(payload resourcetype.Payload) (resourcetype.Payload, error) {
@@ -161,8 +167,8 @@ func (noPathType) PathMode() resourcetype.PathMode {
 	return resourcetype.PathNone
 }
 
-func (noPathType) Capabilities() resourcetype.Capabilities {
-	return resourcetype.Capabilities{MutableType: true}
+func (noPathType) Metadata() resourcetype.Metadata {
+	return resourcetype.Metadata{Label: "No path", Capabilities: resourcetype.Capabilities{MutableType: true}, SettingsDefaults: map[string]any{}}
 }
 
 func (noPathType) Normalize(
@@ -215,9 +221,10 @@ type memoryRepository struct {
 
 type memoryLibraryRepository struct {
 	*memoryRepository
-	items     map[ID]LibraryItem
-	nextID    ID
-	lastQuery LibraryItemQuery
+	items               map[ID]LibraryItem
+	nextID              ID
+	lastQuery           LibraryItemQuery
+	templateCodeLookups int
 }
 
 func (r *memoryLibraryRepository) CreateLibraryItem(_ context.Context, _ *security.UserID, item LibraryItem, _ bool) (LibraryItem, error) {
@@ -310,6 +317,7 @@ func (r *memoryLibraryRepository) QueryLibraryItems(_ context.Context, query Lib
 }
 
 func (r *memoryLibraryRepository) LibraryItemTemplateCodes(_ context.Context, siteID site.ID, libraryID ID) ([]template.Code, error) {
+	r.templateCodeLookups++
 	seen := make(map[template.Code]struct{})
 	for _, item := range r.items {
 		if item.SiteID == siteID && item.LibraryID == libraryID && item.Template != nil {
@@ -841,6 +849,9 @@ func newTestService(
 						Label:    "Headline",
 						Required: &required,
 						Rules:    []string{"min=2"},
+					}, {
+						Key: "tags", Type: field.TypeSelect, Label: "Tags",
+						Options: field.SelectOptions{Multiple: true, Choices: []field.Choice{{Value: "red", Label: "Red"}}},
 					}},
 				},
 				{
@@ -1162,6 +1173,7 @@ func TestLibraryServiceResolvesSemanticQueryKindsAndTimestamps(t *testing.T) {
 		Filters: []FilterCondition{
 			{Field: FieldPublishedAt, Operator: FilterGreaterThanOrEqual, Value: "2026-01-01T00:00:00Z"},
 			{Field: "resource.field.headline", Operator: FilterEqual, Value: "News"},
+			{Field: "resource.field.tags", Operator: FilterIn, Value: []any{"red"}},
 		},
 		Sort: []Sort{{Field: "resource.field.headline", Direction: SortAscending}},
 	})
@@ -1170,11 +1182,30 @@ func TestLibraryServiceResolvesSemanticQueryKindsAndTimestamps(t *testing.T) {
 	}
 	if repository.lastQuery.Filters[0].Kind != field.StorageTimestamp ||
 		repository.lastQuery.Filters[1].Kind != field.StorageString ||
+		repository.lastQuery.Filters[2].Kind != field.StorageString ||
 		repository.lastQuery.Sort[0].Kind != field.StorageString {
 		t.Fatalf("resolved query = %#v", repository.lastQuery)
 	}
 	if _, ok := repository.lastQuery.Filters[0].Value.(time.Time); !ok {
 		t.Fatalf("published_at value = %T", repository.lastQuery.Filters[0].Value)
+	}
+	if repository.templateCodeLookups != 1 {
+		t.Fatalf("template code lookups = %d", repository.templateCodeLookups)
+	}
+	repository.templateCodeLookups = 0
+	_, err = service.Query(ctx, security.System(), LibraryItemQuery{
+		SiteID: 1, LibraryID: library.ID, Limit: 20,
+		Sort: []Sort{{Field: FieldCreatedAt, Direction: SortDescending}},
+	})
+	if err != nil || repository.templateCodeLookups != 0 {
+		t.Fatalf("builtin query error/lookups = %v/%d", err, repository.templateCodeLookups)
+	}
+	_, err = service.Query(ctx, security.System(), LibraryItemQuery{
+		SiteID: 1, LibraryID: library.ID, Limit: 20,
+		Sort: []Sort{{Field: "resource.field.tags", Direction: SortAscending}},
+	})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "multi-valued") {
+		t.Fatalf("multi-value sort error = %v", err)
 	}
 
 	_, err = service.Query(ctx, security.System(), LibraryItemQuery{

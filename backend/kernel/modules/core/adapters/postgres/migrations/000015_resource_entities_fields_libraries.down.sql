@@ -2,6 +2,7 @@ BEGIN;
 
 DELETE FROM core.resource_entities WHERE storage_kind = 'library_item';
 
+DROP TABLE core.library_item_template_usage;
 DROP TABLE core.library_items;
 DROP TABLE core.library_item_routes;
 DROP TABLE core.resource_field_values;

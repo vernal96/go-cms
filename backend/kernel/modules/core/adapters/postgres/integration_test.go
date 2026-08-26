@@ -1719,9 +1719,11 @@ WHERE library_id=$1
 	firstRanked, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
 		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Title: "Ranked first", Slug: "ranked-first",
 		ContentType: &contentType, IsPublic: true, IsSearchable: true,
-		Fields: map[string]any{"rank": int64(1), "tags": []string{"blue", "red"}, "active": true},
+		Fields: map[string]any{"rank": int64(1), "name": "bravo", "deadline": currentPublication.Add(2 * time.Hour), "tags": []string{"blue", "red"}, "active": true},
 		FieldValues: []field.StoredValue{
 			{Key: "rank", Kind: field.StorageInteger, Value: int64(1)},
+			{Key: "name", Kind: field.StorageString, Value: "bravo"},
+			{Key: "deadline", Kind: field.StorageTimestamp, Value: currentPublication.Add(2 * time.Hour)},
 			{Key: "tags", Position: 0, Kind: field.StorageString, Multiple: true, Value: "blue"},
 			{Key: "tags", Position: 1, Kind: field.StorageString, Multiple: true, Value: "red"},
 			{Key: "active", Kind: field.StorageBoolean, Value: true},
@@ -1733,9 +1735,11 @@ WHERE library_id=$1
 	secondRanked, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
 		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Title: "Ranked second", Slug: "ranked-second",
 		ContentType: &contentType, IsPublic: true, IsSearchable: true,
-		Fields: map[string]any{"rank": int64(1), "tags": []string{"green"}, "active": false},
+		Fields: map[string]any{"rank": int64(1), "name": "alpha", "deadline": currentPublication.Add(time.Hour), "tags": []string{"green"}, "active": false},
 		FieldValues: []field.StoredValue{
 			{Key: "rank", Kind: field.StorageInteger, Value: int64(1)},
+			{Key: "name", Kind: field.StorageString, Value: "alpha"},
+			{Key: "deadline", Kind: field.StorageTimestamp, Value: currentPublication.Add(time.Hour)},
 			{Key: "tags", Position: 0, Kind: field.StorageString, Multiple: true, Value: "green"},
 			{Key: "active", Kind: field.StorageBoolean, Value: false},
 		},
@@ -1791,6 +1795,216 @@ WHERE library_id=$1
 	}
 	if len(seenRanked) != 3 || seenRanked[0] != firstRanked.ID || seenRanked[1] != secondRanked.ID || seenRanked[2] != loadedLibraryItem.ID {
 		t.Fatalf("ranked cursor order = %#v", seenRanked)
+	}
+	for _, test := range []struct {
+		name  string
+		sort  resource.Sort
+		first resource.ID
+	}{
+		{name: "integer descending", sort: resource.Sort{Field: "resource.field.rank", Direction: resource.SortDescending, Kind: field.StorageInteger}, first: firstRanked.ID},
+		{name: "string ascending", sort: resource.Sort{Field: "resource.field.name", Direction: resource.SortAscending, Kind: field.StorageString}, first: secondRanked.ID},
+		{name: "timestamp ascending", sort: resource.Sort{Field: "resource.field.deadline", Direction: resource.SortAscending, Kind: field.StorageTimestamp}, first: secondRanked.ID},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			page, queryErr := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+				SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 10, Sort: []resource.Sort{test.sort},
+			})
+			if queryErr != nil || len(page.Items) != 3 || page.Items[0].ID != test.first || page.Items[2].ID != loadedLibraryItem.ID {
+				t.Fatalf("custom sort page = %#v, %v", page, queryErr)
+			}
+		})
+	}
+	filteredRanked, err := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 10,
+		Filters: []resource.FilterCondition{{Field: "resource.field.active", Operator: resource.FilterEqual, Value: true, Kind: field.StorageBoolean}},
+		Sort:    rankSort,
+	})
+	if err != nil || len(filteredRanked.Items) != 1 || filteredRanked.Items[0].ID != firstRanked.ID {
+		t.Fatalf("custom filter and sort = %#v, %v", filteredRanked, err)
+	}
+	sameFieldPage, err := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 10,
+		Filters: []resource.FilterCondition{{Field: "resource.field.rank", Operator: resource.FilterEqual, Value: int64(1), Kind: field.StorageInteger}},
+		Sort:    rankSort,
+	})
+	if err != nil || len(sameFieldPage.Items) != 2 || sameFieldPage.Items[0].ID != firstRanked.ID || sameFieldPage.Items[1].ID != secondRanked.ID {
+		t.Fatalf("same-field filter and sort = %#v, %v", sameFieldPage, err)
+	}
+	missingRankPage, err := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 10,
+		Filters: []resource.FilterCondition{{Field: "resource.field.rank", Operator: resource.FilterNotEqual, Value: int64(1), Kind: field.StorageInteger}},
+		Sort:    rankSort,
+	})
+	if err != nil || len(missingRankPage.Items) != 1 || missingRankPage.Items[0].ID != loadedLibraryItem.ID {
+		t.Fatalf("same-field negative filter and sort = %#v, %v", missingRankPage, err)
+	}
+	usageAlpha := template.Code("usage_alpha")
+	usageBeta := template.Code("usage_beta")
+	usageFirst, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Template: &usageAlpha,
+		Title: "Usage first", Slug: "usage-first", ContentType: &contentType,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usageSecond, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Template: &usageAlpha,
+		Title: "Usage second", Slug: "usage-second", ContentType: &contentType,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertTemplateCodes := func(libraryID resource.ID, expected ...template.Code) {
+		t.Helper()
+		codes, queryErr := libraryItems.LibraryItemTemplateCodes(ctx, siteIDs["localhost"], libraryID)
+		if queryErr != nil || len(codes) != len(expected) || (len(expected) > 0 && !reflect.DeepEqual(codes, expected)) {
+			t.Fatalf("library %d template codes = %#v, %v; want %#v", libraryID, codes, queryErr, expected)
+		}
+	}
+	assertTemplateCodes(archive.ID, usageAlpha)
+	currentUsageFirst := usageFirst
+	usageFirst.Template = &usageBeta
+	usageFirst, err = libraryItems.UpdateLibraryItem(ctx, nil, currentUsageFirst, usageFirst, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertTemplateCodes(archive.ID, usageAlpha, usageBeta)
+	if err := libraryItems.DeleteLibraryItem(ctx, usageSecond.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertTemplateCodes(archive.ID, usageBeta)
+	usageFirst, err = libraryItems.MoveLibraryItem(ctx, nil, usageFirst.ID, library.ID, usageFirst.Version, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertTemplateCodes(archive.ID)
+	assertTemplateCodes(library.ID, usageBeta)
+	if err := libraryItems.DeleteLibraryItem(ctx, usageFirst.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertTemplateCodes(library.ID)
+
+	perfPath := "/sort-performance"
+	perfLibrary, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: siteIDs["localhost"], Type: resourcetype.Library,
+		Title: "Sort performance", Slug: "sort-performance", Path: &perfPath,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+		TypeSettings: map[string]any{"item_url_pattern": "/{slug}"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	performanceSetup := []struct {
+		sql  string
+		args []any
+	}{
+		{sql: `
+CREATE TEMP TABLE perf_library_item_ids AS
+WITH inserted AS (
+    INSERT INTO core.resource_entities (site_id, storage_kind)
+    SELECT $1, 'library_item' FROM generate_series(1, 20000)
+    RETURNING id
+)
+SELECT id, row_number() OVER () AS ordinal FROM inserted;`, args: []any{siteIDs["localhost"]}},
+		{sql: `INSERT INTO core.library_item_routes (resource_id, site_id, library_id, slug)
+SELECT id, $1, $2, 'perf-' || ordinal FROM perf_library_item_ids;`, args: []any{siteIDs["localhost"], perfLibrary.ID}},
+		{sql: `INSERT INTO core.library_items (
+    id, site_id, library_id, partition_at, template, content_type, title, slug,
+    is_public, is_searchable
+)
+SELECT id, $1, $2, now(), 'perf', 'html', 'Performance ' || ordinal,
+       'perf-' || ordinal, true, true
+FROM perf_library_item_ids;`, args: []any{siteIDs["localhost"], perfLibrary.ID}},
+		{sql: `INSERT INTO core.resource_field_values (
+    resource_id, site_id, field_key, position, is_multi, value_kind, value_integer
+)
+SELECT id, $1, 'salary', 0, false, 'integer', ordinal % 5000
+FROM perf_library_item_ids;`, args: []any{siteIDs["localhost"]}},
+		{sql: `ANALYZE core.resource_field_values;`},
+		{sql: `ANALYZE core.library_item_routes;`},
+		{sql: `ANALYZE core.library_items;`},
+	}
+	for _, statement := range performanceSetup {
+		if _, err := connector.Pool().Exec(ctx, statement.sql, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	explainCustomSort := func(direction string, cursor bool) string {
+		t.Helper()
+		cursorSQL := ""
+		if cursor {
+			cursorSQL = "AND (sort_value.value_integer > 2500 OR sort_value.value_integer IS NULL)"
+		}
+		rows, queryErr := connector.Pool().Query(ctx, `
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT item.id
+FROM core.resource_field_values sort_value
+JOIN core.library_item_routes route
+  ON route.resource_id=sort_value.resource_id AND route.site_id=sort_value.site_id
+JOIN core.library_items item
+  ON item.id=route.resource_id AND item.site_id=route.site_id AND item.library_id=route.library_id
+JOIN core.resources library
+  ON library.id=item.library_id AND library.site_id=item.site_id
+WHERE sort_value.site_id=$1
+  AND sort_value.field_key='salary'
+  AND sort_value.value_kind='integer'
+  AND sort_value.position=0 AND NOT sort_value.is_multi
+  AND item.library_id=$2
+  AND library.type='library' AND library.deleted_at IS NULL
+  `+cursorSQL+`
+ORDER BY sort_value.value_integer `+direction+`, item.id ASC
+LIMIT 101;`, siteIDs["localhost"], perfLibrary.ID)
+		if queryErr != nil {
+			t.Fatal(queryErr)
+		}
+		defer rows.Close()
+		var plan strings.Builder
+		for rows.Next() {
+			var line string
+			if scanErr := rows.Scan(&line); scanErr != nil {
+				t.Fatal(scanErr)
+			}
+			plan.WriteString(line)
+			plan.WriteByte('\n')
+		}
+		if rows.Err() != nil {
+			t.Fatal(rows.Err())
+		}
+		return plan.String()
+	}
+	ascendingPlan := explainCustomSort("ASC", false)
+	if !strings.Contains(ascendingPlan, "idx_resource_field_values_integer") ||
+		!strings.Contains(ascendingPlan, "Limit") || strings.Contains(ascendingPlan, "SubPlan") ||
+		!strings.Contains(ascendingPlan, "library_item_routes") {
+		t.Fatalf("custom salary ASC plan = %s", ascendingPlan)
+	}
+	descendingPlan := explainCustomSort("DESC", false)
+	if !strings.Contains(descendingPlan, "idx_resource_field_values_integer") ||
+		!strings.Contains(descendingPlan, "Backward") {
+		t.Fatalf("custom salary DESC plan = %s", descendingPlan)
+	}
+	cursorPlan := explainCustomSort("ASC", true)
+	if !strings.Contains(cursorPlan, "idx_resource_field_values_integer") || strings.Contains(cursorPlan, "SubPlan") {
+		t.Fatalf("custom salary cursor plan = %s", cursorPlan)
+	}
+	usagePlanRows, err := connector.Pool().Query(ctx, `EXPLAIN (COSTS OFF) SELECT template FROM core.library_item_template_usage WHERE site_id=$1 AND library_id=$2 ORDER BY template;`, siteIDs["localhost"], perfLibrary.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var usagePlan strings.Builder
+	for usagePlanRows.Next() {
+		var line string
+		if err := usagePlanRows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		usagePlan.WriteString(line)
+		usagePlan.WriteByte('\n')
+	}
+	usagePlanRows.Close()
+	if !strings.Contains(usagePlan.String(), "library_item_template_usage") || strings.Contains(usagePlan.String(), "library_items") {
+		t.Fatalf("template usage plan = %s", usagePlan.String())
 	}
 	negativePage, err := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
 		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 10,

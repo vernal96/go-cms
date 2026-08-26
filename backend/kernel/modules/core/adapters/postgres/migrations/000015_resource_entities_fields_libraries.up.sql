@@ -154,6 +154,18 @@ CREATE TABLE core.library_items
         CHECK (published_at IS NULL OR unpublished_at IS NULL OR unpublished_at > published_at)
 ) PARTITION BY HASH (library_id);
 
+CREATE TABLE core.library_item_template_usage
+(
+    site_id    BIGINT NOT NULL,
+    library_id BIGINT NOT NULL,
+    template   TEXT   NOT NULL CHECK (template = btrim(template) AND template <> ''),
+    PRIMARY KEY (site_id, library_id, template),
+    CONSTRAINT fk_library_item_template_usage_library_site
+        FOREIGN KEY (library_id, site_id)
+            REFERENCES core.resources (id, site_id)
+            ON DELETE CASCADE
+);
+
 CREATE TABLE core.library_items_h0
     PARTITION OF core.library_items
     FOR VALUES WITH (MODULUS 8, REMAINDER 0)

@@ -927,8 +927,8 @@ func (transportResourceType) PathMode() resourcetype.PathMode {
 	return resourcetype.PathRoute
 }
 
-func (transportResourceType) Capabilities() resourcetype.Capabilities {
-	return resourcetype.Capabilities{MutableType: true}
+func (transportResourceType) Metadata() resourcetype.Metadata {
+	return resourcetype.Metadata{Label: "Transport", Capabilities: resourcetype.Capabilities{MutableType: true}, SettingsDefaults: map[string]any{}}
 }
 
 func (transportResourceType) Normalize(

@@ -822,6 +822,7 @@ func (customValueType) Example() any {
 type customResourceType struct {
 	code     resourcetype.Code
 	pathMode resourcetype.PathMode
+	metadata *resourcetype.Metadata
 }
 
 func (t customResourceType) Code() resourcetype.Code {
@@ -832,8 +833,11 @@ func (t customResourceType) PathMode() resourcetype.PathMode {
 	return t.pathMode
 }
 
-func (customResourceType) Capabilities() resourcetype.Capabilities {
-	return resourcetype.Capabilities{MutableType: true}
+func (t customResourceType) Metadata() resourcetype.Metadata {
+	if t.metadata != nil {
+		return *t.metadata
+	}
+	return resourcetype.Metadata{Label: "Custom", Capabilities: resourcetype.Capabilities{MutableType: true}, SettingsDefaults: map[string]any{}}
 }
 
 func (customResourceType) Normalize(
@@ -1183,6 +1187,62 @@ func TestProfileRuntimeRejectsInvalidResourceTypeRegistrations(
 			},
 			contains: "invalid path mode",
 		},
+		{
+			name: "invalid label",
+			types: []resourcetype.Type{customResourceType{
+				code: "custom", pathMode: resourcetype.PathRoute,
+				metadata: &resourcetype.Metadata{Label: " Custom", SettingsDefaults: map[string]any{}},
+			}},
+			contains: "invalid label",
+		},
+		{
+			name: "invalid settings defaults",
+			types: []resourcetype.Type{customResourceType{
+				code: "custom", pathMode: resourcetype.PathRoute,
+				metadata: &resourcetype.Metadata{
+					Label:            "Custom",
+					SettingsFields:   []field.Definition{{Key: "mode", Type: field.TypeString, Label: "Mode"}},
+					SettingsDefaults: map[string]any{"mode": int64(1)},
+				},
+			}},
+			contains: "settings defaults",
+		},
+		{
+			name: "duplicate content type",
+			types: []resourcetype.Type{customResourceType{
+				code: "custom", pathMode: resourcetype.PathRoute,
+				metadata: &resourcetype.Metadata{
+					Label: "Custom", Capabilities: resourcetype.Capabilities{SupportsContent: true}, SettingsDefaults: map[string]any{},
+					ContentTypes: []resourcetype.ContentTypeOption{
+						{Code: "html", Label: "HTML", Editor: "html"},
+						{Code: "html", Label: "Other", Editor: "textarea"},
+					},
+				},
+			}},
+			contains: "duplicated",
+		},
+		{
+			name: "missing content editor",
+			types: []resourcetype.Type{customResourceType{
+				code: "custom", pathMode: resourcetype.PathRoute,
+				metadata: &resourcetype.Metadata{
+					Label: "Custom", Capabilities: resourcetype.Capabilities{SupportsContent: true}, SettingsDefaults: map[string]any{},
+					ContentTypes: []resourcetype.ContentTypeOption{{Code: "html", Label: "HTML"}},
+				},
+			}},
+			contains: "content type at index 0 is invalid",
+		},
+		{
+			name: "content capability mismatch",
+			types: []resourcetype.Type{customResourceType{
+				code: "custom", pathMode: resourcetype.PathRoute,
+				metadata: &resourcetype.Metadata{
+					Label: "Custom", SettingsDefaults: map[string]any{},
+					ContentTypes: []resourcetype.ContentTypeOption{{Code: "html", Label: "HTML", Editor: "html"}},
+				},
+			}},
+			contains: "content capability and metadata disagree",
+		},
 	}
 
 	for _, testCase := range testCases {
@@ -1194,6 +1254,7 @@ func TestProfileRuntimeRejectsInvalidResourceTypeRegistrations(
 					Modules: []kernel.ProfileModule{{
 						Module: registryModule{
 							code:          "provider",
+							fieldTypes:    field.StandardTypes(),
 							resourceTypes: testCase.types,
 						},
 					}},

@@ -61,7 +61,7 @@ func TestPageTypeNormalizesDefaultsAndRejectsIncompatibleFields(
 
 func TestLinkTypeURLPolicy(t *testing.T) {
 	link := standardType(t, Link)
-	if capabilities := link.Capabilities(); !capabilities.SupportsExternalURL || capabilities.SupportsTargetResource {
+	if capabilities := link.Metadata().Capabilities; !capabilities.SupportsExternalURL || capabilities.SupportsTargetResource {
 		t.Fatalf("link capabilities = %#v", capabilities)
 	}
 
@@ -118,7 +118,7 @@ func TestLinkTypeURLPolicy(t *testing.T) {
 
 func TestResourceLinkTypeRequiresTarget(t *testing.T) {
 	resourceLink := standardType(t, ResourceLink)
-	if capabilities := resourceLink.Capabilities(); !capabilities.SupportsTargetResource || capabilities.SupportsExternalURL {
+	if capabilities := resourceLink.Metadata().Capabilities; !capabilities.SupportsTargetResource || capabilities.SupportsExternalURL {
 		t.Fatalf("resource_link capabilities = %#v", capabilities)
 	}
 
@@ -149,12 +149,18 @@ func TestResourceLinkTypeRequiresTarget(t *testing.T) {
 
 func TestLibraryTypeCapabilitiesAndURLPattern(t *testing.T) {
 	library := standardType(t, Library)
-	capabilities := library.Capabilities()
+	metadata := library.Metadata()
+	capabilities := metadata.Capabilities
 	if !capabilities.SupportsTemplate || !capabilities.SupportsContent ||
 		!capabilities.SupportsWidgets || !capabilities.SupportsFields ||
 		capabilities.MutableType || !capabilities.OwnsLibraryItems ||
 		capabilities.DefaultIcon == "" {
 		t.Fatalf("library capabilities = %#v", capabilities)
+	}
+	if metadata.Label != "Библиотека" || len(metadata.SettingsFields) != 2 ||
+		metadata.SettingsDefaults["item_url_pattern"] != DefaultItemURLPattern ||
+		len(metadata.ContentTypes) != 1 || metadata.ContentTypes[0].Code != "html" {
+		t.Fatalf("library metadata = %#v", metadata)
 	}
 
 	normalized, err := library.Normalize(Payload{TypeSettings: map[string]any{
