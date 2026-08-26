@@ -170,6 +170,32 @@ If field metadata later gains `Filterable`, `Sortable`, `Searchable` or similar 
 
 For high-volume LibraryItems, inspect query shapes before finalizing composite indexes so library ownership/site scope participates where needed.
 
+### PostgreSQL LibraryItem sort projection
+
+For high-volume LibraryItem ordering, the PostgreSQL adapter may project Library ownership into typed field-value rows, for example through an adapter-owned `library_id` column used by indexes such as:
+
+```text
+(site_id, library_id, field_key, typed_value, resource_id)
+```
+
+Treat this value as a **denormalized PostgreSQL query projection**, not as domain ownership and not as a second source of truth. Canonical Library ownership remains the LibraryItem relation itself.
+
+This projection must:
+
+- remain invisible to Core/domain/API contracts;
+- exist only where it measurably improves adapter query plans;
+- be written atomically together with LibraryItem field values;
+- be updated when a LibraryItem moves between Libraries;
+- be restored correctly during revision restore or any mutation that can change Library ownership;
+- be removed naturally with the owning field values/resource lifecycle;
+- never be used to redefine `LibraryID`, tree parentage or resource identity.
+
+When modifying LibraryItem write paths, explicitly review Create, field Update/template change, Move, permanent Delete and revision Restore so the projection cannot drift from canonical Library ownership.
+
+Performance tests for high-volume custom sorting should include **multiple large Libraries on the same site using the same field key**, not only one Library. Prefer real PostgreSQL planner evidence (`EXPLAIN` / `EXPLAIN ANALYZE`) showing that unrelated Libraries do not dominate the scan.
+
+Do not remove this projection as “duplicate data” merely because Library ownership also exists on `library_items`: its role is adapter-local query acceleration, while the canonical domain relationship remains unchanged.
+
 ## Writes and transactions
 
 Updating resource/template fields must be atomic with the owning resource mutation when partial state would be invalid.
@@ -259,6 +285,8 @@ Add focused tests for changed invariants, including as applicable:
 - field filters use typed semantics for string/numeric/boolean/reference values;
 - ordinary Resource and LibraryItem share the same field-value query vocabulary;
 - no resource query path depends on obsolete JSONB `settings -> field_key` access;
+- PostgreSQL LibraryItem field-sort projections remain synchronized across Create/Update/Move/Restore paths and stay adapter-local;
+- multi-Library custom-sort planner tests prove that same-field rows from unrelated Libraries do not dominate the hot path;
 - obsolete legacy field-migration compatibility code is removed when the schema is replaced.
 
 Run focused package/adapter tests first, then broader backend integration tests when the change affects resource service, PostgreSQL and public/admin query paths.
