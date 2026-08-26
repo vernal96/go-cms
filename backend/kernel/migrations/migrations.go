@@ -16,10 +16,11 @@ import (
 const DefaultHistoryTable = "schema_migrations"
 
 type Source struct {
-	ID     string
-	Schema string
-	FS     fs.FS
-	Path   string
+	ID       string
+	Schema   string
+	FS       fs.FS
+	Path     string
+	BeforeUp func(context.Context) error
 }
 
 type Provider interface {
@@ -71,6 +72,20 @@ func (m *Manager) Up(
 	ctx context.Context,
 	plan Plan,
 ) error {
+	if ctx == nil {
+		return errors.New("migration context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validatePlan(plan); err != nil {
+		return err
+	}
+	if plan.Source.BeforeUp != nil {
+		if err := plan.Source.BeforeUp(ctx); err != nil {
+			return fmt.Errorf("migration source %q preflight: %w", plan.Source.ID, err)
+		}
+	}
 	return m.withInstance(
 		ctx,
 		plan,

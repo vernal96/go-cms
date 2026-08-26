@@ -23,6 +23,16 @@ const (
 	StorageJSON      StorageKind = "json"
 )
 
+func ValidStorageKind(kind StorageKind) bool {
+	switch kind {
+	case StorageString, StorageInteger, StorageFloat, StorageBoolean,
+		StorageTimestamp, StorageReference, StorageJSON:
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	TypeString   TypeCode = "string"
 	TypeInteger  TypeCode = "int"

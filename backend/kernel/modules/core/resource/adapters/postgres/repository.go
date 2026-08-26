@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -122,10 +123,16 @@ func resourceQueryWhere(query resource.Query) (string, []any, error) {
 }
 
 func resourceQueryFilter(condition resource.FilterCondition, add func(any) string) (string, error) {
+	return resourceQueryFilterFor(condition, add, "r", resourceQueryColumn)
+}
+
+type resourceQueryColumnResolver func(resource.FieldPath) (string, bool)
+
+func resourceQueryFilterFor(condition resource.FilterCondition, add func(any) string, alias string, resolve resourceQueryColumnResolver) (string, error) {
 	if err := condition.Validate(); err != nil {
 		return "", err
 	}
-	column, custom := resourceQueryColumn(condition.Field)
+	column, custom := resolve(condition.Field)
 	if custom {
 		key := strings.TrimPrefix(string(condition.Field), "resource.field.")
 		kind, value, err := filterStorageValue(condition.Kind, condition.Value)
@@ -137,70 +144,88 @@ func resourceQueryFilter(condition resource.FilterCondition, add func(any) strin
 			return "", err
 		}
 		operator := filterOperatorSQL(condition.Operator)
+		negative := condition.Operator == resource.FilterNotEqual || condition.Operator == resource.FilterNotIn
+		if condition.Operator == resource.FilterNotEqual {
+			operator = filterOperatorSQL(resource.FilterEqual)
+		} else if condition.Operator == resource.FilterNotIn {
+			operator = filterOperatorSQL(resource.FilterIn)
+		}
 		comparison := "value." + column + " " + operator + " " + add(value)
 		if condition.Operator == resource.FilterIn || condition.Operator == resource.FilterNotIn {
 			comparison = "value." + column + " " + operator + " (" + add(value) + ")"
 		}
-		return "EXISTS (SELECT 1 FROM core.resource_field_values value WHERE value.resource_id = r.id AND value.site_id = r.site_id AND value.field_key = " + add(key) + " AND value.value_kind = " + add(kind) + " AND " + comparison + ")", nil
+		prefix := "EXISTS"
+		if negative {
+			prefix = "NOT EXISTS"
+		}
+		return prefix + " (SELECT 1 FROM core.resource_field_values value WHERE value.resource_id = " + alias + ".id AND value.site_id = " + alias + ".site_id AND value.field_key = " + add(key) + " AND value.value_kind = " + add(kind) + " AND " + comparison + ")", nil
 	}
 	operator := filterOperatorSQL(condition.Operator)
 	if condition.Operator == resource.FilterIn || condition.Operator == resource.FilterNotIn {
-		if condition.Field == resource.FieldID || condition.Field == resource.FieldSort {
+		kind, err := resource.BuiltinFieldStorageKind(condition.Field)
+		if err != nil {
+			return "", err
+		}
+		switch kind {
+		case field.StorageInteger:
 			values, ok := integerValues(condition.Value)
 			if !ok {
 				return "", errors.New("resource query numeric set filter value is invalid")
 			}
 			return column + " " + operator + " (" + add(values) + "::bigint[])", nil
+		case field.StorageBoolean:
+			values, ok := booleanValues(condition.Value)
+			if !ok {
+				return "", errors.New("resource query boolean set filter value is invalid")
+			}
+			return column + " " + operator + " (" + add(values) + "::boolean[])", nil
+		case field.StorageTimestamp:
+			values, ok := timestampValues(condition.Value)
+			if !ok {
+				return "", errors.New("resource query timestamp set filter value is invalid")
+			}
+			return column + " " + operator + " (" + add(values) + "::timestamptz[])", nil
+		default:
+			values, ok := textValues(condition.Value)
+			if !ok {
+				return "", errors.New("resource query set filter value is invalid")
+			}
+			return column + " " + operator + " (" + add(values) + "::text[])", nil
 		}
-		values, ok := textValues(condition.Value)
-		if !ok {
-			return "", errors.New("resource query set filter value is invalid")
-		}
-		return column + " " + operator + " (" + add(values) + "::text[])", nil
 	}
 	return column + " " + operator + " " + add(condition.Value), nil
 }
 
 func filterStorageValue(explicit field.StorageKind, value any) (field.StorageKind, any, error) {
-	if explicit != "" {
-		if !resource.ValidStorageKind(explicit) {
-			return "", nil, fmt.Errorf("resource field storage kind %q is invalid", explicit)
-		}
-		return explicit, value, nil
+	if !resource.ValidStorageKind(explicit) {
+		return "", nil, fmt.Errorf("resource field storage kind %q is invalid", explicit)
 	}
-	switch typed := value.(type) {
-	case string:
-		return field.StorageString, typed, nil
-	case bool:
-		return field.StorageBoolean, typed, nil
-	case int:
-		return field.StorageInteger, int64(typed), nil
-	case int64:
-		return field.StorageInteger, typed, nil
-	case float64:
-		return field.StorageFloat, typed, nil
-	case json.Number:
-		if integer, err := typed.Int64(); err == nil {
-			return field.StorageInteger, integer, nil
+	reflected := reflect.ValueOf(value)
+	if reflected.IsValid() && reflected.Kind() == reflect.Slice {
+		normalized, ok := storageSetValue(explicit, value)
+		if !ok {
+			return "", nil, fmt.Errorf("resource field set value is incompatible with storage kind %q", explicit)
 		}
-		floatValue, err := typed.Float64()
-		if err != nil {
-			return "", nil, errors.New("resource field numeric filter is invalid")
-		}
-		return field.StorageFloat, floatValue, nil
-	case []string:
-		return field.StorageString, typed, nil
-	case []int64:
-		return field.StorageInteger, typed, nil
-	case []any:
-		if text, ok := textValues(typed); ok {
-			return field.StorageString, text, nil
-		}
-		if integers, ok := integerValues(typed); ok {
-			return field.StorageInteger, integers, nil
-		}
+		return explicit, normalized, nil
 	}
-	return "", nil, fmt.Errorf("cannot infer resource field storage kind from %T", value)
+	return explicit, value, nil
+}
+
+func storageSetValue(kind field.StorageKind, value any) (any, bool) {
+	switch kind {
+	case field.StorageString:
+		return textValues(value)
+	case field.StorageInteger, field.StorageReference:
+		return integerValues(value)
+	case field.StorageFloat:
+		return floatValues(value)
+	case field.StorageBoolean:
+		return booleanValues(value)
+	case field.StorageTimestamp:
+		return timestampValues(value)
+	default:
+		return nil, false
+	}
 }
 
 func fieldValueColumn(kind field.StorageKind) (string, error) {
@@ -244,6 +269,16 @@ func resourceQueryColumn(field resource.FieldPath) (string, bool) {
 		return "r.template", false
 	case resource.FieldSort:
 		return "r.sort", false
+	case resource.FieldIsPublic:
+		return "r.is_public", false
+	case resource.FieldIsSearchable:
+		return "r.is_searchable", false
+	case resource.FieldPublishedAt:
+		return "r.published_at", false
+	case resource.FieldCreatedAt:
+		return "r.created_at", false
+	case resource.FieldUpdatedAt:
+		return "r.updated_at", false
 	default:
 		return "", true
 	}
@@ -289,13 +324,22 @@ func textValues(value any) ([]string, bool) {
 }
 
 func integerValues(value any) ([]int64, bool) {
-	items, ok := value.([]any)
-	if !ok {
+	reflected := reflect.ValueOf(value)
+	if !reflected.IsValid() || reflected.Kind() != reflect.Slice {
 		return nil, false
 	}
-	result := make([]int64, len(items))
-	for index, item := range items {
-		switch number := item.(type) {
+	result := make([]int64, reflected.Len())
+	for index := 0; index < reflected.Len(); index++ {
+		item := reflected.Index(index)
+		switch item.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			result[index] = item.Int()
+			continue
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32:
+			result[index] = int64(item.Uint())
+			continue
+		}
+		switch number := item.Interface().(type) {
 		case float64:
 			if number != math.Trunc(number) {
 				return nil, false
@@ -315,28 +359,82 @@ func integerValues(value any) ([]int64, bool) {
 	}
 	return result, true
 }
+
+func floatValues(value any) ([]float64, bool) {
+	reflected := reflect.ValueOf(value)
+	if !reflected.IsValid() || reflected.Kind() != reflect.Slice {
+		return nil, false
+	}
+	result := make([]float64, reflected.Len())
+	for index := 0; index < reflected.Len(); index++ {
+		item := reflected.Index(index)
+		switch item.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			result[index] = float64(item.Int())
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32:
+			result[index] = float64(item.Uint())
+		case reflect.Float32, reflect.Float64:
+			result[index] = item.Float()
+		default:
+			number, ok := item.Interface().(json.Number)
+			if !ok {
+				return nil, false
+			}
+			parsed, err := number.Float64()
+			if err != nil {
+				return nil, false
+			}
+			result[index] = parsed
+		}
+	}
+	return result, true
+}
+
+func booleanValues(value any) ([]bool, bool) {
+	reflected := reflect.ValueOf(value)
+	if !reflected.IsValid() || reflected.Kind() != reflect.Slice {
+		return nil, false
+	}
+	result := make([]bool, reflected.Len())
+	for index := 0; index < reflected.Len(); index++ {
+		item, ok := reflected.Index(index).Interface().(bool)
+		if !ok {
+			return nil, false
+		}
+		result[index] = item
+	}
+	return result, true
+}
+
+func timestampValues(value any) ([]time.Time, bool) {
+	reflected := reflect.ValueOf(value)
+	if !reflected.IsValid() || reflected.Kind() != reflect.Slice {
+		return nil, false
+	}
+	result := make([]time.Time, reflected.Len())
+	for index := 0; index < reflected.Len(); index++ {
+		item, ok := reflected.Index(index).Interface().(time.Time)
+		if !ok {
+			return nil, false
+		}
+		result[index] = item
+	}
+	return result, true
+}
 func resourceQueryOrder(sorts []resource.Sort, args []any) (string, []any, error) {
 	parts := make([]string, 0, len(sorts)+1)
 	seenID := false
+	add := func(value any) string {
+		args = append(args, value)
+		return "$" + strconv.Itoa(len(args))
+	}
 	for _, sort := range sorts {
-		if !resource.SortableField(sort.Field) {
-			return "", nil, errors.New("resource query sort field is invalid")
+		if err := sort.Validate(); err != nil {
+			return "", nil, err
 		}
-		column, custom := resourceQueryColumn(sort.Field)
-		if custom {
-			if !resource.ValidStorageKind(sort.Kind) {
-				return "", nil, errors.New("resource query custom sort storage kind is required")
-			}
-			valueColumn, err := fieldValueColumn(sort.Kind)
-			if err != nil {
-				return "", nil, err
-			}
-			key := strings.TrimPrefix(string(sort.Field), "resource.field.")
-			args = append(args, key)
-			keyArg := "$" + strconv.Itoa(len(args))
-			args = append(args, sort.Kind)
-			kindArg := "$" + strconv.Itoa(len(args))
-			column = "(SELECT value." + valueColumn + " FROM core.resource_field_values value WHERE value.resource_id=r.id AND value.site_id=r.site_id AND value.field_key=" + keyArg + " AND value.value_kind=" + kindArg + " ORDER BY value.position LIMIT 1)"
+		column, err := resourceQuerySortExpression(sort, add, "r", resourceQueryColumn)
+		if err != nil {
+			return "", nil, err
 		}
 		direction := "ASC"
 		if sort.Direction == resource.SortDescending {
@@ -351,6 +449,19 @@ func resourceQueryOrder(sorts []resource.Sort, args []any) (string, []any, error
 		parts = append(parts, "r.id ASC")
 	}
 	return strings.Join(parts, ", "), args, nil
+}
+
+func resourceQuerySortExpression(item resource.Sort, add func(any) string, alias string, resolve resourceQueryColumnResolver) (string, error) {
+	column, custom := resolve(item.Field)
+	if !custom {
+		return column, nil
+	}
+	valueColumn, err := fieldValueColumn(item.Kind)
+	if err != nil {
+		return "", err
+	}
+	key := strings.TrimPrefix(string(item.Field), "resource.field.")
+	return "(SELECT value." + valueColumn + " FROM core.resource_field_values value WHERE value.resource_id=" + alias + ".id AND value.site_id=" + alias + ".site_id AND value.field_key=" + add(key) + " AND value.value_kind=" + add(item.Kind) + " AND value.position=0)", nil
 }
 
 type Repository struct {
@@ -402,6 +513,9 @@ func (r *Repository) Create(
 			resultErr = errors.Join(resultErr, rollbackErr)
 		}
 	}()
+	if err := lockRouteNamespace(ctx, transaction, item.SiteID); err != nil {
+		return resource.Resource{}, err
+	}
 	if _, err := transaction.Exec(ctx, `LOCK TABLE core.resources IN SHARE ROW EXCLUSIVE MODE;`); err != nil {
 		return resource.Resource{}, fmt.Errorf("lock resources for create: %w", err)
 	}
@@ -441,6 +555,11 @@ WHERE site_id = $1
 
 	if item.TypeSettings == nil {
 		item.TypeSettings = map[string]any{}
+	}
+	if item.Path != nil {
+		if err := ensureTreePathsAvailable(ctx, transaction, item.SiteID, []string{*item.Path}, &item); err != nil {
+			return resource.Resource{}, err
+		}
 	}
 	rawSettings, err := json.Marshal(item.TypeSettings)
 	if err != nil {
@@ -948,6 +1067,9 @@ func (r *Repository) Update(
 	if current.Version <= 0 {
 		return resource.Resource{}, resource.ErrConflict
 	}
+	if err := lockRouteNamespace(ctx, transaction, item.SiteID); err != nil {
+		return resource.Resource{}, err
+	}
 	if _, err := transaction.Exec(ctx, `LOCK TABLE core.resources IN SHARE ROW EXCLUSIVE MODE;`); err != nil {
 		return resource.Resource{}, fmt.Errorf("lock resources for update: %w", err)
 	}
@@ -1081,6 +1203,18 @@ SELECT EXISTS
 	if item.Path != nil {
 		item.Path, err = resource.BuildPath(parent, item.Slug)
 		if err != nil {
+			return resource.Resource{}, err
+		}
+	}
+	paths, err := prospectiveTreePaths(ctx, transaction, item.ID, item.Path)
+	if err != nil {
+		return resource.Resource{}, err
+	}
+	if err := ensureTreePathsAvailable(ctx, transaction, item.SiteID, paths, &item); err != nil {
+		return resource.Resource{}, err
+	}
+	if item.Type == resourcetype.Library && (!sameOptionalText(current.Path, item.Path) || !reflect.DeepEqual(current.TypeSettings, item.TypeSettings)) {
+		if err := ensureProspectiveLibraryRoutesAvailable(ctx, transaction, item); err != nil {
 			return resource.Resource{}, err
 		}
 	}
@@ -1290,6 +1424,23 @@ func (r *Repository) Restore(
 			_ = tx.Rollback(context.Background())
 		}
 	}()
+	item, err := routeResourceByID(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if err := lockRouteNamespace(ctx, tx, item.SiteID); err != nil {
+		return err
+	}
+	paths, err := prospectiveTreePaths(ctx, tx, item.ID, item.Path)
+	if err != nil {
+		return err
+	}
+	if !withDescendants && item.Path != nil {
+		paths = []string{*item.Path}
+	}
+	if err := ensureTreePathsAvailable(ctx, tx, item.SiteID, paths, &item); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `LOCK TABLE core.resources IN SHARE ROW EXCLUSIVE MODE;`); err != nil {
 		return fmt.Errorf("lock resources for restore: %w", err)
 	}
@@ -1355,9 +1506,6 @@ func (r *Repository) Delete(
 		}
 		_ = transaction.Rollback(context.Background())
 	}()
-	if _, err := transaction.Exec(ctx, `LOCK TABLE core.resources IN SHARE ROW EXCLUSIVE MODE;`); err != nil {
-		return fmt.Errorf("lock resources for permanent delete: %w", err)
-	}
 	var deletedSiteID site.ID
 	var deletedParentID *int64
 	if err := transaction.QueryRow(ctx, `SELECT site_id, parent_id FROM core.resources WHERE id = $1;`, id).Scan(
@@ -1366,6 +1514,12 @@ func (r *Repository) Delete(
 		return resource.ErrNotFound
 	} else if err != nil {
 		return fmt.Errorf("read resource delete position: %w", err)
+	}
+	if err := lockRouteNamespace(ctx, transaction, deletedSiteID); err != nil {
+		return err
+	}
+	if _, err := transaction.Exec(ctx, `LOCK TABLE core.resources IN SHARE ROW EXCLUSIVE MODE;`); err != nil {
+		return fmt.Errorf("lock resources for permanent delete: %w", err)
 	}
 
 	observedMediaIDs, exists, err := treeMediaIDs(
@@ -2419,6 +2573,9 @@ func translateError(err error) error {
 
 	switch postgresError.Code {
 	case pgerrcode.UniqueViolation:
+		if postgresError.ConstraintName == "uq_resources_site_path" || postgresError.ConstraintName == "uq_library_item_routes_slug" {
+			return fmt.Errorf("%w: %s", resource.ErrRouteConflict, err)
+		}
 		return fmt.Errorf("%w: %s", resource.ErrConflict, err)
 	case pgerrcode.ForeignKeyViolation:
 		return fmt.Errorf("%w: %s", resource.ErrInvalidReference, err)
@@ -2434,6 +2591,10 @@ func translateDeleteError(err error) error {
 		return fmt.Errorf("%w: %s", resource.ErrReferenced, err)
 	}
 	return translateError(err)
+}
+
+func sameOptionalText(left, right *string) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
 func replaceFileReferences(

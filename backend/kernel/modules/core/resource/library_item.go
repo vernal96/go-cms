@@ -2,10 +2,15 @@ package resource
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -85,7 +90,9 @@ type UpdateLibraryItemInput struct {
 type LibraryItemQuery struct {
 	SiteID     site.ID
 	LibraryID  ID
-	AfterID    ID
+	Filters    []FilterCondition
+	Sort       []Sort
+	Cursor     string
 	Limit      int
 	Search     string
 	PublicOnly bool
@@ -242,7 +249,7 @@ func (s *LibraryService) Query(ctx context.Context, actor security.Actor, query 
 	if err := s.common.authorizer.Check(ctx, actor, readPermission); err != nil {
 		return LibraryItemPage{}, err
 	}
-	if query.Limit <= 0 || query.Limit > 100 || query.SiteID <= 0 || query.LibraryID <= 0 {
+	if err := query.Validate(); err != nil {
 		return LibraryItemPage{}, ErrInvalid
 	}
 	if _, _, err := s.library(ctx, query.SiteID, query.LibraryID); err != nil {
@@ -436,26 +443,208 @@ func MatchLibraryItemPattern(pattern, relativePath string) (LibraryRouteKey, boo
 	return result, true
 }
 
-func EncodeLibraryCursor(id ID) string {
-	if id <= 0 {
-		return ""
-	}
-	return base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatInt(int64(id), 10)))
+type LibraryCursor struct {
+	Values []any
+	ID     ID
 }
 
-func DecodeLibraryCursor(value string) (ID, error) {
-	if value == "" {
-		return 0, nil
+type libraryCursorPayload struct {
+	Fingerprint string            `json:"fingerprint"`
+	Values      []json.RawMessage `json:"values"`
+	ID          ID                `json:"id"`
+}
+
+func (q LibraryItemQuery) Validate() error {
+	if q.SiteID <= 0 || q.LibraryID <= 0 || q.Limit <= 0 || q.Limit > 100 {
+		return ErrInvalid
 	}
-	raw, err := base64.RawURLEncoding.DecodeString(value)
+	for _, condition := range q.Filters {
+		if !LibraryItemFilterField(condition.Field) || condition.Validate() != nil {
+			return ErrInvalid
+		}
+	}
+	idSeen := false
+	for index, item := range q.Sort {
+		if !LibraryItemSortField(item.Field) || item.Validate() != nil {
+			return ErrInvalid
+		}
+		if item.Field == FieldID {
+			if idSeen || index != len(q.Sort)-1 {
+				return ErrInvalid
+			}
+			idSeen = true
+		}
+	}
+	if q.Cursor != "" {
+		if _, err := DecodeLibraryCursor(q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func LibraryItemFilterField(path FieldPath) bool {
+	if IsCustomFieldPath(path) {
+		return true
+	}
+	switch path {
+	case FieldID, FieldTitle, FieldSlug, FieldAnnotation, FieldTemplate,
+		FieldIsPublic, FieldIsSearchable, FieldPublishedAt, FieldCreatedAt, FieldUpdatedAt:
+		return true
+	default:
+		return false
+	}
+}
+
+func LibraryItemSortField(path FieldPath) bool {
+	if IsCustomFieldPath(path) {
+		return true
+	}
+	switch path {
+	case FieldID, FieldTitle, FieldSlug, FieldTemplate,
+		FieldPublishedAt, FieldCreatedAt, FieldUpdatedAt:
+		return true
+	default:
+		return false
+	}
+}
+
+// LibraryItemSorts returns non-ID sort keys and the stable ID tie-breaker.
+func LibraryItemSorts(query LibraryItemQuery) ([]Sort, SortDirection) {
+	if len(query.Sort) == 0 {
+		return nil, SortDescending
+	}
+	result := append([]Sort(nil), query.Sort...)
+	idDirection := SortAscending
+	if result[len(result)-1].Field == FieldID {
+		idDirection = result[len(result)-1].Direction
+		result = result[:len(result)-1]
+	}
+	return result, idDirection
+}
+
+func EncodeLibraryCursor(query LibraryItemQuery, item LibraryItem) (string, error) {
+	if item.ID <= 0 {
+		return "", ErrInvalid
+	}
+	sorts, _ := LibraryItemSorts(query)
+	payload := libraryCursorPayload{Fingerprint: libraryQueryFingerprint(query), ID: item.ID}
+	payload.Values = make([]json.RawMessage, len(sorts))
+	for index, sort := range sorts {
+		value := libraryItemSortValue(item, sort.Field)
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return "", fmt.Errorf("encode library cursor value: %w", err)
+		}
+		payload.Values[index] = raw
+	}
+	raw, err := json.Marshal(payload)
 	if err != nil {
-		return 0, ErrInvalid
+		return "", fmt.Errorf("encode library cursor: %w", err)
 	}
-	id, err := strconv.ParseInt(string(raw), 10, 64)
-	if err != nil || id <= 0 {
-		return 0, ErrInvalid
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func DecodeLibraryCursor(query LibraryItemQuery) (LibraryCursor, error) {
+	if query.Cursor == "" {
+		return LibraryCursor{}, nil
 	}
-	return ID(id), nil
+	raw, err := base64.RawURLEncoding.DecodeString(query.Cursor)
+	if err != nil {
+		return LibraryCursor{}, ErrInvalid
+	}
+	var payload libraryCursorPayload
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.ID <= 0 || payload.Fingerprint != libraryQueryFingerprint(query) {
+		return LibraryCursor{}, ErrInvalid
+	}
+	sorts, _ := LibraryItemSorts(query)
+	if len(payload.Values) != len(sorts) {
+		return LibraryCursor{}, ErrInvalid
+	}
+	result := LibraryCursor{Values: make([]any, len(sorts)), ID: payload.ID}
+	for index, sort := range sorts {
+		value, err := decodeCursorValue(payload.Values[index], sort)
+		if err != nil {
+			return LibraryCursor{}, ErrInvalid
+		}
+		result.Values[index] = value
+	}
+	return result, nil
+}
+
+func libraryQueryFingerprint(query LibraryItemQuery) string {
+	query.Cursor = ""
+	query.Limit = 0
+	query.Filters = append([]FilterCondition(nil), query.Filters...)
+	sort.SliceStable(query.Filters, func(i, j int) bool {
+		left, _ := json.Marshal(query.Filters[i])
+		right, _ := json.Marshal(query.Filters[j])
+		return string(left) < string(right)
+	})
+	raw, _ := json.Marshal(query)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func libraryItemSortValue(item LibraryItem, path FieldPath) any {
+	switch path {
+	case FieldTitle:
+		return item.Title
+	case FieldSlug:
+		return item.Slug
+	case FieldTemplate:
+		if item.Template == nil {
+			return nil
+		}
+		return string(*item.Template)
+	case FieldPublishedAt:
+		return item.PublishedAt
+	case FieldCreatedAt:
+		return item.CreatedAt
+	case FieldUpdatedAt:
+		return item.UpdatedAt
+	default:
+		key := strings.TrimPrefix(string(path), "resource.field.")
+		value := item.Fields[key]
+		reflected := reflect.ValueOf(value)
+		if reflected.IsValid() && reflected.Kind() == reflect.Slice {
+			if reflected.Len() == 0 {
+				return nil
+			}
+			return reflected.Index(0).Interface()
+		}
+		return value
+	}
+}
+
+func decodeCursorValue(raw json.RawMessage, sort Sort) (any, error) {
+	if string(raw) == "null" {
+		return nil, nil
+	}
+	kind, err := sortStorageKind(sort)
+	if err != nil {
+		return nil, err
+	}
+	switch kind {
+	case field.StorageString:
+		var value string
+		err = json.Unmarshal(raw, &value)
+		return value, err
+	case field.StorageInteger, field.StorageReference:
+		var value int64
+		err = json.Unmarshal(raw, &value)
+		return value, err
+	case field.StorageFloat:
+		var value float64
+		err = json.Unmarshal(raw, &value)
+		return value, err
+	case field.StorageTimestamp:
+		var value time.Time
+		err = json.Unmarshal(raw, &value)
+		return value, err
+	default:
+		return nil, ErrInvalid
+	}
 }
 
 func pointerID(id ID) *ID { return &id }

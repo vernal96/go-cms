@@ -1,3 +1,5 @@
+BEGIN;
+
 DELETE FROM core.resource_entities
 WHERE storage_kind = 'library_item';
 
@@ -61,3 +63,5 @@ SELECT setval(
 );
 
 DROP TABLE core.resource_entities;
+
+COMMIT;

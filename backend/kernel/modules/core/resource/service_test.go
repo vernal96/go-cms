@@ -1046,6 +1046,22 @@ func TestLibraryServiceCopiesDefaultTemplateOnlyAtCreation(t *testing.T) {
 	}
 }
 
+func TestLibraryDefaultTemplateIsValidatedAfterTypeNormalization(t *testing.T) {
+	service, _, _ := newTestService(t)
+	ctx := context.Background()
+	home, err := service.Create(ctx, security.System(), CreateInput{SiteID: 1, Type: resourcetype.Page, Title: "Home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, ParentID: &home.ID, Type: resourcetype.Library, Title: "Broken", Slug: "broken",
+		TypeSettings: map[string]any{"default_item_template": "missing"},
+	})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), `unknown default item template "missing"`) {
+		t.Fatalf("unknown default template error = %v", err)
+	}
+}
+
 func TestServiceWidgetBindingsKeepIdentityAcrossReorderAndMove(t *testing.T) {
 	service, _, _ := newTestService(t)
 	ctx := context.Background()

@@ -26,6 +26,24 @@ func Compile(
 	definitions []Definition,
 	resolver TypeResolver,
 ) (*Schema, error) {
+	return compile(definitions, resolver, false)
+}
+
+// CompilePersistent compiles a schema whose normalized values are persisted
+// as typed resource-field rows. Generic profile/widget schemas intentionally
+// use Compile and may contain transient value types.
+func CompilePersistent(
+	definitions []Definition,
+	resolver TypeResolver,
+) (*Schema, error) {
+	return compile(definitions, resolver, true)
+}
+
+func compile(
+	definitions []Definition,
+	resolver TypeResolver,
+	requireStorage bool,
+) (*Schema, error) {
 	if resolver == nil {
 		return nil, errors.New("field type resolver is nil")
 	}
@@ -104,11 +122,23 @@ func Compile(
 				definition.Type,
 			)
 		}
-		if _, ok := valueType.(StorageValueType); !ok {
-			return nil, fmt.Errorf(
-				"field type %q returned value type without storage semantics",
-				definition.Type,
-			)
+		if requireStorage {
+			storage, ok := valueType.(StorageValueType)
+			if !ok {
+				return nil, fmt.Errorf(
+					"field %q type %q returned value type without storage semantics",
+					definition.Key,
+					definition.Type,
+				)
+			}
+			if !ValidStorageKind(storage.StorageKind()) {
+				return nil, fmt.Errorf(
+					"field %q type %q returned unsupported storage kind %q",
+					definition.Key,
+					definition.Type,
+					storage.StorageKind(),
+				)
+			}
 		}
 
 		rules, err := compileRules(valueType.Rules(), definition.Rules)

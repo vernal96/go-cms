@@ -820,7 +820,11 @@ func (m *Resources) CreateResource(
 	if err := m.requireSite(ctx, actor, siteID, ResourceCreatePermission, SiteAccessEdit); err != nil {
 		return ResourceTreeItem{}, err
 	}
-	if input.Type != resourcetype.Page && input.Type != resourcetype.Link && input.Type != resourcetype.Library {
+	runtime, exists := m.sites.RuntimeByID(siteID)
+	if !exists {
+		return ResourceTreeItem{}, site.ErrNotFound
+	}
+	if _, exists := runtime.Profile().Registry().ResourceType(input.Type); !exists {
 		return ResourceTreeItem{}, fmt.Errorf("%w: unsupported resource type", ErrValidation)
 	}
 	if input.ParentID != nil {
@@ -831,10 +835,6 @@ func (m *Resources) CreateResource(
 		if !exists {
 			return ResourceTreeItem{}, resource.ErrNotFound
 		}
-	}
-	runtime, exists := m.sites.RuntimeByID(siteID)
-	if !exists {
-		return ResourceTreeItem{}, site.ErrNotFound
 	}
 	created, err := m.resources.Create(ctx, actor, resource.CreateInput{
 		SiteID:       siteID,
@@ -1059,17 +1059,15 @@ func (m *Resources) UpdateResource(
 	if current.SiteID != siteID {
 		return ResourceDetails{}, resource.ErrNotFound
 	}
-	if current.Type != resourcetype.Page && current.Type != resourcetype.Link && current.Type != resourcetype.Library {
+	runtime, exists := m.sites.RuntimeByID(siteID)
+	if !exists {
+		return ResourceDetails{}, site.ErrNotFound
+	}
+	if _, exists := runtime.Profile().Registry().ResourceType(current.Type); !exists {
 		return ResourceDetails{}, fmt.Errorf("%w: unsupported current resource type", ErrValidation)
 	}
-	if input.Type != resourcetype.Page && input.Type != resourcetype.Link && input.Type != resourcetype.Library {
+	if _, exists := runtime.Profile().Registry().ResourceType(input.Type); !exists {
 		return ResourceDetails{}, fmt.Errorf("%w: unsupported resource type", ErrValidation)
-	}
-
-	var contentType *string
-	if input.Type == resourcetype.Page || input.Type == resourcetype.Library {
-		value := "html"
-		contentType = &value
 	}
 	updated, err := m.resources.Update(ctx, actor, resource.UpdateInput{
 		ID:               resourceID,
@@ -1077,7 +1075,7 @@ func (m *Resources) UpdateResource(
 		ParentID:         input.ParentID,
 		Type:             input.Type,
 		Template:         input.Template,
-		ContentType:      contentType,
+		ContentType:      nil,
 		Title:            input.Title,
 		MenuTitle:        input.MenuTitle,
 		Slug:             input.Slug,
@@ -1175,11 +1173,7 @@ func (m *Resources) LibraryItems(ctx context.Context, actor security.Actor, site
 	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission, SiteAccessEdit); err != nil {
 		return LibraryItemsPage{}, err
 	}
-	afterID, err := resource.DecodeLibraryCursor(cursor)
-	if err != nil {
-		return LibraryItemsPage{}, ErrValidation
-	}
-	page, err := m.libraryItems.Query(ctx, actor, resource.LibraryItemQuery{SiteID: siteID, LibraryID: libraryID, AfterID: afterID, Limit: limit, Search: search})
+	page, err := m.libraryItems.Query(ctx, actor, resource.LibraryItemQuery{SiteID: siteID, LibraryID: libraryID, Cursor: cursor, Limit: limit, Search: search})
 	if err != nil {
 		return LibraryItemsPage{}, err
 	}
@@ -1274,7 +1268,7 @@ func (m *Resources) DeleteLibraryItem(ctx context.Context, actor security.Actor,
 	if m.libraryItems == nil {
 		return errors.New("library item service is unavailable")
 	}
-	if err := m.requireSite(ctx, actor, siteID, ResourceDeletePermission, SiteAccessDelete); err != nil {
+	if err := m.requireSite(ctx, actor, siteID, ResourceDeletePermission, SiteAccessEdit); err != nil {
 		return err
 	}
 	item, err := m.libraryItems.Get(ctx, actor, itemID)
@@ -1868,14 +1862,22 @@ func treeItem(runtime *site.Runtime, item resource.Child, canCreate bool) Resour
 		displayTitle = item.Title
 	}
 	icon := "document"
-	if item.Type == resourcetype.Link {
-		icon = "link"
-	} else if item.Type == resourcetype.Library {
-		icon = "collection"
-	}
-	if item.Template != nil {
-		if templateRuntime, exists := runtime.Profile().Template(*item.Template); exists {
-			icon = iconOrDefault(templateRuntime.Definition().Icon)
+	if runtime == nil {
+		if item.Type == resourcetype.Link || item.Type == resourcetype.ResourceLink {
+			icon = "link"
+		} else if item.Type == resourcetype.Library {
+			icon = "collection"
+		}
+	} else {
+		if resourceType, exists := runtime.Profile().Registry().ResourceType(item.Type); exists {
+			icon = iconOrDefault(resourceType.Capabilities().DefaultIcon)
+		}
+		if item.Template != nil {
+			if templateRuntime, exists := runtime.Profile().Template(*item.Template); exists {
+				if templateIcon, allowed := allowedIcon(templateRuntime.Definition().Icon); allowed {
+					icon = templateIcon
+				}
+			}
 		}
 	}
 	return ResourceTreeItem{
@@ -1983,12 +1985,19 @@ func appendResourceOptions(target *[]ResourceOption, nodes []resource.Node) {
 }
 
 func iconOrDefault(icon string) string {
-	icon = strings.TrimSpace(icon)
+	if normalized, allowed := allowedIcon(icon); allowed {
+		return normalized
+	}
+	return "document"
+}
+
+func allowedIcon(icon string) (string, bool) {
+	icon = strings.ToLower(strings.TrimSpace(icon))
 	switch icon {
-	case "document", "link", "folder", "tickets":
-		return icon
+	case "document", "link", "folder", "tickets", "collection":
+		return icon, true
 	default:
-		return "document"
+		return "", false
 	}
 }
 
@@ -1997,7 +2006,7 @@ func validationError(err error) error {
 		return err
 	}
 	if errors.Is(err, site.ErrConflict) || errors.Is(err, site.ErrNotFound) ||
-		errors.Is(err, resource.ErrConflict) || errors.Is(err, resource.ErrNotFound) {
+		errors.Is(err, resource.ErrConflict) || errors.Is(err, resource.ErrRouteConflict) || errors.Is(err, resource.ErrNotFound) {
 		return err
 	}
 	var fieldErrors field.ValidationErrors

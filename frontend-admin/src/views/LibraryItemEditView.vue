@@ -22,7 +22,9 @@ const itemId = computed(() => route.params.itemId ? Number(route.params.itemId) 
 const creating = computed(() => itemId.value === null)
 const loading = ref(true)
 const submitting = ref(false)
+const moving = ref(false)
 const errorMessage = ref('')
+const moveError = ref('')
 const metadata = ref<ResourceMetadata>({ types: [], templates: [], widgets: [], extensions: [] })
 const libraries = ref<Array<{ id: number; display_title: string }>>([])
 const fieldErrors = ref<DynamicFieldErrors>({})
@@ -31,6 +33,7 @@ const canReadHistory = ref(false)
 const canDeleteHistory = ref(false)
 const resourceWidgets = ref<ResourceWidget[]>([])
 const resourceVersion = ref(0)
+const ownerLibraryId = ref(0)
 const form = reactive({ library_id: 0, template_code: null as string | null, title: '', slug: '', annotation: '', content: '', is_public: true, is_searchable: true, published_at: null as Date | null, unpublished_at: null as Date | null, fields: {} as Record<string, unknown> })
 const selectedTemplate = computed(() => metadata.value.templates.find((item) => item.code === form.template_code) ?? null)
 const applicableExtensions = computed(() => metadata.value.extensions.filter((extension) => extension.applies_to.includes('page')))
@@ -46,6 +49,7 @@ async function load(): Promise<void> {
     metadata.value = loadedMetadata
     libraries.value = options.items.filter((item) => item.type === 'library')
     form.library_id = originalLibraryId.value
+    ownerLibraryId.value = originalLibraryId.value
     if (creating.value) {
       const defaultTemplate = libraryDetails.resource.type_settings.default_item_template
       form.template_code = typeof defaultTemplate === 'string' ? defaultTemplate : null
@@ -54,6 +58,7 @@ async function load(): Promise<void> {
       const details = await adminRequest<LibraryItemDetailsResponse>(`/api/sites/${siteId.value}/library-items/${itemId.value}`, props.accessToken)
       const item = details.item
       resourceVersion.value = item.version
+      ownerLibraryId.value = item.library_id
       canUpdate.value = details.permissions.update
       canReadHistory.value = details.permissions.history_read
       canDeleteHistory.value = details.permissions.history_delete
@@ -81,11 +86,31 @@ async function submit(): Promise<void> {
     } else {
       const updated = await adminRequest<LibraryItemDetailsResponse>(`/api/sites/${siteId.value}/library-items/${itemId.value}`, props.accessToken, { method: 'PATCH', body: JSON.stringify(payload) })
       resourceVersion.value = updated.item.version
-      if (form.library_id !== originalLibraryId.value) { const moved = await adminRequest<LibraryItemDetailsResponse>(`/api/sites/${siteId.value}/library-items/${itemId.value}/move`, props.accessToken, { method: 'POST', body: JSON.stringify({ library_id: form.library_id, expected_version: resourceVersion.value }) }); resourceVersion.value = moved.item.version }
       ElMessage.success('Ресурс сохранён')
     }
   } catch (error) { errorMessage.value = error instanceof AdminAPIError ? error.message : 'Не удалось сохранить ресурс.' }
   finally { submitting.value = false }
+}
+
+async function move(): Promise<void> {
+  moveError.value = ''
+  if (creating.value || form.library_id === ownerLibraryId.value || moving.value) return
+  moving.value = true
+  try {
+    const moved = await adminRequest<LibraryItemDetailsResponse>(`/api/sites/${siteId.value}/library-items/${itemId.value}/move`, props.accessToken, {
+      method: 'POST',
+      body: JSON.stringify({ library_id: form.library_id, expected_version: resourceVersion.value }),
+    })
+    ownerLibraryId.value = moved.item.library_id
+    form.library_id = moved.item.library_id
+    resourceVersion.value = moved.item.version
+    await router.replace(`/admin/sites/${siteId.value}/resources/${moved.item.library_id}/items/${moved.item.id}/edit`)
+    ElMessage.success('Ресурс перемещён')
+  } catch (error) {
+    moveError.value = error instanceof AdminAPIError ? error.message : 'Не удалось переместить ресурс.'
+  } finally {
+    moving.value = false
+  }
 }
 
 onMounted(() => void load())
@@ -93,8 +118,9 @@ onMounted(() => void load())
 
 <template>
   <section class="workspace-page">
-    <header class="page-header"><div><h1>{{ creating ? 'Новый ресурс библиотеки' : (form.title || 'Ресурс библиотеки') }}</h1><p>Ресурс не входит в дерево сайта</p></div><el-button type="primary" :loading="submitting" :disabled="loading || !canUpdate" @click="submit">Сохранить</el-button></header>
+    <header class="page-header"><div><h1>{{ creating ? 'Новый ресурс библиотеки' : (form.title || 'Ресурс библиотеки') }}</h1><p>Ресурс не входит в дерево сайта</p></div><div class="page-header-actions"><el-button v-if="!creating" :loading="moving" :disabled="loading || !canUpdate || form.library_id === ownerLibraryId" @click="move">Переместить</el-button><el-button type="primary" :loading="submitting" :disabled="loading || !canUpdate" @click="submit">Сохранить</el-button></div></header>
     <el-alert v-if="errorMessage" type="error" :closable="false" :title="errorMessage" />
+    <el-alert v-if="moveError" type="error" :closable="false" :title="moveError" />
     <el-form v-if="!loading" :model="form" label-position="top">
       <div class="resource-main-grid">
         <div class="resource-main-primary">

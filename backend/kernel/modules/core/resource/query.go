@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
@@ -18,15 +20,20 @@ import (
 type FieldPath string
 
 const (
-	FieldID         FieldPath = "resource.id"
-	FieldTitle      FieldPath = "resource.title"
-	FieldMenuTitle  FieldPath = "resource.menu_title"
-	FieldSlug       FieldPath = "resource.slug"
-	FieldPathValue  FieldPath = "resource.path"
-	FieldAnnotation FieldPath = "resource.annotation"
-	FieldType       FieldPath = "resource.type"
-	FieldTemplate   FieldPath = "resource.template"
-	FieldSort       FieldPath = "resource.sort"
+	FieldID           FieldPath = "resource.id"
+	FieldTitle        FieldPath = "resource.title"
+	FieldMenuTitle    FieldPath = "resource.menu_title"
+	FieldSlug         FieldPath = "resource.slug"
+	FieldPathValue    FieldPath = "resource.path"
+	FieldAnnotation   FieldPath = "resource.annotation"
+	FieldType         FieldPath = "resource.type"
+	FieldTemplate     FieldPath = "resource.template"
+	FieldSort         FieldPath = "resource.sort"
+	FieldIsPublic     FieldPath = "resource.is_public"
+	FieldIsSearchable FieldPath = "resource.is_searchable"
+	FieldPublishedAt  FieldPath = "resource.published_at"
+	FieldCreatedAt    FieldPath = "resource.created_at"
+	FieldUpdatedAt    FieldPath = "resource.updated_at"
 )
 
 type FilterOperator string
@@ -155,11 +162,8 @@ func (q Query) Validate() error {
 		}
 	}
 	for _, item := range q.Sort {
-		if !SortableField(item.Field) || (item.Direction != SortAscending && item.Direction != SortDescending) {
+		if err := item.Validate(); err != nil {
 			return errors.New("resource query sort is invalid")
-		}
-		if strings.HasPrefix(string(item.Field), "resource.field.") && !ValidStorageKind(item.Kind) {
-			return errors.New("resource query custom sort storage kind is required")
 		}
 	}
 	return nil
@@ -177,32 +181,62 @@ func (c FilterCondition) Validate() error {
 	if (c.Operator == FilterIn || c.Operator == FilterNotIn) && !isSlice(c.Value) {
 		return errors.New("resource query set filter value is invalid")
 	}
-	if (c.Operator == FilterGreaterThan || c.Operator == FilterGreaterThanOrEqual || c.Operator == FilterLessThan || c.Operator == FilterLessThanOrEqual) && !numericField(c.Field) {
-		return fmt.Errorf("resource query filter %q does not support ordering", c.Field)
+	kind, err := c.storageKind()
+	if err != nil {
+		return err
 	}
-	if strings.HasPrefix(string(c.Field), "resource.field.") && c.Kind != "" &&
-		(c.Operator == FilterGreaterThan || c.Operator == FilterGreaterThanOrEqual || c.Operator == FilterLessThan || c.Operator == FilterLessThanOrEqual) &&
-		c.Kind != field.StorageString && c.Kind != field.StorageInteger && c.Kind != field.StorageFloat && c.Kind != field.StorageTimestamp {
-		return fmt.Errorf("resource query field %q storage kind %q does not support ordering", c.Field, c.Kind)
+	if !operatorSupportsStorageKind(c.Operator, kind) {
+		return fmt.Errorf("resource query field %q storage kind %q does not support operator %q", c.Field, kind, c.Operator)
 	}
-	if strings.HasPrefix(string(c.Field), "resource.field.") && c.Kind != "" && !ValidStorageKind(c.Kind) {
-		return fmt.Errorf("resource query field %q has invalid storage kind %q", c.Field, c.Kind)
+	if err := validateFilterValue(kind, c.Operator, c.Value); err != nil {
+		return fmt.Errorf("resource query field %q: %w", c.Field, err)
 	}
 	return nil
 }
 
-func ValidStorageKind(kind field.StorageKind) bool {
-	switch kind {
-	case field.StorageString, field.StorageInteger, field.StorageFloat, field.StorageBoolean, field.StorageTimestamp, field.StorageReference, field.StorageJSON:
-		return true
-	default:
-		return false
+func (s Sort) Validate() error {
+	if !SortableField(s.Field) || (s.Direction != SortAscending && s.Direction != SortDescending) {
+		return errors.New("resource query sort is invalid")
 	}
+	kind, err := sortStorageKind(s)
+	if err != nil {
+		return err
+	}
+	if !sortableStorageKind(kind) {
+		return fmt.Errorf("resource query field %q storage kind %q is not sortable", s.Field, kind)
+	}
+	return nil
+}
+
+func (c FilterCondition) storageKind() (field.StorageKind, error) {
+	if IsCustomFieldPath(c.Field) {
+		if !field.ValidStorageKind(c.Kind) {
+			return "", fmt.Errorf("resource query custom field %q requires a valid storage kind", c.Field)
+		}
+		return c.Kind, nil
+	}
+	return BuiltinFieldStorageKind(c.Field)
+}
+
+func sortStorageKind(s Sort) (field.StorageKind, error) {
+	if IsCustomFieldPath(s.Field) {
+		if !field.ValidStorageKind(s.Kind) {
+			return "", fmt.Errorf("resource query custom sort field %q requires a valid storage kind", s.Field)
+		}
+		return s.Kind, nil
+	}
+	return BuiltinFieldStorageKind(s.Field)
+}
+
+func ValidStorageKind(kind field.StorageKind) bool {
+	return field.ValidStorageKind(kind)
 }
 
 func ValidFieldPath(field FieldPath) bool {
 	switch field {
-	case FieldID, FieldTitle, FieldMenuTitle, FieldSlug, FieldPathValue, FieldAnnotation, FieldType, FieldTemplate, FieldSort:
+	case FieldID, FieldTitle, FieldMenuTitle, FieldSlug, FieldPathValue, FieldAnnotation,
+		FieldType, FieldTemplate, FieldSort, FieldIsPublic, FieldIsSearchable,
+		FieldPublishedAt, FieldCreatedAt, FieldUpdatedAt:
 		return true
 	}
 	key, found := strings.CutPrefix(string(field), "resource.field.")
@@ -210,20 +244,113 @@ func ValidFieldPath(field FieldPath) bool {
 }
 func SortableField(field FieldPath) bool {
 	switch field {
-	case FieldID, FieldTitle, FieldMenuTitle, FieldSlug, FieldPathValue, FieldType, FieldTemplate, FieldSort:
+	case FieldID, FieldTitle, FieldMenuTitle, FieldSlug, FieldPathValue, FieldType,
+		FieldTemplate, FieldSort, FieldPublishedAt, FieldCreatedAt, FieldUpdatedAt:
 		return true
 	}
 	return strings.HasPrefix(string(field), "resource.field.")
 }
-func numericField(field FieldPath) bool {
-	return field == FieldID || field == FieldSort || strings.HasPrefix(string(field), "resource.field.")
+
+func IsCustomFieldPath(path FieldPath) bool {
+	return strings.HasPrefix(string(path), "resource.field.")
 }
-func isSlice(value any) bool {
-	switch value.(type) {
-	case []any, []string, []int64, []ID:
-		return true
+
+func BuiltinFieldStorageKind(path FieldPath) (field.StorageKind, error) {
+	switch path {
+	case FieldID, FieldSort:
+		return field.StorageInteger, nil
+	case FieldIsPublic, FieldIsSearchable:
+		return field.StorageBoolean, nil
+	case FieldPublishedAt, FieldCreatedAt, FieldUpdatedAt:
+		return field.StorageTimestamp, nil
+	case FieldTitle, FieldMenuTitle, FieldSlug, FieldPathValue, FieldAnnotation, FieldType, FieldTemplate:
+		return field.StorageString, nil
+	default:
+		return "", fmt.Errorf("resource query field %q has no storage kind", path)
 	}
-	return false
+}
+
+func isSlice(value any) bool {
+	if value == nil {
+		return false
+	}
+	return reflect.ValueOf(value).Kind() == reflect.Slice
+}
+
+func operatorSupportsStorageKind(operator FilterOperator, kind field.StorageKind) bool {
+	switch operator {
+	case FilterGreaterThan, FilterGreaterThanOrEqual, FilterLessThan, FilterLessThanOrEqual:
+		return sortableStorageKind(kind)
+	case FilterIn, FilterNotIn:
+		return kind != field.StorageJSON
+	case FilterEqual, FilterNotEqual:
+		return field.ValidStorageKind(kind)
+	default:
+		return false
+	}
+}
+
+func sortableStorageKind(kind field.StorageKind) bool {
+	switch kind {
+	case field.StorageString, field.StorageInteger, field.StorageFloat, field.StorageTimestamp:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateFilterValue(kind field.StorageKind, operator FilterOperator, value any) error {
+	if operator == FilterIn || operator == FilterNotIn {
+		items := reflect.ValueOf(value)
+		if items.Len() == 0 {
+			return errors.New("set filter value is empty")
+		}
+		for index := 0; index < items.Len(); index++ {
+			if !valueMatchesStorageKind(kind, items.Index(index).Interface()) {
+				return fmt.Errorf("set filter value at index %d is incompatible with storage kind %q", index, kind)
+			}
+		}
+		return nil
+	}
+	if !valueMatchesStorageKind(kind, value) {
+		return fmt.Errorf("filter value is incompatible with storage kind %q", kind)
+	}
+	return nil
+}
+
+func valueMatchesStorageKind(kind field.StorageKind, value any) bool {
+	switch kind {
+	case field.StorageString:
+		_, ok := value.(string)
+		return ok
+	case field.StorageBoolean:
+		_, ok := value.(bool)
+		return ok
+	case field.StorageTimestamp:
+		_, ok := value.(time.Time)
+		return ok
+	case field.StorageInteger, field.StorageReference:
+		switch typed := value.(type) {
+		case json.Number:
+			_, err := typed.Int64()
+			return err == nil
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, ID:
+			return true
+		default:
+			return false
+		}
+	case field.StorageFloat:
+		switch value.(type) {
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, float32, float64, ID, json.Number:
+			return true
+		default:
+			return false
+		}
+	case field.StorageJSON:
+		return value != nil
+	default:
+		return false
+	}
 }
 
 // Normalized returns an order-insensitive canonical copy suitable for result

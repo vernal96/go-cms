@@ -957,6 +957,8 @@ func writeManagementError(response http.ResponseWriter, err error) {
 		httptransport.WriteJSONError(response, http.StatusNotFound, "not_found", "requested object was not found")
 	case errors.Is(err, site.ErrConflict), errors.Is(err, resource.ErrConflict), errors.Is(err, file.ErrConflict):
 		httptransport.WriteJSONError(response, http.StatusConflict, "conflict", "object conflicts with existing data")
+	case errors.Is(err, resource.ErrRouteConflict):
+		httptransport.WriteJSONError(response, http.StatusConflict, "route_conflict", "route conflicts with existing content")
 	case errors.Is(err, file.ErrInUse):
 		httptransport.WriteJSONError(response, http.StatusConflict, "file_in_use", "file is used by content")
 	case errors.Is(err, file.ErrStorageMismatch):

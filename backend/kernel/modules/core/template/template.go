@@ -123,7 +123,7 @@ func Compile(definitions []Definition, resolver field.TypeResolver) (*Catalog, e
 			return nil, err
 		}
 
-		schema, err := field.Compile(definition.Fields, resolver)
+		schema, err := field.CompilePersistent(definition.Fields, resolver)
 		if err != nil {
 			return nil, fmt.Errorf("compile template %q fields: %w", definition.Code, err)
 		}

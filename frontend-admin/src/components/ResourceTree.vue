@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from
 import { ElButton, ElEmpty, ElIcon, ElInput, ElMessage, ElMessageBox, ElSkeleton, ElTree } from 'element-plus'
 import type Node from 'element-plus/es/components/tree/src/model/node'
 import type { LoadFunction } from 'element-plus/es/components/tree/src/tree.type'
-import { Document, Folder, Link, Plus, Tickets } from '@element-plus/icons-vue'
+import { Collection, Document, Folder, Link, Plus, Tickets } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 
 import { adminRequest, adminRequestVoid } from '../api/admin-api'
@@ -76,6 +76,7 @@ function icon(name: string): Component {
   if (name === 'link') return Link
   if (name === 'folder') return Folder
   if (name === 'tickets') return Tickets
+  if (name === 'collection') return Collection
   return Document
 }
 

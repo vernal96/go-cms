@@ -2,6 +2,7 @@ package migrations
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"testing"
 	"testing/fstest"
@@ -14,6 +15,31 @@ type stubTarget struct {
 	driver       *stub.Stub
 	openedSchema string
 	openedTable  string
+}
+
+func TestManagerBeforeUpBlocksBeforeOpeningMigrationDriver(t *testing.T) {
+	driver, err := stub.WithInstance(nil, &stub.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &stubTarget{driver: driver.(*stub.Stub)}
+	preflightErr := errors.New("unsafe legacy data")
+	called := false
+	plan := Plan{Connection: "main", Target: target, Source: Source{
+		ID: "core", Schema: "core", Path: ".",
+		FS: fstest.MapFS{
+			"000001_sites.up.sql":   &fstest.MapFile{Data: []byte("CREATE SITES")},
+			"000001_sites.down.sql": &fstest.MapFile{Data: []byte("DROP SITES")},
+		},
+		BeforeUp: func(context.Context) error { called = true; return preflightErr },
+	}}
+	err = NewManager().Up(context.Background(), plan)
+	if !called || !errors.Is(err, preflightErr) {
+		t.Fatalf("preflight result = called %t, error %v", called, err)
+	}
+	if target.openedSchema != "" {
+		t.Fatalf("migration driver opened for schema %q", target.openedSchema)
+	}
 }
 
 func (t *stubTarget) OpenMigrationDriver(

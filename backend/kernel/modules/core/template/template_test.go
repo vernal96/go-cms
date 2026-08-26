@@ -11,9 +11,35 @@ import (
 
 type testResolver map[field.TypeCode]field.Type
 
+type transientType struct{}
+
+func (transientType) Code() field.TypeCode                 { return "transient" }
+func (transientType) Compile(any) (field.ValueType, error) { return transientValue{}, nil }
+
+type transientValue struct{}
+
+func (transientValue) Normalize(value any) (any, error) { return value, nil }
+func (transientValue) Empty(value any) bool             { return value == nil }
+func (transientValue) Validate(any) error               { return nil }
+func (transientValue) Rules() []string                  { return nil }
+func (transientValue) Example() any                     { return "temporary" }
+
 func (r testResolver) FieldType(code field.TypeCode) (field.Type, bool) {
 	value, exists := r[code]
 	return value, exists
+}
+
+func TestResourceTemplateRequiresPersistentFieldType(t *testing.T) {
+	fields := resolver()
+	fields["transient"] = transientType{}
+	definition := field.Definition{Key: "session", Type: "transient", Label: "Session"}
+	if _, err := field.Compile([]field.Definition{definition}, fields); err != nil {
+		t.Fatalf("generic field compilation rejected transient type: %v", err)
+	}
+	_, err := Compile([]Definition{{Code: "article", Label: "Article", Fields: []field.Definition{definition}}}, fields)
+	if err == nil || !strings.Contains(err.Error(), `template "article"`) || !strings.Contains(err.Error(), `field "session"`) || !strings.Contains(err.Error(), `type "transient"`) {
+		t.Fatalf("persistent template error = %v", err)
+	}
 }
 
 func resolver() testResolver {

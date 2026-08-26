@@ -80,34 +80,36 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 32 {
+	if len(entries) != 34 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	expected := map[string]bool{
-		"000016_resource_revisions.up.sql":                   false,
-		"000016_resource_revisions.down.sql":                 false,
-		"000005_identity.up.sql":                             false,
-		"000005_identity.down.sql":                           false,
-		"000006_permissions.up.sql":                          false,
-		"000006_permissions.down.sql":                        false,
-		"000007_resource_widgets.up.sql":                     false,
-		"000007_resource_widgets.down.sql":                   false,
-		"000008_user_blocking.up.sql":                        false,
-		"000008_user_blocking.down.sql":                      false,
-		"000009_file_field_references.up.sql":                false,
-		"000009_file_field_references.down.sql":              false,
-		"000010_user_preferences.up.sql":                     false,
-		"000010_user_preferences.down.sql":                   false,
-		"000011_user_accent_color.up.sql":                    false,
-		"000011_user_accent_color.down.sql":                  false,
-		"000012_resource_editor_tree.up.sql":                 false,
-		"000012_resource_editor_tree.down.sql":               false,
-		"000013_resource_widget_bindings.up.sql":             false,
-		"000013_resource_widget_bindings.down.sql":           false,
-		"000014_group_site_access.up.sql":                    false,
-		"000014_group_site_access.down.sql":                  false,
-		"000015_resource_entities_fields_libraries.up.sql":   false,
-		"000015_resource_entities_fields_libraries.down.sql": false,
+		"000017_library_item_year_partitions_search.up.sql":   false,
+		"000017_library_item_year_partitions_search.down.sql": false,
+		"000016_resource_revisions.up.sql":                    false,
+		"000016_resource_revisions.down.sql":                  false,
+		"000005_identity.up.sql":                              false,
+		"000005_identity.down.sql":                            false,
+		"000006_permissions.up.sql":                           false,
+		"000006_permissions.down.sql":                         false,
+		"000007_resource_widgets.up.sql":                      false,
+		"000007_resource_widgets.down.sql":                    false,
+		"000008_user_blocking.up.sql":                         false,
+		"000008_user_blocking.down.sql":                       false,
+		"000009_file_field_references.up.sql":                 false,
+		"000009_file_field_references.down.sql":               false,
+		"000010_user_preferences.up.sql":                      false,
+		"000010_user_preferences.down.sql":                    false,
+		"000011_user_accent_color.up.sql":                     false,
+		"000011_user_accent_color.down.sql":                   false,
+		"000012_resource_editor_tree.up.sql":                  false,
+		"000012_resource_editor_tree.down.sql":                false,
+		"000013_resource_widget_bindings.up.sql":              false,
+		"000013_resource_widget_bindings.down.sql":            false,
+		"000014_group_site_access.up.sql":                     false,
+		"000014_group_site_access.down.sql":                   false,
+		"000015_resource_entities_fields_libraries.up.sql":    false,
+		"000015_resource_entities_fields_libraries.down.sql":  false,
 	}
 	for _, entry := range entries {
 		if _, exists := expected[entry.Name()]; exists {
@@ -208,7 +210,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 16 || !hasVersion || dirty {
+	if version != 17 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,
@@ -1422,6 +1424,88 @@ VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]
 	if err != nil {
 		t.Fatalf("create target library: %v", err)
 	}
+	reservedTreePath := "/archive/tree-reserved"
+	reservedTree, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: siteIDs["localhost"], ParentID: &archive.ID, Type: resourcetype.Page,
+		Title: "Tree reserved", Slug: "tree-reserved", Path: &reservedTreePath,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create tree route reservation: %v", err)
+	}
+	if _, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Title: "Tree collision", Slug: "tree-reserved",
+		ContentType: &contentType, IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+	}, false); !errors.Is(err, resource.ErrRouteConflict) {
+		t.Fatalf("library item against tree route error = %v", err)
+	}
+	if err := resourceRepository.Delete(ctx, reservedTree.ID); err != nil {
+		t.Fatalf("delete tree route reservation: %v", err)
+	}
+	reservedItem, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Title: "Item reserved", Slug: "item-reserved",
+		ContentType: &contentType, IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+	}, false)
+	if err != nil {
+		t.Fatalf("create item route reservation: %v", err)
+	}
+	reservedItemPath := "/archive/item-reserved"
+	if _, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: siteIDs["localhost"], ParentID: &archive.ID, Type: resourcetype.Page,
+		Title: "Item collision", Slug: "item-reserved", Path: &reservedItemPath,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+	}, nil); !errors.Is(err, resource.ErrRouteConflict) {
+		t.Fatalf("tree resource against library item route error = %v", err)
+	}
+	if err := libraryItems.DeleteLibraryItem(ctx, reservedItem.ID); err != nil {
+		t.Fatalf("delete item route reservation: %v", err)
+	}
+	type routeMutationResult struct {
+		kind string
+		id   resource.ID
+		err  error
+	}
+	startRouteRace := make(chan struct{})
+	routeRaceResults := make(chan routeMutationResult, 2)
+	go func() {
+		<-startRouteRace
+		path := "/archive/race-route"
+		item, err := resourceRepository.Create(context.Background(), nil, resource.Resource{
+			SiteID: siteIDs["localhost"], ParentID: &archive.ID, Type: resourcetype.Page,
+			Title: "Race tree", Slug: "race-route", Path: &path,
+			IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+		}, nil)
+		routeRaceResults <- routeMutationResult{kind: "tree", id: item.ID, err: err}
+	}()
+	go func() {
+		<-startRouteRace
+		item, err := libraryItems.CreateLibraryItem(context.Background(), nil, resource.LibraryItem{
+			SiteID: siteIDs["localhost"], LibraryID: archive.ID, Title: "Race item", Slug: "race-route",
+			ContentType: &contentType, IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+		}, false)
+		routeRaceResults <- routeMutationResult{kind: "item", id: item.ID, err: err}
+	}()
+	close(startRouteRace)
+	routeRace := []routeMutationResult{<-routeRaceResults, <-routeRaceResults}
+	successes := 0
+	conflicts := 0
+	for _, result := range routeRace {
+		if result.err == nil {
+			successes++
+			if result.kind == "tree" {
+				_ = resourceRepository.Delete(ctx, result.id)
+			} else {
+				_ = libraryItems.DeleteLibraryItem(ctx, result.id)
+			}
+		} else if errors.Is(result.err, resource.ErrRouteConflict) {
+			conflicts++
+		} else {
+			t.Fatalf("concurrent route mutation %s: %v", result.kind, result.err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("concurrent route mutations = %#v", routeRace)
+	}
 	oldPublication := time.Date(1900, time.January, 2, 3, 4, 5, 0, time.UTC)
 	createdLibraryItem, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
 		SiteID: siteIDs["localhost"], LibraryID: library.ID,
@@ -1434,6 +1518,10 @@ VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]
 	}, false)
 	if err != nil {
 		t.Fatalf("create partitioned library item: %v", err)
+	}
+	var physicalPartition string
+	if err := connector.Pool().QueryRow(ctx, `SELECT tableoid::regclass::text FROM core.library_items WHERE id=$1 AND library_id=$2;`, createdLibraryItem.ID, createdLibraryItem.LibraryID).Scan(&physicalPartition); err != nil || !strings.HasSuffix(physicalPartition, "_default") {
+		t.Fatalf("historical item partition = %q, %v", physicalPartition, err)
 	}
 	loadedLibraryItem, err := libraryItems.LibraryItemByID(ctx, createdLibraryItem.ID)
 	if err != nil || loadedLibraryItem.Fields["headline"] != "Stored headline" {
@@ -1450,8 +1538,18 @@ VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]
 	if err != nil || len(loadedLibraryItem.Widgets) != 1 || loadedLibraryItem.Widgets[0].ID != itemWidget.ID {
 		t.Fatalf("loaded library item widgets = %#v, %v", loadedLibraryItem.Widgets, err)
 	}
-	futurePublication := time.Date(2040, time.December, 31, 23, 59, 0, 0, time.UTC)
+	currentPublication := time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC)
 	currentLibraryItem := loadedLibraryItem
+	loadedLibraryItem.PublishedAt = &currentPublication
+	loadedLibraryItem, err = libraryItems.UpdateLibraryItem(ctx, nil, currentLibraryItem, loadedLibraryItem, false)
+	if err != nil {
+		t.Fatalf("update into current yearly partition: %v", err)
+	}
+	if err := connector.Pool().QueryRow(ctx, `SELECT tableoid::regclass::text FROM core.library_items WHERE id=$1 AND library_id=$2;`, loadedLibraryItem.ID, loadedLibraryItem.LibraryID).Scan(&physicalPartition); err != nil || !strings.HasSuffix(physicalPartition, "_y2026") {
+		t.Fatalf("current item partition = %q, %v", physicalPartition, err)
+	}
+	futurePublication := time.Date(2040, time.December, 31, 23, 59, 0, 0, time.UTC)
+	currentLibraryItem = loadedLibraryItem
 	loadedLibraryItem.Title = "Moved item"
 	loadedLibraryItem.PublishedAt = &futurePublication
 	loadedLibraryItem, err = libraryItems.UpdateLibraryItem(
@@ -1459,6 +1557,9 @@ VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]
 	)
 	if err != nil || loadedLibraryItem.Title != "Moved item" {
 		t.Fatalf("update across time partitions = %#v, %v", loadedLibraryItem, err)
+	}
+	if err := connector.Pool().QueryRow(ctx, `SELECT tableoid::regclass::text FROM core.library_items WHERE id=$1 AND library_id=$2;`, loadedLibraryItem.ID, loadedLibraryItem.LibraryID).Scan(&physicalPartition); err != nil || !strings.HasSuffix(physicalPartition, "_default") {
+		t.Fatalf("future item partition = %q, %v", physicalPartition, err)
 	}
 	routedItem, routedLibrary, err := libraryItems.ResolveLibraryItemRoute(
 		ctx, siteIDs["localhost"], "/catalog/2040/typed-item",
@@ -1474,6 +1575,13 @@ VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]
 	)
 	if err != nil || loadedLibraryItem.LibraryID != archive.ID {
 		t.Fatalf("move across library partitions = %#v, %v", loadedLibraryItem, err)
+	}
+	var movedPartition string
+	if err := connector.Pool().QueryRow(ctx, `SELECT tableoid::regclass::text FROM core.library_items WHERE id=$1 AND library_id=$2;`, loadedLibraryItem.ID, loadedLibraryItem.LibraryID).Scan(&movedPartition); err != nil {
+		t.Fatalf("read moved item partition: %v", err)
+	}
+	if strings.TrimSuffix(movedPartition, "_default") == strings.TrimSuffix(physicalPartition, "_default") {
+		t.Fatalf("library move stayed in the same hash partition: %q -> %q", physicalPartition, movedPartition)
 	}
 	if routedItem, routedLibrary, err = libraryItems.ResolveLibraryItemRoute(ctx, siteIDs["localhost"], "/archive/typed-item"); err != nil || routedItem.ID != loadedLibraryItem.ID || routedLibrary.ID != archive.ID {
 		t.Fatalf("resolve moved library item route = %#v / %#v, %v", routedItem, routedLibrary, err)
@@ -1513,6 +1621,104 @@ VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]
 	})
 	if err != nil || len(itemPage.Items) != 1 || itemPage.Items[0].ID != loadedLibraryItem.ID {
 		t.Fatalf("query moved library item = %#v, %v", itemPage, err)
+	}
+	firstRanked, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Title: "Ranked first", Slug: "ranked-first",
+		ContentType: &contentType, IsPublic: true, IsSearchable: true,
+		Fields: map[string]any{"rank": int64(1), "tags": []string{"blue", "red"}, "active": true},
+		FieldValues: []field.StoredValue{
+			{Key: "rank", Kind: field.StorageInteger, Value: int64(1)},
+			{Key: "tags", Position: 0, Kind: field.StorageString, Multiple: true, Value: "blue"},
+			{Key: "tags", Position: 1, Kind: field.StorageString, Multiple: true, Value: "red"},
+			{Key: "active", Kind: field.StorageBoolean, Value: true},
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("create first ranked item: %v", err)
+	}
+	secondRanked, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Title: "Ranked second", Slug: "ranked-second",
+		ContentType: &contentType, IsPublic: true, IsSearchable: true,
+		Fields: map[string]any{"rank": int64(1), "tags": []string{"green"}, "active": false},
+		FieldValues: []field.StoredValue{
+			{Key: "rank", Kind: field.StorageInteger, Value: int64(1)},
+			{Key: "tags", Position: 0, Kind: field.StorageString, Multiple: true, Value: "green"},
+			{Key: "active", Kind: field.StorageBoolean, Value: false},
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("create second ranked item: %v", err)
+	}
+	explainConnection, err := connector.Pool().Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := explainConnection.Exec(ctx, `SET enable_seqscan=off;`); err != nil {
+		explainConnection.Release()
+		t.Fatal(err)
+	}
+	explainRows, err := explainConnection.Query(ctx, `EXPLAIN (COSTS OFF) SELECT id FROM core.library_items WHERE lower(title) LIKE '%ranked%' OR lower(slug) LIKE '%ranked%';`)
+	if err != nil {
+		explainConnection.Release()
+		t.Fatal(err)
+	}
+	var explainPlan strings.Builder
+	for explainRows.Next() {
+		var line string
+		if err := explainRows.Scan(&line); err != nil {
+			explainRows.Close()
+			explainConnection.Release()
+			t.Fatal(err)
+		}
+		explainPlan.WriteString(line)
+		explainPlan.WriteByte('\n')
+	}
+	explainRows.Close()
+	_, _ = explainConnection.Exec(ctx, `RESET enable_seqscan;`)
+	explainConnection.Release()
+	if !strings.Contains(explainPlan.String(), "Bitmap Index Scan") || !strings.Contains(explainPlan.String(), "lower(title)") {
+		t.Fatalf("trigram EXPLAIN plan = %s", explainPlan.String())
+	}
+	rankSort := []resource.Sort{{Field: "resource.field.rank", Direction: resource.SortAscending, Kind: field.StorageInteger}}
+	seenRanked := make([]resource.ID, 0, 3)
+	cursor := ""
+	for {
+		page, err := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+			SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 1, Cursor: cursor, Sort: rankSort,
+		})
+		if err != nil || len(page.Items) != 1 {
+			t.Fatalf("ranked cursor page = %#v, %v", page, err)
+		}
+		seenRanked = append(seenRanked, page.Items[0].ID)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	if len(seenRanked) != 3 || seenRanked[0] != firstRanked.ID || seenRanked[1] != secondRanked.ID || seenRanked[2] != loadedLibraryItem.ID {
+		t.Fatalf("ranked cursor order = %#v", seenRanked)
+	}
+	negativePage, err := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 10,
+		Filters: []resource.FilterCondition{{Field: "resource.field.rank", Operator: resource.FilterNotEqual, Value: int64(1), Kind: field.StorageInteger}},
+	})
+	if err != nil || len(negativePage.Items) != 1 || negativePage.Items[0].ID != loadedLibraryItem.ID {
+		t.Fatalf("missing-field negative filter = %#v, %v", negativePage, err)
+	}
+	multiPage, err := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
+		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 10,
+		Filters: []resource.FilterCondition{
+			{Field: "resource.field.tags", Operator: resource.FilterEqual, Value: "blue", Kind: field.StorageString},
+			{Field: "resource.field.active", Operator: resource.FilterEqual, Value: true, Kind: field.StorageBoolean},
+		},
+	})
+	if err != nil || len(multiPage.Items) != 1 || multiPage.Items[0].ID != firstRanked.ID {
+		t.Fatalf("multi/scalar filters = %#v, %v", multiPage, err)
+	}
+	for _, temporaryID := range []resource.ID{firstRanked.ID, secondRanked.ID} {
+		if err := libraryItems.DeleteLibraryItem(ctx, temporaryID); err != nil {
+			t.Fatalf("delete temporary ranked item %d: %v", temporaryID, err)
+		}
 	}
 	itemPage, err = libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
 		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 10,

@@ -1,8 +1,10 @@
 package postgres
 
 import (
+	"context"
 	"embed"
 	"errors"
+	"fmt"
 
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
 	"github.com/vernal96/go-cms/kernel"
@@ -32,6 +34,7 @@ var migrationFiles embed.FS
 var seedFiles embed.FS
 
 type Database struct {
+	connector *connectorpostgres.Connector
 	sites     site.Repository
 	resources resource.Repository
 	files     file.Repository
@@ -100,6 +103,7 @@ func NewDatabase(
 	}
 
 	return &Database{
+		connector: connector,
 		sites:     sites,
 		resources: resources,
 		files:     files,
@@ -145,12 +149,59 @@ func (d *Database) Access() access.Repository {
 func (d *Database) MigrationSources() []migrations.Source {
 	return []migrations.Source{
 		{
-			ID:     string(core.ModuleCode),
-			Schema: "core",
-			FS:     migrationFiles,
-			Path:   "migrations",
+			ID:       string(core.ModuleCode),
+			Schema:   "core",
+			FS:       migrationFiles,
+			Path:     "migrations",
+			BeforeUp: d.beforeMigrations,
 		},
 	}
+}
+
+func (d *Database) beforeMigrations(ctx context.Context) error {
+	if d == nil || d.connector == nil || d.connector.Pool() == nil {
+		return errors.New("core migration preflight database is unavailable")
+	}
+	var hasSettings bool
+	if err := d.connector.Pool().QueryRow(ctx, `
+SELECT EXISTS (
+ SELECT 1 FROM information_schema.columns
+ WHERE table_schema='core' AND table_name='resources' AND column_name='settings'
+);`).Scan(&hasSettings); err != nil {
+		return fmt.Errorf("inspect legacy resource fields: %w", err)
+	}
+	if !hasSettings {
+		return nil
+	}
+	var hasLegacyResources bool
+	if err := d.connector.Pool().QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM core.resources);`).Scan(&hasLegacyResources); err != nil {
+		return fmt.Errorf("inspect legacy resource settings: %w", err)
+	}
+	if !hasLegacyResources {
+		return nil
+	}
+	var stagingReady bool
+	if err := d.connector.Pool().QueryRow(ctx, `
+SELECT to_regclass('core.resource_field_migration_manifest') IS NOT NULL
+   AND to_regclass('core.resource_field_migration_rows') IS NOT NULL;`).Scan(&stagingReady); err != nil {
+		return fmt.Errorf("inspect resource field migration staging: %w", err)
+	}
+	if !stagingReady {
+		return errors.New("legacy resource settings require `resource-fields prepare` before migration 000015")
+	}
+	var incomplete bool
+	if err := d.connector.Pool().QueryRow(ctx, `
+SELECT EXISTS (
+ SELECT 1 FROM core.resources resource
+ LEFT JOIN core.resource_field_migration_manifest manifest ON manifest.resource_id=resource.id AND manifest.site_id=resource.site_id
+	 WHERE manifest.resource_id IS NULL OR manifest.source_digest <> md5(resource.settings::text)
+);`).Scan(&incomplete); err != nil {
+		return fmt.Errorf("validate resource field migration staging: %w", err)
+	}
+	if incomplete {
+		return errors.New("resource field migration staging is incomplete or stale; rerun `resource-fields prepare`")
+	}
+	return nil
 }
 
 func (d *Database) SeedSources() []seeds.Source {

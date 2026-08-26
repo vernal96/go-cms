@@ -7,12 +7,13 @@ import { adminRequest } from '../api/admin-api'
 import LibraryItemEditView from './LibraryItemEditView.vue'
 
 const replaceMock = vi.fn()
+const routeParams: { siteId: string; resourceId: string; itemId?: string } = { siteId: '7', resourceId: '9' }
 vi.mock('../api/admin-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/admin-api')>()),
   adminRequest: vi.fn(),
 }))
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ params: { siteId: '7', resourceId: '9' } }),
+  useRoute: () => ({ params: routeParams }),
   useRouter: () => ({ replace: replaceMock }),
 }))
 
@@ -22,6 +23,7 @@ describe('LibraryItemEditView', () => {
   beforeEach(() => {
     requestMock.mockReset()
     replaceMock.mockReset()
+    delete routeParams.itemId
   })
 
   it('uses the Library default template and exposes no tree parent control', async () => {
@@ -61,5 +63,51 @@ describe('LibraryItemEditView', () => {
       expect.objectContaining({ method: 'POST' }),
     )
     expect(replaceMock).toHaveBeenCalledWith('/admin/sites/7/resources/9/items/101/edit')
+  })
+
+  it('keeps Save and Move independent and updates ownership after Move', async () => {
+    routeParams.itemId = '101'
+    requestMock
+      .mockResolvedValueOnce({
+        types: [{ code: 'library', label: 'Библиотека', capabilities: { owns_library_items: true } }],
+        templates: [{ code: 'article', label: 'Article', fields: [], supports_resource_widgets: false }],
+        widgets: [], extensions: [],
+      })
+      .mockResolvedValueOnce({ items: [
+        { id: 9, type: 'library', display_title: 'Catalog' },
+        { id: 11, type: 'library', display_title: 'Archive' },
+      ] })
+      .mockResolvedValueOnce({ resource: { id: 9, type_settings: {} } })
+      .mockResolvedValueOnce({
+        item: { id: 101, library_id: 9, version: 3, template_code: 'article', title: 'Item', slug: 'item', annotation: '', content: '', is_public: true, is_searchable: true, published_at: null, unpublished_at: null, fields: {}, widgets: [] },
+        permissions: { update: true, history_read: false, history_delete: false },
+      })
+      .mockResolvedValueOnce({ item: { id: 101, library_id: 9, version: 4, fields: {} } })
+      .mockResolvedValueOnce({ item: { id: 101, library_id: 11, version: 5 } })
+      .mockResolvedValueOnce({ item: { id: 101, library_id: 11, version: 6, fields: {} } })
+    const wrapper = shallowMount(LibraryItemEditView, {
+      props: { accessToken: 'token' },
+      global: { renderStubDefaultSlot: true },
+    })
+    await flushPromises()
+    const model = wrapper.findComponent({ name: 'ElForm' }).props('model') as Record<string, unknown>
+    model.library_id = 11
+    const buttons = () => wrapper.findAllComponents({ name: 'ElButton' })
+    await buttons().find((button) => button.text() === 'Сохранить')!.trigger('click')
+    await flushPromises()
+    expect(requestMock.mock.calls.some(([url]) => String(url).endsWith('/move'))).toBe(false)
+
+    await buttons().find((button) => button.text() === 'Переместить')!.trigger('click')
+    await flushPromises()
+    expect(requestMock).toHaveBeenCalledWith(
+      '/api/sites/7/library-items/101/move',
+      'token',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ library_id: 11, expected_version: 4 }) }),
+    )
+    expect(replaceMock).toHaveBeenCalledWith('/admin/sites/7/resources/11/items/101/edit')
+
+    await buttons().find((button) => button.text() === 'Сохранить')!.trigger('click')
+    await flushPromises()
+    expect(requestMock.mock.calls.filter(([url]) => String(url).endsWith('/move'))).toHaveLength(1)
   })
 })

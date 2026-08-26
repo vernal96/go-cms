@@ -95,6 +95,22 @@ func TestManagementRequireSiteKeepsGlobalAndSiteChecksIndependent(t *testing.T) 
 	}
 }
 
+func TestDeleteLibraryItemRequiresSiteEditNotSiteDelete(t *testing.T) {
+	management := &Resources{
+		authorization: authorization{
+			authorizer: managementAuthorizer{denied: map[permission.Code]error{}},
+			policy: scopedPolicy{checks: map[SiteAccessAction]error{
+				SiteAccessEdit:   security.ErrForbidden,
+				SiteAccessDelete: nil,
+			}},
+		},
+		libraryItems: &resource.LibraryService{},
+	}
+	if err := management.DeleteLibraryItem(context.Background(), security.User(1), 7, 1, false); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("delete library item site access error = %v", err)
+	}
+}
+
 func TestManagementUsesViewForCatalogEditForOptionsAndReturnsCapabilities(t *testing.T) {
 	t.Parallel()
 	repository := &managementSiteRepository{page: site.Page{Items: []site.Site{
@@ -197,6 +213,9 @@ func TestResourceTreeItemUsesSafeTitleAndIconFallbacks(t *testing.T) {
 	}
 	if iconOrDefault("unsafe/path") != "document" {
 		t.Fatal("unsafe icon did not fall back to document")
+	}
+	if iconOrDefault("Collection") != "collection" {
+		t.Fatal("collection icon was not normalized")
 	}
 }
 

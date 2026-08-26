@@ -44,7 +44,14 @@ func (r *Repository) CreateLibraryItem(ctx context.Context, actorID *security.Us
 			_ = tx.Rollback(context.Background())
 		}
 	}()
+	if err := lockRouteNamespace(ctx, tx, item.SiteID); err != nil {
+		return resource.LibraryItem{}, err
+	}
 	if err := ensureLibraryTarget(ctx, tx, item.SiteID, item.LibraryID); err != nil {
+		return resource.LibraryItem{}, err
+	}
+	library, err := routeResourceByID(ctx, tx, item.LibraryID)
+	if err != nil {
 		return resource.LibraryItem{}, err
 	}
 	if item.ImageMediaID != nil {
@@ -62,6 +69,9 @@ func (r *Repository) CreateLibraryItem(ctx context.Context, actorID *security.Us
 	partitionAt := item.CreatedAt
 	if item.PublishedAt != nil {
 		partitionAt = item.PublishedAt.UTC()
+	}
+	if err := ensureLibraryItemRouteAvailable(ctx, tx, library, item); err != nil {
+		return resource.LibraryItem{}, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO core.library_item_routes (resource_id, site_id, library_id, slug) VALUES ($1, $2, $3, $4);`, item.ID, item.SiteID, item.LibraryID, item.Slug); err != nil {
 		return resource.LibraryItem{}, translateError(err)
@@ -150,6 +160,16 @@ func (r *Repository) UpdateLibraryItem(ctx context.Context, actorID *security.Us
 	if current.Version <= 0 || locked.Version != current.Version {
 		return resource.LibraryItem{}, resource.ErrConflict
 	}
+	if err := lockRouteNamespace(ctx, tx, locked.SiteID); err != nil {
+		return resource.LibraryItem{}, err
+	}
+	library, err := routeResourceByID(ctx, tx, locked.LibraryID)
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
+	if err := ensureLibraryItemRouteAvailable(ctx, tx, library, item); err != nil {
+		return resource.LibraryItem{}, err
+	}
 	var nextVersion int64
 	if err := tx.QueryRow(ctx, `UPDATE core.resource_entities SET version=version+1 WHERE id=$1 AND version=$2 RETURNING version;`, item.ID, current.Version).Scan(&nextVersion); errors.Is(err, pgx.ErrNoRows) {
 		return resource.LibraryItem{}, resource.ErrConflict
@@ -231,14 +251,33 @@ func (r *Repository) SoftDeleteLibraryItem(ctx context.Context, actorID *securit
 }
 
 func (r *Repository) RestoreLibraryItem(ctx context.Context, actorID *security.UserID, id resource.ID) error {
-	command, err := r.connector.Pool().Exec(ctx, `UPDATE core.library_items item SET deleted_at=NULL, deleted_by=NULL, updated_at=now(), updated_by=$2 FROM core.resources library WHERE item.id=$1 AND library.id=item.library_id AND library.site_id=item.site_id AND library.type='library' AND library.deleted_at IS NULL;`, id, actorID)
+	tx, err := r.connector.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	item, err := r.libraryItemByID(ctx, tx, id, true)
+	if err != nil {
+		return err
+	}
+	if err := lockRouteNamespace(ctx, tx, item.SiteID); err != nil {
+		return err
+	}
+	library, err := routeResourceByID(ctx, tx, item.LibraryID)
+	if err != nil || library.DeletedAt != nil {
+		return resource.ErrNotFound
+	}
+	if err := ensureLibraryItemRouteAvailable(ctx, tx, library, item); err != nil {
+		return err
+	}
+	command, err := tx.Exec(ctx, `UPDATE core.library_items SET deleted_at=NULL, deleted_by=NULL, updated_at=now(), updated_by=$2 WHERE id=$1;`, id, actorID)
 	if err != nil {
 		return translateError(err)
 	}
 	if command.RowsAffected() == 0 {
 		return resource.ErrNotFound
 	}
-	return nil
+	return translateError(tx.Commit(ctx))
 }
 
 func (r *Repository) DeleteLibraryItem(ctx context.Context, id resource.ID) error {
@@ -249,6 +288,9 @@ func (r *Repository) DeleteLibraryItem(ctx context.Context, id resource.ID) erro
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	item, err := r.libraryItemByID(ctx, tx, id, true)
 	if err != nil {
+		return err
+	}
+	if err := lockRouteNamespace(ctx, tx, item.SiteID); err != nil {
 		return err
 	}
 	if item.ImageMediaID != nil {
@@ -291,12 +333,24 @@ func (r *Repository) MoveLibraryItem(ctx context.Context, actorID *security.User
 	if item.Version != expectedVersion {
 		return resource.LibraryItem{}, resource.ErrConflict
 	}
+	if err := lockRouteNamespace(ctx, tx, item.SiteID); err != nil {
+		return resource.LibraryItem{}, err
+	}
 	if err := tx.QueryRow(ctx, `UPDATE core.resource_entities SET version=version+1 WHERE id=$1 AND version=$2 RETURNING version;`, id, expectedVersion).Scan(&item.Version); errors.Is(err, pgx.ErrNoRows) {
 		return resource.LibraryItem{}, resource.ErrConflict
 	} else if err != nil {
 		return resource.LibraryItem{}, translateError(err)
 	}
 	if err := ensureLibraryTarget(ctx, tx, item.SiteID, targetLibraryID); err != nil {
+		return resource.LibraryItem{}, err
+	}
+	targetLibrary, err := routeResourceByID(ctx, tx, targetLibraryID)
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
+	prospective := item
+	prospective.LibraryID = targetLibraryID
+	if err := ensureLibraryItemRouteAvailable(ctx, tx, targetLibrary, prospective); err != nil {
 		return resource.LibraryItem{}, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE core.library_item_routes SET library_id=$2 WHERE resource_id=$1;`, id, targetLibraryID); err != nil {
@@ -325,21 +379,27 @@ func (r *Repository) MoveLibraryItem(ctx context.Context, actorID *security.User
 }
 
 func (r *Repository) QueryLibraryItems(ctx context.Context, query resource.LibraryItemQuery) (resource.LibraryItemPage, error) {
-	args := []any{query.SiteID, query.LibraryID, query.Limit + 1}
-	where := []string{"item.site_id=$1", "item.library_id=$2", "library.type='library'", "library.deleted_at IS NULL"}
-	if query.AfterID > 0 {
-		args = append(args, query.AfterID)
-		where = append(where, fmt.Sprintf("item.id < $%d", len(args)))
+	if err := query.Validate(); err != nil {
+		return resource.LibraryItemPage{}, err
+	}
+	args := make([]any, 0, 16)
+	add := func(value any) string {
+		args = append(args, value)
+		return "$" + strconv.Itoa(len(args))
+	}
+	where := []string{
+		"item.site_id=" + add(query.SiteID),
+		"item.library_id=" + add(query.LibraryID),
+		"library.type='library'",
+		"library.deleted_at IS NULL",
 	}
 	if search := strings.TrimSpace(query.Search); search != "" {
-		args = append(args, "%"+strings.ToLower(search)+"%")
-		textArg := len(args)
-		clause := fmt.Sprintf("(lower(item.title) LIKE $%d OR lower(item.slug) LIKE $%d)", textArg, textArg)
 		if id, parseErr := strconv.ParseInt(search, 10, 64); parseErr == nil && id > 0 {
-			args = append(args, resource.ID(id))
-			clause = fmt.Sprintf("(item.id=$%d OR lower(item.title) LIKE $%d OR lower(item.slug) LIKE $%d)", len(args), textArg, textArg)
+			where = append(where, "item.id="+add(resource.ID(id)))
+		} else {
+			pattern := add("%" + strings.ToLower(search) + "%")
+			where = append(where, "(lower(item.title) LIKE "+pattern+" OR lower(item.slug) LIKE "+pattern+")")
 		}
-		where = append(where, clause)
 	}
 	if query.PublicOnly {
 		where = append(where, "item.deleted_at IS NULL", "item.is_public", "(item.published_at IS NULL OR item.published_at<=now())", "(item.unpublished_at IS NULL OR now()<item.unpublished_at)")
@@ -351,7 +411,27 @@ func (r *Repository) QueryLibraryItems(ctx context.Context, query resource.Libra
 			where = append(where, "item.deleted_at IS NULL")
 		}
 	}
-	rows, err := r.connector.Pool().Query(ctx, `SELECT `+libraryItemColumns+` FROM core.library_items item JOIN core.resources library ON library.id=item.library_id AND library.site_id=item.site_id WHERE `+strings.Join(where, " AND ")+` ORDER BY item.id DESC LIMIT $3;`, args...)
+	for _, condition := range query.Filters {
+		fragment, err := resourceQueryFilterFor(condition, add, "item", libraryItemQueryColumn)
+		if err != nil {
+			return resource.LibraryItemPage{}, err
+		}
+		where = append(where, fragment)
+	}
+	sorts, idDirection := resource.LibraryItemSorts(query)
+	expressions, order, err := libraryItemQueryOrder(sorts, idDirection, &args)
+	if err != nil {
+		return resource.LibraryItemPage{}, err
+	}
+	if query.Cursor != "" {
+		cursor, err := resource.DecodeLibraryCursor(query)
+		if err != nil {
+			return resource.LibraryItemPage{}, err
+		}
+		where = append(where, libraryItemKeysetPredicate(expressions, cursor, idDirection, add))
+	}
+	limit := add(query.Limit + 1)
+	rows, err := r.connector.Pool().Query(ctx, `SELECT `+libraryItemColumns+` FROM core.library_items item JOIN core.resources library ON library.id=item.library_id AND library.site_id=item.site_id WHERE `+strings.Join(where, " AND ")+` ORDER BY `+order+` LIMIT `+limit+`;`, args...)
 	if err != nil {
 		return resource.LibraryItemPage{}, fmt.Errorf("query library items: %w", err)
 	}
@@ -369,15 +449,107 @@ func (r *Repository) QueryLibraryItems(ctx context.Context, query resource.Libra
 	}
 	rows.Close()
 	page := resource.LibraryItemPage{}
-	if len(items) > query.Limit {
-		page.NextCursor = resource.EncodeLibraryCursor(items[query.Limit-1].ID)
+	hasMore := len(items) > query.Limit
+	if hasMore {
 		items = items[:query.Limit]
 	}
 	if err := r.loadLibraryItemsFields(ctx, r.connector.Pool(), items); err != nil {
 		return resource.LibraryItemPage{}, err
 	}
+	if hasMore {
+		page.NextCursor, err = resource.EncodeLibraryCursor(query, items[len(items)-1])
+		if err != nil {
+			return resource.LibraryItemPage{}, err
+		}
+	}
 	page.Items = items
 	return page, nil
+}
+
+type libraryItemSortExpression struct {
+	sort resource.Sort
+	sql  string
+}
+
+func libraryItemQueryColumn(path resource.FieldPath) (string, bool) {
+	switch path {
+	case resource.FieldID:
+		return "item.id", false
+	case resource.FieldTitle:
+		return "item.title", false
+	case resource.FieldSlug:
+		return "item.slug", false
+	case resource.FieldAnnotation:
+		return "item.annotation", false
+	case resource.FieldTemplate:
+		return "item.template", false
+	case resource.FieldIsPublic:
+		return "item.is_public", false
+	case resource.FieldIsSearchable:
+		return "item.is_searchable", false
+	case resource.FieldPublishedAt:
+		return "item.published_at", false
+	case resource.FieldCreatedAt:
+		return "item.created_at", false
+	case resource.FieldUpdatedAt:
+		return "item.updated_at", false
+	default:
+		return "", true
+	}
+}
+
+func libraryItemQueryOrder(sorts []resource.Sort, idDirection resource.SortDirection, args *[]any) ([]libraryItemSortExpression, string, error) {
+	add := func(value any) string {
+		*args = append(*args, value)
+		return "$" + strconv.Itoa(len(*args))
+	}
+	expressions := make([]libraryItemSortExpression, 0, len(sorts))
+	order := make([]string, 0, len(sorts)+1)
+	for _, item := range sorts {
+		column, err := resourceQuerySortExpression(item, add, "item", libraryItemQueryColumn)
+		if err != nil {
+			return nil, "", err
+		}
+		expressions = append(expressions, libraryItemSortExpression{sort: item, sql: column})
+		order = append(order, column+" "+sortDirectionSQL(item.Direction)+" NULLS LAST")
+	}
+	order = append(order, "item.id "+sortDirectionSQL(idDirection))
+	return expressions, strings.Join(order, ", "), nil
+}
+
+func libraryItemKeysetPredicate(expressions []libraryItemSortExpression, cursor resource.LibraryCursor, idDirection resource.SortDirection, add func(any) string) string {
+	branches := make([]string, 0, len(expressions)+1)
+	prefix := make([]string, 0, len(expressions))
+	for index, expression := range expressions {
+		value := cursor.Values[index]
+		if value != nil {
+			operator := ">"
+			if expression.sort.Direction == resource.SortDescending {
+				operator = "<"
+			}
+			comparison := "(" + expression.sql + operator + add(value) + " OR " + expression.sql + " IS NULL)"
+			branches = append(branches, "("+strings.Join(append(append([]string(nil), prefix...), comparison), " AND ")+")")
+		}
+		if value == nil {
+			prefix = append(prefix, expression.sql+" IS NULL")
+		} else {
+			prefix = append(prefix, expression.sql+" IS NOT DISTINCT FROM "+add(value))
+		}
+	}
+	idOperator := ">"
+	if idDirection == resource.SortDescending {
+		idOperator = "<"
+	}
+	idComparison := "item.id" + idOperator + add(cursor.ID)
+	branches = append(branches, "("+strings.Join(append(prefix, idComparison), " AND ")+")")
+	return "(" + strings.Join(branches, " OR ") + ")"
+}
+
+func sortDirectionSQL(direction resource.SortDirection) string {
+	if direction == resource.SortDescending {
+		return "DESC"
+	}
+	return "ASC"
 }
 
 func (r *Repository) ResolveLibraryItemRoute(ctx context.Context, siteID site.ID, path string) (resource.LibraryItem, resource.Resource, error) {

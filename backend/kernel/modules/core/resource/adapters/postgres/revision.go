@@ -10,6 +10,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres/medialock"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
+	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/security"
@@ -224,6 +225,21 @@ func (r *Repository) RestoreRevision(ctx context.Context, actorID *security.User
 	if current.ID != candidate.ID || current.SiteID != candidate.SiteID || current.Version <= 0 {
 		return resource.Resource{}, resource.ErrInvalidReference
 	}
+	if err := lockRouteNamespace(ctx, tx, candidate.SiteID); err != nil {
+		return resource.Resource{}, err
+	}
+	paths, err := prospectiveTreePaths(ctx, tx, candidate.ID, candidate.Path)
+	if err != nil {
+		return resource.Resource{}, err
+	}
+	if err := ensureTreePathsAvailable(ctx, tx, candidate.SiteID, paths, &candidate); err != nil {
+		return resource.Resource{}, err
+	}
+	if candidate.Type == resourcetype.Library {
+		if err := ensureProspectiveLibraryRoutesAvailable(ctx, tx, candidate); err != nil {
+			return resource.Resource{}, err
+		}
+	}
 	if err := lockRevisionMedia(ctx, tx, current.ImageMediaID, candidate.ImageMediaID, candidate.ID); err != nil {
 		return resource.Resource{}, err
 	}
@@ -318,10 +334,20 @@ func (r *Repository) RestoreLibraryItemRevision(ctx context.Context, actorID *se
 	if locked.SiteID != current.SiteID || locked.Version != current.Version || current.Version <= 0 {
 		return resource.LibraryItem{}, resource.ErrConflict
 	}
+	if err := lockRouteNamespace(ctx, tx, candidate.SiteID); err != nil {
+		return resource.LibraryItem{}, err
+	}
 	if err := lockRevisionMedia(ctx, tx, locked.ImageMediaID, candidate.ImageMediaID, candidate.ID); err != nil {
 		return resource.LibraryItem{}, err
 	}
 	if err := ensureLibraryTarget(ctx, tx, candidate.SiteID, candidate.LibraryID); err != nil {
+		return resource.LibraryItem{}, err
+	}
+	library, err := routeResourceByID(ctx, tx, candidate.LibraryID)
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
+	if err := ensureLibraryItemRouteAvailable(ctx, tx, library, candidate); err != nil {
 		return resource.LibraryItem{}, err
 	}
 	if err := tx.QueryRow(ctx, `UPDATE core.resource_entities SET version=version+1 WHERE id=$1 AND site_id=$2 AND version=$3 RETURNING version;`, current.ID, current.SiteID, current.Version).Scan(&candidate.Version); errors.Is(err, pgx.ErrNoRows) {

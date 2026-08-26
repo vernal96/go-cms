@@ -869,18 +869,6 @@ func (s *Service) normalize(
 			item.Type,
 		)
 	}
-	if item.Type == resourcetype.Library {
-		if value, ok := item.TypeSettings["default_item_template"]; ok && value != "" {
-			code, ok := value.(string)
-			if !ok {
-				return Resource{}, errors.New("library default item template is invalid")
-			}
-			if _, exists := profileRuntime.Template(template.Code(code)); !exists {
-				return Resource{}, fmt.Errorf("library references unknown default item template %q", code)
-			}
-		}
-	}
-
 	parent, err := s.relatedResource(
 		ctx,
 		item.ParentID,
@@ -911,6 +899,17 @@ func (s *Service) normalize(
 			item.Type,
 			err,
 		)
+	}
+	if item.Type == resourcetype.Library {
+		if value, ok := payload.TypeSettings["default_item_template"]; ok {
+			code, ok := value.(string)
+			if !ok || code == "" {
+				return Resource{}, errors.New("library default item template is invalid")
+			}
+			if _, exists := profileRuntime.Template(template.Code(code)); !exists {
+				return Resource{}, fmt.Errorf("library references unknown default item template %q", code)
+			}
+		}
 	}
 
 	if payload.TargetResourceID != nil {
