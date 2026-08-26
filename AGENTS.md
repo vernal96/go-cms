@@ -6,6 +6,20 @@
 - Treat the current files on `main` as the source of truth for APIs and package layout.
 - Do not add legacy compatibility, fallback paths, transitional APIs, or dead compatibility code unless explicitly requested.
 
+## Pre-production compatibility policy
+
+GO CMS is still in active development and has no production data that must be preserved.
+
+- Existing development data, old schemas, obsolete APIs and previous internal behavior are **not compatibility constraints**.
+- When a cleaner current architecture conflicts with preserving old development data or an old contract, prefer the clean architecture and change the code/schema directly.
+- Do not add data-conversion pipelines, compatibility shims, dual reads/writes, fallback columns, deprecated endpoints, transitional aliases, legacy DTOs or migration-only application commands merely to preserve pre-production state.
+- Destructive schema changes and resetting/recreating development data are acceptable when they simplify the correct current design.
+- When an existing not-yet-production migration is wrong, prefer correcting/squashing the migration history according to the repository's current development conventions instead of layering production-style compatibility migrations on top solely to preserve local data.
+- Update fixtures, seeds and tests to the new contract rather than keeping old behavior alive.
+- Preserve legacy behavior/data only when the user explicitly states that compatibility with an external consumer or real production data is required for that task.
+
+Do not interpret "data already exists in a developer database" as a reason to retain a bad design.
+
 ## Context and tool budget
 
 Keep discovery proportional to the task.
