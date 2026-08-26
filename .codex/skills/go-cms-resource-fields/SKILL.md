@@ -47,6 +47,8 @@ input Fields map
 
 Do not duplicate field normalization rules in PostgreSQL or the admin frontend.
 
+A field type used in persisted template fields must expose valid storage semantics at template/schema compilation time. Do not allow a template to compile successfully and fail only on the first resource save because its custom `ValueType` lacks a supported storage kind.
+
 ## Storage kind abstraction
 
 Field type codes are extensible and must not be hard-coded into SQL adapters one-by-one.
@@ -120,6 +122,10 @@ For scalar fields, use exactly one logical value with position `0`.
 
 Keep JSON storage for genuinely structured/opaque data where relational filtering is not part of the field contract.
 
+Define negative multi-value predicates using set semantics, not per-row inequality. For example, `roles NOT IN ["editor"]` means the resource must have no matching `editor` row; it must not pass merely because another row such as `author` is different. Implement negative membership/equality with `NOT EXISTS` (or an equivalent correct relational form) where required.
+
+Also define behavior for missing fields explicitly. Do not let SQL `NULL`/absence produce accidental semantics that differ between scalar and multi-value fields.
+
 ## Query contract
 
 Preserve adapter-neutral field paths such as:
@@ -142,9 +148,13 @@ resource.field.remote == true
 
 must compare typed columns, not cast JSONB text at runtime.
 
+This vocabulary must be reusable by both ordinary resource queries and high-volume LibraryItem queries. Do not build a second weaker LibraryItem filter model that cannot query typed template fields.
+
 Validate that an operator is compatible with the field/storage kind before hitting persistence. Ordering operators require an orderable storage kind.
 
 When sorting by field values, define deterministic behavior for missing values and add resource ID as a stable tie-breaker.
+
+If the same field key can resolve to incompatible storage kinds across the queried template scope, reject/resolve the ambiguity explicitly rather than performing unsafe casts or silently choosing one kind.
 
 ## Indexing
 
@@ -219,10 +229,14 @@ Before writing migration code, inspect whether `settings` currently contains onl
 For existing rows:
 
 1. determine the selected template and its field definitions;
-2. normalize/map each known field value to its storage kind;
+2. normalize/map each known field value to its declared storage kind;
 3. insert typed field-value rows;
 4. preserve invalid legacy data only if the task explicitly requires compatibility; otherwise fail migration clearly rather than corrupting silently;
 5. remove or repurpose the old `settings` field only after all readers/writers/query paths have moved.
+
+Do not infer persisted semantics only from JSON shape when the template schema says otherwise. A JSON array belonging to an opaque `json` field must remain JSON; it must not automatically become a multi-value relational field. File/reference/custom field types must migrate according to declared field semantics, not merely according to `jsonb_typeof`.
+
+If SQL migrations cannot access code-defined template schemas safely, use an explicit application/data migration mechanism or clearly constrain the migration policy for development databases. Do not silently perform a lossy best-effort conversion and call it schema-aware.
 
 If this repository's migration policy prefers rebuilding early migrations rather than append-only production migrations, follow the current `main` conventions instead of assuming one strategy.
 
@@ -237,14 +251,18 @@ This is what allows templates, filtering and extensions to treat LibraryItems as
 Add focused tests for changed invariants, including as applicable:
 
 - schema validation remains the source of normalized values;
+- persisted template field types always expose storage semantics at compile time;
 - scalar storage kind maps to the correct typed value;
-- multi-value ordering and filtering;
+- multi-value ordering and positive filtering;
+- multi-value negative filters use correct set semantics;
+- missing-field semantics are deterministic;
 - update removes stale values;
 - template change rejects/removes incompatible fields;
 - file/reference validation remains enforced;
 - field filters use typed semantics for string/numeric/boolean/reference values;
-- ordinary Resource and LibraryItem share the same field-value abstraction;
-- migration preserves existing valid field data;
+- ordinary Resource and LibraryItem share the same field-value query vocabulary;
+- migration preserves existing valid field data according to declared template field semantics;
+- opaque JSON arrays are not mis-migrated into multi-value rows;
 - no resource query path still depends on JSONB `settings -> field_key` after migration.
 
 Run focused package/adapter tests first, then broader backend integration tests when the migration affects resource service, PostgreSQL and public/admin query paths.
