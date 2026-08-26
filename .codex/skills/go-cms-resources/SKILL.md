@@ -52,11 +52,14 @@ Resource type behavior belongs in reusable type metadata/contracts rather than f
 - supports template/content/widgets/fields;
 - owns a library item collection;
 - type is mutable/immutable;
-- default icon.
+- default icon;
+- type-specific editable properties/payload requirements where needed.
 
 The admin frontend should consume those capabilities instead of accumulating `if type == page/link/library/...` logic.
 
-Management/API code must also resolve registered resource types from the current site runtime/registry instead of hard-coding whitelists such as `page/link/library`. A project/package resource type that is registered and exposed through metadata must not become impossible to create/update merely because management code enumerates built-in codes.
+Management/API code must also resolve registered resource types from the current site runtime/registry instead of hard-coding whitelists such as `page/link/library`.
+
+A project/package resource type that is registered and exposed through metadata must be actually creatable/updatable through the management/API contract. Do not advertise a resource type while omitting required type-specific payload such as `target_resource_id`. If generic management needs type-owned properties, expose them through an explicit capability/schema/payload contract rather than adding built-in type conditionals back into transport code.
 
 ### Immutable Library type
 
@@ -130,6 +133,10 @@ Enforce route collision checks in both directions:
 
 Do not rely on resolver order (`tree first`, `library item second`) as the uniqueness policy.
 
+High-cardinality collision validation must remain bounded. **Never load every LibraryItem into Go to validate a Library path or `item_url_pattern` change.** Use set-based/indexed repository checks. If a particular pattern/path mutation cannot be proven safe without scanning millions of items, reject that online mutation with an explicit domain error or move it to an explicit maintenance operation instead of performing an O(N) in-memory pass under a long transaction/lock.
+
+When patterns contain date tokens such as `{year}`, `{month}` or `{day}`, collision checks must validate the complete effective route, not merely match slug/id and assume the date portion is irrelevant. Two items/tree paths with the same slug but different date-derived routes are not a collision.
+
 ## Repository and storage boundaries
 
 Core/domain code must not know about PostgreSQL partitions, HASH/RANGE clauses or physical partition names.
@@ -157,9 +164,15 @@ Use a safe bounded maintenance strategy for arbitrary valid dates (for example p
 
 The adapter may derive the internal partition timestamp from publication time with a stable fallback (for example creation time) so non-date-centric libraries such as vacancies still work without exposing partition configuration to CMS users.
 
+When the adapter can prove equivalence, date predicates such as `published_at` ranges should also constrain the internal `partition_at` so PostgreSQL can prune yearly subpartitions. Keep this optimization entirely adapter-owned; do not expose `partition_at` in Core queries.
+
+A default/fallback partition is a correctness mechanism, not a permanent replacement for partition maintenance. Keep a deliberate way to add future yearly partitions before the default bucket becomes the normal long-term destination.
+
 Respect PostgreSQL uniqueness/primary-key constraints on partitioned tables. Preserve a stable globally addressable resource identity outside partition-specific composite keys when required.
 
 Moving a LibraryItem between Libraries of the same site is a domain operation. The adapter may physically move the row between partitions, but callers should see only `Move` semantics.
+
+If PostgreSQL can surface retryable serialization failures during partition-key updates/moves, handle them with a small bounded adapter-level retry where the operation is safe to retry. Do not leak SQLSTATE handling into Core.
 
 ## Moves and ownership invariants
 
@@ -198,6 +211,8 @@ Library collections are explicitly designed for high cardinality.
 - Keep filters adapter-neutral and reuse the resource query vocabulary where it remains semantically valid.
 
 LibraryItem queries must support the same meaningful typed field filtering/sorting vocabulary as ordinary resources when those fields are part of the item template. A high-volume Library must be able to express queries such as `salary >= 150000`, `city == "Moscow"`, publication/date sorting, etc. Do not build typed field indexes that are unreachable from the LibraryItem domain query contract.
+
+If LibraryItem filtering/sorting is part of the public/admin HTTP use case, carry the same semantic query contract through the API layer. Do not stop at an internal Go repository API while HTTP exposes only `search/cursor/limit`.
 
 High-volume text search must have an adapter-appropriate indexed strategy or deliberately bounded semantics. Avoid unindexed `lower(title) LIKE '%term%'` scans as the assumed long-term path for millions of rows.
 
@@ -241,15 +256,17 @@ Prefer focused tests for invariants including:
 - Library type cannot be converted to/from another type;
 - ordinary tree children and LibraryItems never mix;
 - ordinary tree routes and LibraryItem effective routes cannot collide silently;
+- date-token route checks compare complete effective routes;
+- Library path/pattern validation does not enumerate the entire Library in application memory;
 - LibraryItem can move only between Libraries on the same site;
 - Library move changes effective item URLs without bulk item path rewrites;
 - default item template is copied on creation, not dynamically inherited, and configured defaults resolve to an existing site template;
 - deleted Library hides items while preserving individual item lifecycle state;
 - LibraryItem CRUD uses resource-edit site permissions rather than site-deletion permission;
-- Library field filters/sorts use typed field persistence;
+- Library field filters/sorts use typed field persistence and are reachable through intended API surfaces;
 - large-list repository path is bounded/cursor-based;
 - cross-cutting resource extensions work for both TreeResource and LibraryItem identity;
-- PostgreSQL partition implementation remains behind the repository boundary and uses useful bounded time ranges;
-- registered custom resource types are not rejected by hard-coded management whitelists.
+- PostgreSQL partition implementation remains behind the repository boundary, uses useful bounded time ranges and allows pruning for date-range queries where applicable;
+- registered custom resource types are not rejected by hard-coded management whitelists and are not advertised without a usable payload contract.
 
 Run focused backend tests while iterating. If the task spans resource domain, migrations, adapters, API and admin frontend, run the broader backend/frontend validation once near completion.
