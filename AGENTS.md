@@ -81,10 +81,12 @@ Use the smallest set of skills that covers the actual task. A workflow skill suc
 - `go-cms-cache`: cache contracts, stores, module cache aliases, cache keys/tags, TTL, invalidation/coherence, Remember/result caching, cache connectors or cache maintenance.
 - `go-cms-architecture-review`: architecture/refactor/PR/commit review.
 - `go-cms-admin-ui`: backend-driven admin extensibility/navigation/frontend plugin work.
+- `go-cms-administration`: global system administration reserved for the protected built-in `admin` group, including administration navigation/pages, destructive maintenance and global cleanup operations.
 - `go-cms-api`: HTTP API contracts, CRUD endpoint design, DTOs, validation, pagination/filter/sort, transport errors, site context and API-layer authorization wiring.
 - `go-cms-authorization`: groups/roles/permissions, site-scoped access, create/view/edit/delete rules, authorizer contracts, permission composition and enforcement boundaries.
 - `go-cms-widgets`: widget definitions, layouts, persistence, editing or rendering.
 - `go-cms-resources`: resource types/tree/identity, Library/LibraryItem architecture, resource paths/routing, storage/lifecycle/moves or resource admin capabilities.
+- `go-cms-resource-revisions`: resource version counters, immutable revision snapshots, optimistic locking, restore/rollback, revision authors, revision persistence and purge/retention behavior.
 - `go-cms-resource-fields`: template/resource field values, typed persistence, filtering/sorting/indexing, storage kinds or migration away from JSONB resource settings.
 
 For a focused local bug fix or routine CRUD change whose architecture and API contract are already established, root/backend instructions plus the affected code are normally enough.
