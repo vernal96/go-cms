@@ -56,6 +56,8 @@ Resource type behavior belongs in reusable type metadata/contracts rather than f
 
 The admin frontend should consume those capabilities instead of accumulating `if type == page/link/library/...` logic.
 
+Management/API code must also resolve registered resource types from the current site runtime/registry instead of hard-coding whitelists such as `page/link/library`. A project/package resource type that is registered and exposed through metadata must not become impossible to create/update merely because management code enumerates built-in codes.
+
 ### Immutable Library type
 
 A Library is created explicitly as type `library` and its type is immutable.
@@ -94,6 +96,8 @@ When a LibraryItem is created without an explicit template, resolve the Library'
 
 An individual LibraryItem may use another valid template when the API/admin behavior explicitly permits it.
 
+Validate a configured default template against the current site's template registry when the Library is normalized/updated. Do not accept an arbitrary string only to fail later when the first LibraryItem is created.
+
 ## Paths and URL patterns
 
 Ordinary tree resources may continue to use their normal stored/validated path mechanics.
@@ -113,6 +117,18 @@ Use a deliberately small URL-pattern DSL rather than arbitrary Go templates. Sta
 Patterns must be validated for deterministic route resolution and uniqueness. Keep the MVP rule simple where possible, e.g. unique item slug within a Library and/or require a unique token such as `{slug}` or `{id}`.
 
 Routing must resolve both the Library tree resource itself and LibraryItem routes without loading the entire library collection.
+
+### Route namespace invariant
+
+A Library owns one URL namespace that may contain both ordinary tree descendants and effective LibraryItem routes. These routes must not silently shadow each other.
+
+Enforce route collision checks in both directions:
+
+- creating/updating/moving a LibraryItem must reject an effective URL already occupied by an ordinary tree resource;
+- creating/updating/moving an ordinary tree resource beneath/into a Library namespace must reject a path already occupied by a LibraryItem;
+- changing a Library URL pattern/path must validate the resulting namespace according to the chosen conflict strategy.
+
+Do not rely on resolver order (`tree first`, `library item second`) as the uniqueness policy.
 
 ## Repository and storage boundaries
 
@@ -135,6 +151,10 @@ A PostgreSQL adapter may use a dedicated partitioned LibraryItem table while ano
 
 For the PostgreSQL adapter, prefer a bounded partition topology rather than one partition per Library. A suitable direction is bounded HASH partitioning by `library_id` with time RANGE subpartitioning using an adapter-owned partition timestamp/bucket.
 
+The time subpartitions must be granular enough to provide useful pruning for high-volume date-centric libraries. Avoid one decade-sized catch-all partition for all normal production years. Prefer bounded yearly partitions initially; create finer ranges only when measurements justify them.
+
+Use a safe bounded maintenance strategy for arbitrary valid dates (for example pre-created yearly partitions plus a controlled/default/fallback path). Partition DDL/maintenance belongs to migrations or a synchronized infrastructure maintenance mechanism, not unsynchronized request-time insert code.
+
 The adapter may derive the internal partition timestamp from publication time with a stable fallback (for example creation time) so non-date-centric libraries such as vacancies still work without exposing partition configuration to CMS users.
 
 Respect PostgreSQL uniqueness/primary-key constraints on partitioned tables. Preserve a stable globally addressable resource identity outside partition-specific composite keys when required.
@@ -155,13 +175,17 @@ Before create/move, validate at least:
 
 Moving a Library tree node itself uses normal tree-cycle/site rules and must not require rewriting every LibraryItem's materialized path.
 
-## Lifecycle
+Treat moving a LibraryItem as an explicit command. If the admin UI exposes `update fields` and `move` as one apparent Save action, either provide one atomic backend operation or make the UI/state transition explicit and update the editor route/ownership after a successful move. Do not repeatedly issue no-op moves because the page still remembers the old Library ID.
+
+## Lifecycle and permissions
 
 Soft-deleting a Library should make its LibraryItems unavailable without issuing a massive row-by-row soft-delete solely to mirror the parent's state. Model effective availability from both item state and owning Library state.
 
 An individually deleted LibraryItem remains deleted even if its Library is restored.
 
 Permanent deletion of a Library must delete/clean its LibraryItems and cross-cutting resource extensions consistently. Use database cascades only where they preserve the domain lifecycle/audit invariants; otherwise orchestrate explicitly.
+
+LibraryItem CRUD belongs to resource editing permissions. Do not require permission to delete the entire site merely to delete a resource inside a Library. Site-scoped access checks for LibraryItem create/update/delete/restore/move should align with the corresponding ordinary resource operation unless the product explicitly defines a stricter rule.
 
 ## Querying and pagination
 
@@ -173,11 +197,15 @@ Library collections are explicitly designed for high cardinality.
 - Prefer cursor/keyset pagination for very large collections; do not design the hot path around deep `OFFSET` scans.
 - Keep filters adapter-neutral and reuse the resource query vocabulary where it remains semantically valid.
 
+LibraryItem queries must support the same meaningful typed field filtering/sorting vocabulary as ordinary resources when those fields are part of the item template. A high-volume Library must be able to express queries such as `salary >= 150000`, `city == "Moscow"`, publication/date sorting, etc. Do not build typed field indexes that are unreachable from the LibraryItem domain query contract.
+
+High-volume text search must have an adapter-appropriate indexed strategy or deliberately bounded semantics. Avoid unindexed `lower(title) LIKE '%term%'` scans as the assumed long-term path for millions of rows.
+
 The Library admin tab should expose server-side filtering/search rather than requiring the browser to load the collection.
 
 ## Admin behavior
 
-A Library appears in the ordinary resource tree with a default list/library icon. If the selected template declares a non-empty icon, template icon metadata may override the type default using the repository's existing icon mechanism.
+A Library appears in the ordinary resource tree with a default list/library icon. If the selected template declares a non-empty icon, template icon metadata may override the type default using the repository's existing icon mechanism. An empty/unsupported template icon must not accidentally replace the Library default with a generic document icon.
 
 A Library editor gains a `Resources` tab containing **LibraryItems only**, never ordinary tree descendants. MVP list columns:
 
@@ -212,12 +240,16 @@ Prefer focused tests for invariants including:
 
 - Library type cannot be converted to/from another type;
 - ordinary tree children and LibraryItems never mix;
+- ordinary tree routes and LibraryItem effective routes cannot collide silently;
 - LibraryItem can move only between Libraries on the same site;
 - Library move changes effective item URLs without bulk item path rewrites;
-- default item template is copied on creation, not dynamically inherited;
+- default item template is copied on creation, not dynamically inherited, and configured defaults resolve to an existing site template;
 - deleted Library hides items while preserving individual item lifecycle state;
+- LibraryItem CRUD uses resource-edit site permissions rather than site-deletion permission;
+- Library field filters/sorts use typed field persistence;
 - large-list repository path is bounded/cursor-based;
 - cross-cutting resource extensions work for both TreeResource and LibraryItem identity;
-- PostgreSQL partition implementation remains behind the repository boundary.
+- PostgreSQL partition implementation remains behind the repository boundary and uses useful bounded time ranges;
+- registered custom resource types are not rejected by hard-coded management whitelists.
 
 Run focused backend tests while iterating. If the task spans resource domain, migrations, adapters, API and admin frontend, run the broader backend/frontend validation once near completion.
