@@ -183,7 +183,7 @@ A repository may implement a replace/upsert strategy, but it must:
 - update file/reference relations consistently;
 - avoid leaving old values after a template change.
 
-Do not silently preserve values whose field key no longer exists in the selected template unless an explicit migration/archive feature is designed.
+Do not silently preserve values whose field key no longer exists in the selected template unless an explicit archive feature is designed.
 
 ## Template changes
 
@@ -216,29 +216,26 @@ Prefer explicit transport naming:
 }
 ```
 
-Do not continue using `settings` as an ambiguous alias for template field values when making the breaking migration, unless an explicit compatibility requirement is given. Root instructions prefer the current clean contract over transitional dead compatibility.
+Do not continue using `settings` as an ambiguous alias for template field values. This project is pre-production, so remove obsolete aliases/contracts instead of keeping transitional compatibility.
 
 The admin dynamic field UI may continue working with a `Record<string, unknown>` map; persistence normalization is a backend concern.
 
-## Migration from current JSONB settings
+## Pre-production schema changes
 
-When current `main` still stores template field values in `resources.settings`, implement a deliberate migration path rather than silently dropping values.
+Root `AGENTS.md` defines the project-wide compatibility policy: there is no production data to preserve.
 
-Before writing migration code, inspect whether `settings` currently contains only template field values or also resource-type/system configuration. Separate any non-field data into the new type-settings storage before removing/reinterpreting the column.
+When replacing an old field persistence design such as `resources.settings` JSONB:
 
-For existing rows:
+- change the current schema and code directly to the correct model;
+- update or squash not-yet-production migrations when that yields a cleaner migration history;
+- update seeds, fixtures and tests to the new schema;
+- remove obsolete migration-only commands, staging tables, manifests, dual-write code and compatibility readers once the new model is chosen;
+- do not build `prepare/audit/repair` pipelines merely to preserve developer databases;
+- do not keep legacy JSONB data conversion logic solely because local rows may exist.
 
-1. determine the selected template and its field definitions;
-2. normalize/map each known field value to its declared storage kind;
-3. insert typed field-value rows;
-4. preserve invalid legacy data only if the task explicitly requires compatibility; otherwise fail migration clearly rather than corrupting silently;
-5. remove or repurpose the old `settings` field only after all readers/writers/query paths have moved.
+If destructive migration/reset is simpler and safer for the current architecture, prefer it. A developer database may be recreated.
 
-Do not infer persisted semantics only from JSON shape when the template schema says otherwise. A JSON array belonging to an opaque `json` field must remain JSON; it must not automatically become a multi-value relational field. File/reference/custom field types must migrate according to declared field semantics, not merely according to `jsonb_typeof`.
-
-If SQL migrations cannot access code-defined template schemas safely, use an explicit application/data migration mechanism or clearly constrain the migration policy for development databases. Do not silently perform a lossy best-effort conversion and call it schema-aware.
-
-If this repository's migration policy prefers rebuilding early migrations rather than append-only production migrations, follow the current `main` conventions instead of assuming one strategy.
+Only design a real data migration when the user explicitly says that production/external data must be retained for that task.
 
 ## Resource identity
 
@@ -261,8 +258,7 @@ Add focused tests for changed invariants, including as applicable:
 - file/reference validation remains enforced;
 - field filters use typed semantics for string/numeric/boolean/reference values;
 - ordinary Resource and LibraryItem share the same field-value query vocabulary;
-- migration preserves existing valid field data according to declared template field semantics;
-- opaque JSON arrays are not mis-migrated into multi-value rows;
-- no resource query path still depends on JSONB `settings -> field_key` after migration.
+- no resource query path depends on obsolete JSONB `settings -> field_key` access;
+- obsolete legacy field-migration compatibility code is removed when the schema is replaced.
 
-Run focused package/adapter tests first, then broader backend integration tests when the migration affects resource service, PostgreSQL and public/admin query paths.
+Run focused package/adapter tests first, then broader backend integration tests when the change affects resource service, PostgreSQL and public/admin query paths.
