@@ -14,8 +14,24 @@ Keep discovery proportional to the task.
 - Do not scan the whole repository when a local change can be understood locally.
 - Do not call `codebase-memory-mcp/get_architecture` by default. Use it only for genuinely broad/cross-cutting architecture work when targeted repository inspection is insufficient.
 - Do not reload files already inspected unless they changed or a missing detail requires it.
-- Load only the skill that directly matches the task. Never load all `.codex/skills/*` proactively.
+- Load the smallest applicable skill set. Usually one skill is enough; load an additional skill only when the task genuinely crosses both scopes. Never load all `.codex/skills/*` proactively.
 - Prefer targeted searches and bounded command output over repository-wide dumps.
+
+## Requirements gate
+
+For a non-trivial new feature, architecture change, cross-cutting refactor, or materially ambiguous request, do not start implementation immediately.
+
+1. Inspect the relevant current implementation first.
+2. Resolve everything that can be answered from the repository without asking the user.
+3. Identify only decisions that materially affect behavior, architecture, public APIs, persistence, authorization, lifecycle, compatibility, performance, or UX.
+4. If material ambiguity remains, load `go-cms-requirements` and ask focused clarification questions before editing code.
+5. Recommend a default when there is a clear preferred option and briefly explain the trade-off.
+6. After the answers, restate the resolved goal, important constraints, chosen approach, and any explicit assumptions.
+7. Implement only when no material product/architecture decision remains unresolved.
+
+Do not use the requirements gate for a small mechanical change, routine CRUD whose contract is already established, a focused bug fix, or a task where the user has already specified the relevant decisions.
+
+Never ask the user for information that can be reliably discovered from the current code, tests, configuration, or established project instructions.
 
 ## Repository boundaries
 
@@ -57,18 +73,21 @@ Validate narrowly while iterating and broadly only when justified.
 
 ## Skill routing
 
-Load a skill only when its scope matches:
+Use the smallest set of skills that covers the actual task. A workflow skill such as `go-cms-requirements` may be combined with the relevant domain skill. A second domain/cross-cutting skill is justified only when both sets of invariants are materially involved.
 
+- `go-cms-requirements`: requirement discovery/clarification before non-trivial or ambiguous feature/architecture work.
 - `go-cms-development`: cross-package backend architecture or reusable extension/composition work.
 - `go-cms-runtime-integrity`: SiteRuntime/ProfileBlueprint/reload/publication/runtime cache-coherence work.
 - `go-cms-cache`: cache contracts, stores, module cache aliases, cache keys/tags, TTL, invalidation/coherence, Remember/result caching, cache connectors or cache maintenance.
 - `go-cms-architecture-review`: architecture/refactor/PR/commit review.
 - `go-cms-admin-ui`: backend-driven admin extensibility/navigation/frontend plugin work.
+- `go-cms-api`: HTTP API contracts, CRUD endpoint design, DTOs, validation, pagination/filter/sort, transport errors, site context and API-layer authorization wiring.
+- `go-cms-authorization`: groups/roles/permissions, site-scoped access, create/view/edit/delete rules, authorizer contracts, permission composition and enforcement boundaries.
 - `go-cms-widgets`: widget definitions, layouts, persistence, editing or rendering.
 - `go-cms-resources`: resource types/tree/identity, Library/LibraryItem architecture, resource paths/routing, storage/lifecycle/moves or resource admin capabilities.
 - `go-cms-resource-fields`: template/resource field values, typed persistence, filtering/sorting/indexing, storage kinds or migration away from JSONB resource settings.
 
-For a focused local bug fix or routine CRUD change, root/backend instructions plus the affected code are normally enough.
+For a focused local bug fix or routine CRUD change whose architecture and API contract are already established, root/backend instructions plus the affected code are normally enough.
 
 ## Human-facing Codex prompts
 
