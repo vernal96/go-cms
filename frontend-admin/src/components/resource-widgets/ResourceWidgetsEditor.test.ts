@@ -131,7 +131,7 @@ describe('ResourceWidgetsEditor drag and drop', () => {
       'token',
       {
         method: 'PUT',
-        body: JSON.stringify({ items: [
+        body: JSON.stringify({ expected_version: 1, items: [
           { id: 42, area: 'body', position: 0 },
           { id: 41, area: 'sidebar', position: 0 },
         ] }),

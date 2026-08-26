@@ -23,6 +23,7 @@ import (
 type LibraryItem struct {
 	ID             ID
 	SiteID         site.ID
+	Version        int64
 	LibraryID      ID
 	Template       *template.Code
 	ContentType    *string
@@ -65,19 +66,20 @@ type CreateLibraryItemInput struct {
 }
 
 type UpdateLibraryItemInput struct {
-	ID            ID
-	Template      *template.Code
-	ContentType   *string
-	Title         string
-	Slug          string
-	Annotation    string
-	Content       string
-	ImageMediaID  *media.ID
-	IsPublic      bool
-	IsSearchable  bool
-	PublishedAt   *time.Time
-	UnpublishedAt *time.Time
-	Fields        map[string]any
+	ID              ID
+	ExpectedVersion int64
+	Template        *template.Code
+	ContentType     *string
+	Title           string
+	Slug            string
+	Annotation      string
+	Content         string
+	ImageMediaID    *media.ID
+	IsPublic        bool
+	IsSearchable    bool
+	PublishedAt     *time.Time
+	UnpublishedAt   *time.Time
+	Fields          map[string]any
 }
 
 type LibraryItemQuery struct {
@@ -96,13 +98,13 @@ type LibraryItemPage struct {
 }
 
 type LibraryItemRepository interface {
-	CreateLibraryItem(context.Context, *security.UserID, LibraryItem) (LibraryItem, error)
+	CreateLibraryItem(context.Context, *security.UserID, LibraryItem, bool) (LibraryItem, error)
 	LibraryItemByID(context.Context, ID) (LibraryItem, error)
-	UpdateLibraryItem(context.Context, *security.UserID, LibraryItem, LibraryItem) (LibraryItem, error)
+	UpdateLibraryItem(context.Context, *security.UserID, LibraryItem, LibraryItem, bool) (LibraryItem, error)
 	SoftDeleteLibraryItem(context.Context, *security.UserID, ID) error
 	RestoreLibraryItem(context.Context, *security.UserID, ID) error
 	DeleteLibraryItem(context.Context, ID) error
-	MoveLibraryItem(context.Context, *security.UserID, ID, ID) (LibraryItem, error)
+	MoveLibraryItem(context.Context, *security.UserID, ID, ID, int64, bool) (LibraryItem, error)
 	QueryLibraryItems(context.Context, LibraryItemQuery) (LibraryItemPage, error)
 	ResolveLibraryItemRoute(context.Context, site.ID, string) (LibraryItem, Resource, error)
 }
@@ -152,7 +154,7 @@ func (s *LibraryService) Create(ctx context.Context, actor security.Actor, input
 	if err != nil {
 		return LibraryItem{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	created, err := s.repository.CreateLibraryItem(ctx, actor.AuditUserID(), item)
+	created, err := s.repository.CreateLibraryItem(ctx, actor.AuditUserID(), item, revisionPolicyFor(runtime).LibraryItems)
 	if err != nil {
 		return LibraryItem{}, fmt.Errorf("create library item: %w", err)
 	}
@@ -184,6 +186,9 @@ func (s *LibraryService) Update(ctx context.Context, actor security.Actor, input
 	if err != nil {
 		return LibraryItem{}, err
 	}
+	if input.ExpectedVersion <= 0 || current.Version != input.ExpectedVersion {
+		return LibraryItem{}, ErrConflict
+	}
 	_, runtime, err := s.library(ctx, current.SiteID, current.LibraryID)
 	if err != nil {
 		return LibraryItem{}, err
@@ -204,14 +209,14 @@ func (s *LibraryService) Update(ctx context.Context, actor security.Actor, input
 	if err != nil {
 		return LibraryItem{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	updated, err := s.repository.UpdateLibraryItem(ctx, actor.AuditUserID(), current, item)
+	updated, err := s.repository.UpdateLibraryItem(ctx, actor.AuditUserID(), current, item, revisionPolicyFor(runtime).LibraryItems)
 	if err != nil {
 		return LibraryItem{}, fmt.Errorf("update library item: %w", err)
 	}
 	return cloneLibraryItem(updated), nil
 }
 
-func (s *LibraryService) Move(ctx context.Context, actor security.Actor, id, targetLibraryID ID) (LibraryItem, error) {
+func (s *LibraryService) Move(ctx context.Context, actor security.Actor, id, targetLibraryID ID, expectedVersion int64) (LibraryItem, error) {
 	if err := s.common.authorizer.Check(ctx, actor, updatePermission); err != nil {
 		return LibraryItem{}, err
 	}
@@ -219,10 +224,14 @@ func (s *LibraryService) Move(ctx context.Context, actor security.Actor, id, tar
 	if err != nil {
 		return LibraryItem{}, err
 	}
-	if _, _, err := s.library(ctx, item.SiteID, targetLibraryID); err != nil {
+	if expectedVersion <= 0 || item.Version != expectedVersion {
+		return LibraryItem{}, ErrConflict
+	}
+	_, runtime, err := s.library(ctx, item.SiteID, targetLibraryID)
+	if err != nil {
 		return LibraryItem{}, err
 	}
-	moved, err := s.repository.MoveLibraryItem(ctx, actor.AuditUserID(), id, targetLibraryID)
+	moved, err := s.repository.MoveLibraryItem(ctx, actor.AuditUserID(), id, targetLibraryID, expectedVersion, revisionPolicyFor(runtime).LibraryItems)
 	if err != nil {
 		return LibraryItem{}, fmt.Errorf("move library item: %w", err)
 	}

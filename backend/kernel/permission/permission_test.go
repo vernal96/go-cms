@@ -76,3 +76,13 @@ func TestCatalogRejectsDuplicatesAndInvalidCodes(t *testing.T) {
 		})
 	}
 }
+
+func TestDefinitionsAllowRestrictedEntityActions(t *testing.T) {
+	definitions, err := Definitions("core", []Entity{{Code: "resource_history", Actions: []Action{Read, Delete}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(definitions) != 2 || definitions[0].Code != "core.resource_history.read" || definitions[1].Code != "core.resource_history.delete" {
+		t.Fatalf("definitions = %#v", definitions)
+	}
+}

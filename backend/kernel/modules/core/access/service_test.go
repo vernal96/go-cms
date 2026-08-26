@@ -11,10 +11,15 @@ import (
 )
 
 type memoryRepository struct {
-	subjects    map[security.UserID]Subject
-	group       map[security.UserID]map[permission.Code]bool
-	guest       map[permission.Code]Grant
-	subjectCall atomic.Int32
+	subjects       map[security.UserID]Subject
+	group          map[security.UserID]map[permission.Code]bool
+	guest          map[permission.Code]Grant
+	administrators map[security.UserID]bool
+	subjectCall    atomic.Int32
+}
+
+func (r *memoryRepository) IsAdministrator(_ context.Context, id security.UserID) (bool, error) {
+	return r.administrators[id], nil
 }
 
 func (r *memoryRepository) Subject(
@@ -156,6 +161,20 @@ func TestAuthorizationSubjects(t *testing.T) {
 				t.Fatalf("Check error = %v, want %v", err, test.err)
 			}
 		})
+	}
+}
+
+func TestAdministratorRequiresExactMembership(t *testing.T) {
+	repository := &memoryRepository{subjects: map[security.UserID]Subject{1: {Exists: true, Active: true, IsSuper: true}, 2: {Exists: true, Active: true, HasGroups: true}}, administrators: map[security.UserID]bool{2: true}}
+	service, _ := newTestService(t, repository)
+	if allowed, err := service.IsAdministrator(context.Background(), security.User(1)); err != nil || allowed {
+		t.Fatalf("non-admin super allowed=%v err=%v", allowed, err)
+	}
+	if allowed, err := service.IsAdministrator(context.Background(), security.User(2)); err != nil || !allowed {
+		t.Fatalf("admin allowed=%v err=%v", allowed, err)
+	}
+	if allowed, err := service.IsAdministrator(context.Background(), security.System()); err != nil || !allowed {
+		t.Fatalf("system allowed=%v err=%v", allowed, err)
 	}
 }
 

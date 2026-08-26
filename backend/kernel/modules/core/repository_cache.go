@@ -337,36 +337,36 @@ func (r *cachedResourceRepository) Update(
 	return result, nil
 }
 
-func (r *cachedResourceRepository) CreateWidget(ctx context.Context, id resource.ID, binding widget.Binding) (widget.Binding, error) {
+func (r *cachedResourceRepository) CreateWidget(ctx context.Context, actorID *security.UserID, id resource.ID, expectedVersion int64, binding widget.Binding, recordRevision bool) (widget.Binding, error) {
 	repository, ok := r.base.(resource.WidgetRepository)
 	if !ok {
 		return widget.Binding{}, errors.New("resource widget repository is unavailable")
 	}
-	return repository.CreateWidget(ctx, id, binding)
+	return repository.CreateWidget(ctx, actorID, id, expectedVersion, binding, recordRevision)
 }
 
-func (r *cachedResourceRepository) UpdateWidget(ctx context.Context, id resource.ID, binding widget.Binding) (widget.Binding, error) {
+func (r *cachedResourceRepository) UpdateWidget(ctx context.Context, actorID *security.UserID, id resource.ID, expectedVersion int64, binding widget.Binding, recordRevision bool) (widget.Binding, error) {
 	repository, ok := r.base.(resource.WidgetRepository)
 	if !ok {
 		return widget.Binding{}, errors.New("resource widget repository is unavailable")
 	}
-	return repository.UpdateWidget(ctx, id, binding)
+	return repository.UpdateWidget(ctx, actorID, id, expectedVersion, binding, recordRevision)
 }
 
-func (r *cachedResourceRepository) DeleteWidget(ctx context.Context, id resource.ID, bindingID widget.BindingID) error {
+func (r *cachedResourceRepository) DeleteWidget(ctx context.Context, actorID *security.UserID, id resource.ID, expectedVersion int64, bindingID widget.BindingID, recordRevision bool) error {
 	repository, ok := r.base.(resource.WidgetRepository)
 	if !ok {
 		return errors.New("resource widget repository is unavailable")
 	}
-	return repository.DeleteWidget(ctx, id, bindingID)
+	return repository.DeleteWidget(ctx, actorID, id, expectedVersion, bindingID, recordRevision)
 }
 
-func (r *cachedResourceRepository) ReorderWidgets(ctx context.Context, id resource.ID, order []widget.Order) ([]widget.Binding, error) {
+func (r *cachedResourceRepository) ReorderWidgets(ctx context.Context, actorID *security.UserID, id resource.ID, expectedVersion int64, order []widget.Order, recordRevision bool) ([]widget.Binding, error) {
 	repository, ok := r.base.(resource.WidgetRepository)
 	if !ok {
 		return nil, errors.New("resource widget repository is unavailable")
 	}
-	return repository.ReorderWidgets(ctx, id, order)
+	return repository.ReorderWidgets(ctx, actorID, id, expectedVersion, order, recordRevision)
 }
 
 func (r *cachedResourceRepository) Delete(
@@ -418,12 +418,12 @@ func (r *cachedResourceRepository) libraryItems() (resource.LibraryItemRepositor
 	return repository, nil
 }
 
-func (r *cachedResourceRepository) CreateLibraryItem(ctx context.Context, actorID *security.UserID, item resource.LibraryItem) (resource.LibraryItem, error) {
+func (r *cachedResourceRepository) CreateLibraryItem(ctx context.Context, actorID *security.UserID, item resource.LibraryItem, recordRevision bool) (resource.LibraryItem, error) {
 	repository, err := r.libraryItems()
 	if err != nil {
 		return resource.LibraryItem{}, err
 	}
-	return repository.CreateLibraryItem(ctx, actorID, item)
+	return repository.CreateLibraryItem(ctx, actorID, item, recordRevision)
 }
 func (r *cachedResourceRepository) LibraryItemByID(ctx context.Context, id resource.ID) (resource.LibraryItem, error) {
 	repository, err := r.libraryItems()
@@ -432,12 +432,12 @@ func (r *cachedResourceRepository) LibraryItemByID(ctx context.Context, id resou
 	}
 	return repository.LibraryItemByID(ctx, id)
 }
-func (r *cachedResourceRepository) UpdateLibraryItem(ctx context.Context, actorID *security.UserID, current, item resource.LibraryItem) (resource.LibraryItem, error) {
+func (r *cachedResourceRepository) UpdateLibraryItem(ctx context.Context, actorID *security.UserID, current, item resource.LibraryItem, recordRevision bool) (resource.LibraryItem, error) {
 	repository, err := r.libraryItems()
 	if err != nil {
 		return resource.LibraryItem{}, err
 	}
-	return repository.UpdateLibraryItem(ctx, actorID, current, item)
+	return repository.UpdateLibraryItem(ctx, actorID, current, item, recordRevision)
 }
 func (r *cachedResourceRepository) SoftDeleteLibraryItem(ctx context.Context, actorID *security.UserID, id resource.ID) error {
 	repository, err := r.libraryItems()
@@ -460,12 +460,12 @@ func (r *cachedResourceRepository) DeleteLibraryItem(ctx context.Context, id res
 	}
 	return repository.DeleteLibraryItem(ctx, id)
 }
-func (r *cachedResourceRepository) MoveLibraryItem(ctx context.Context, actorID *security.UserID, id, target resource.ID) (resource.LibraryItem, error) {
+func (r *cachedResourceRepository) MoveLibraryItem(ctx context.Context, actorID *security.UserID, id, target resource.ID, expectedVersion int64, recordRevision bool) (resource.LibraryItem, error) {
 	repository, err := r.libraryItems()
 	if err != nil {
 		return resource.LibraryItem{}, err
 	}
-	return repository.MoveLibraryItem(ctx, actorID, id, target)
+	return repository.MoveLibraryItem(ctx, actorID, id, target, expectedVersion, recordRevision)
 }
 func (r *cachedResourceRepository) QueryLibraryItems(ctx context.Context, query resource.LibraryItemQuery) (resource.LibraryItemPage, error) {
 	repository, err := r.libraryItems()

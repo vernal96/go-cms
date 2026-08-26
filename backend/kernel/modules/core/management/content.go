@@ -132,25 +132,33 @@ func NewSites(dependencies SiteDependencies) (*Sites, error) {
 // Resources owns resource, widget, extension, and menu orchestration.
 type Resources struct {
 	authorization
-	resources    *resource.Service
-	libraryItems *resource.LibraryService
+	resources     *resource.Service
+	libraryItems  *resource.LibraryService
+	revisions     *resource.RevisionService
+	administrator interface {
+		IsAdministrator(context.Context, security.Actor) (bool, error)
+	}
 	resourceRepo resource.ManagementRepository
 }
 
 type ResourceDependencies struct {
-	Sites              SiteCatalog
-	Resources          *resource.Service
-	LibraryItems       *resource.LibraryService
+	Sites         SiteCatalog
+	Resources     *resource.Service
+	LibraryItems  *resource.LibraryService
+	Revisions     *resource.RevisionService
+	Administrator interface {
+		IsAdministrator(context.Context, security.Actor) (bool, error)
+	}
 	ResourceRepository resource.ManagementRepository
 	Authorizer         security.Authorizer
 	SiteAccessPolicy   SiteAccessPolicy
 }
 
 func NewResources(dependencies ResourceDependencies) (*Resources, error) {
-	if dependencies.Sites == nil || dependencies.Resources == nil || dependencies.ResourceRepository == nil {
+	if dependencies.Sites == nil || dependencies.Resources == nil || dependencies.Revisions == nil || dependencies.ResourceRepository == nil {
 		return nil, errors.New("CMS resource dependencies are nil")
 	}
-	if dependencies.Authorizer == nil || dependencies.SiteAccessPolicy == nil {
+	if dependencies.Authorizer == nil || dependencies.SiteAccessPolicy == nil || dependencies.Administrator == nil {
 		return nil, errors.New("CMS resource authorization dependencies are nil")
 	}
 	return &Resources{
@@ -159,8 +167,30 @@ func NewResources(dependencies ResourceDependencies) (*Resources, error) {
 			policy: dependencies.SiteAccessPolicy,
 		},
 		resources: dependencies.Resources, resourceRepo: dependencies.ResourceRepository,
-		libraryItems: dependencies.LibraryItems,
+		libraryItems: dependencies.LibraryItems, revisions: dependencies.Revisions, administrator: dependencies.Administrator,
 	}, nil
+}
+
+func (m *Resources) AdministrationRevisionCount(ctx context.Context, actor security.Actor) (int64, error) {
+	allowed, err := m.administrator.IsAdministrator(ctx, actor)
+	if err != nil {
+		return 0, err
+	}
+	if !allowed {
+		return 0, security.ErrForbidden
+	}
+	return m.revisions.CountAll(ctx)
+}
+
+func (m *Resources) AdministrationPurgeRevisions(ctx context.Context, actor security.Actor) (int64, error) {
+	allowed, err := m.administrator.IsAdministrator(ctx, actor)
+	if err != nil {
+		return 0, err
+	}
+	if !allowed {
+		return 0, security.ErrForbidden
+	}
+	return m.revisions.PurgeAll(ctx)
 }
 
 type Pagination struct {
@@ -460,6 +490,7 @@ func (m *Sites) Profiles(
 
 type ResourceTreeItem struct {
 	ID             resource.ID    `json:"id"`
+	Version        int64          `json:"version"`
 	ParentID       *resource.ID   `json:"parent_id"`
 	TemplateCode   *template.Code `json:"template_code"`
 	Icon           string         `json:"icon"`
@@ -825,6 +856,7 @@ func (m *Resources) CreateResource(
 	}
 	return treeItem(runtime, resource.Child{
 		ID:            created.ID,
+		Version:       created.Version,
 		SiteID:        created.SiteID,
 		ParentID:      created.ParentID,
 		Type:          created.Type,
@@ -842,6 +874,7 @@ func (m *Resources) CreateResource(
 type ResourceDTO struct {
 	ID            resource.ID       `json:"id"`
 	SiteID        site.ID           `json:"site_id"`
+	Version       int64             `json:"version"`
 	ParentID      *resource.ID      `json:"parent_id"`
 	Type          resourcetype.Code `json:"type"`
 	TemplateCode  *template.Code    `json:"template_code"`
@@ -868,47 +901,51 @@ type ResourceDTO struct {
 }
 
 type ResourceWidget struct {
-	ID           widget.BindingID `json:"id"`
-	Code         widget.Code      `json:"code"`
-	Area         widget.AreaCode  `json:"area"`
-	Position     int              `json:"position"`
-	View         widget.ViewCode  `json:"view"`
-	Columns      int              `json:"columns"`
-	MarginTop    int              `json:"margin_top"`
-	MarginBottom int              `json:"margin_bottom"`
-	Enabled      bool             `json:"enabled"`
-	Params       map[string]any   `json:"params"`
+	ID              widget.BindingID `json:"id"`
+	Code            widget.Code      `json:"code"`
+	Area            widget.AreaCode  `json:"area"`
+	Position        int              `json:"position"`
+	View            widget.ViewCode  `json:"view"`
+	Columns         int              `json:"columns"`
+	MarginTop       int              `json:"margin_top"`
+	MarginBottom    int              `json:"margin_bottom"`
+	Enabled         bool             `json:"enabled"`
+	Params          map[string]any   `json:"params"`
+	ResourceVersion int64            `json:"resource_version,omitempty"`
 }
 
 type ResourceDetails struct {
 	Resource    ResourceDTO `json:"resource"`
 	Permissions struct {
-		Update  bool `json:"update"`
-		Delete  bool `json:"delete"`
-		Restore bool `json:"restore"`
+		Update        bool `json:"update"`
+		Delete        bool `json:"delete"`
+		Restore       bool `json:"restore"`
+		HistoryRead   bool `json:"history_read"`
+		HistoryDelete bool `json:"history_delete"`
 	} `json:"permissions"`
 }
 
 type ResourceUpdateInput struct {
-	ParentID      *resource.ID
-	Type          resourcetype.Code
-	Template      *template.Code
-	Title         string
-	MenuTitle     string
-	Slug          string
-	Annotation    string
-	ContentType   *string
-	Content       string
-	ExternalURL   *string
-	IsPublic      bool
-	IsSearchable  bool
-	InMenu        bool
-	InSitemap     bool
-	Sort          int
-	PublishedAt   *time.Time
-	UnpublishedAt *time.Time
-	Fields        map[string]any
-	TypeSettings  map[string]any
+	ExpectedVersion int64
+	ParentID        *resource.ID
+	Type            resourcetype.Code
+	Template        *template.Code
+	Title           string
+	MenuTitle       string
+	Slug            string
+	Annotation      string
+	ContentType     *string
+	Content         string
+	ExternalURL     *string
+	IsPublic        bool
+	IsSearchable    bool
+	InMenu          bool
+	InSitemap       bool
+	Sort            int
+	PublishedAt     *time.Time
+	UnpublishedAt   *time.Time
+	Fields          map[string]any
+	TypeSettings    map[string]any
 }
 
 func (m *Resources) Resource(
@@ -939,6 +976,14 @@ func (m *Resources) Resource(
 	}
 	result.Permissions.Delete = canDelete
 	result.Permissions.Restore = canDelete
+	result.Permissions.HistoryRead, err = m.allowed(ctx, actor, resource.HistoryReadPermission)
+	if err != nil {
+		return ResourceDetails{}, err
+	}
+	result.Permissions.HistoryDelete, err = m.allowed(ctx, actor, resource.HistoryDeletePermission)
+	if err != nil {
+		return ResourceDetails{}, err
+	}
 	if item.ParentID != nil {
 		parent, parentErr := m.resources.Get(ctx, actor, *item.ParentID)
 		if parentErr != nil {
@@ -947,6 +992,54 @@ func (m *Resources) Resource(
 		result.Permissions.Restore = canDelete && parent.DeletedAt == nil
 	}
 	return result, nil
+}
+
+func (m *Resources) Revisions(ctx context.Context, actor security.Actor, siteID site.ID, resourceID resource.ID, page, perPage int) (resource.RevisionPage, error) {
+	if err := m.requireSite(ctx, actor, siteID, resource.HistoryReadPermission, SiteAccessView); err != nil {
+		return resource.RevisionPage{}, err
+	}
+	if err := m.requireResourceSite(ctx, actor, siteID, resourceID); err != nil {
+		return resource.RevisionPage{}, err
+	}
+	return m.revisions.List(ctx, actor, siteID, resourceID, page, perPage)
+}
+
+func (m *Resources) Revision(ctx context.Context, actor security.Actor, siteID site.ID, resourceID resource.ID, version int64) (resource.Revision, error) {
+	if err := m.requireSite(ctx, actor, siteID, resource.HistoryReadPermission, SiteAccessView); err != nil {
+		return resource.Revision{}, err
+	}
+	if err := m.requireResourceSite(ctx, actor, siteID, resourceID); err != nil {
+		return resource.Revision{}, err
+	}
+	return m.revisions.Get(ctx, actor, siteID, resourceID, version)
+}
+
+func (m *Resources) RestoreRevision(ctx context.Context, actor security.Actor, siteID site.ID, resourceID resource.ID, version, expectedVersion int64) (ResourceDetails, error) {
+	if err := m.requireSite(ctx, actor, siteID, resource.HistoryReadPermission, SiteAccessEdit); err != nil {
+		return ResourceDetails{}, err
+	}
+	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission, SiteAccessEdit); err != nil {
+		return ResourceDetails{}, err
+	}
+	updated, err := m.revisions.Restore(ctx, actor, siteID, resourceID, version, expectedVersion)
+	if err != nil {
+		return ResourceDetails{}, validationError(err)
+	}
+	result := ResourceDetails{Resource: resourceDTO(updated)}
+	result.Permissions.Update = true
+	result.Permissions.HistoryRead = true
+	result.Permissions.HistoryDelete, err = m.allowed(ctx, actor, resource.HistoryDeletePermission)
+	return result, err
+}
+
+func (m *Resources) PurgeRevisions(ctx context.Context, actor security.Actor, siteID site.ID, resourceID resource.ID) (int64, error) {
+	if err := m.requireSite(ctx, actor, siteID, resource.HistoryDeletePermission, SiteAccessEdit); err != nil {
+		return 0, err
+	}
+	if err := m.requireResourceSite(ctx, actor, siteID, resourceID); err != nil {
+		return 0, err
+	}
+	return m.revisions.Purge(ctx, actor, siteID, resourceID)
 }
 
 func (m *Resources) UpdateResource(
@@ -980,6 +1073,7 @@ func (m *Resources) UpdateResource(
 	}
 	updated, err := m.resources.Update(ctx, actor, resource.UpdateInput{
 		ID:               resourceID,
+		ExpectedVersion:  input.ExpectedVersion,
 		ParentID:         input.ParentID,
 		Type:             input.Type,
 		Template:         input.Template,
@@ -1018,6 +1112,7 @@ func (m *Resources) UpdateResource(
 
 type LibraryItemDTO struct {
 	ID            resource.ID      `json:"id"`
+	Version       int64            `json:"version"`
 	SiteID        site.ID          `json:"site_id"`
 	LibraryID     resource.ID      `json:"library_id"`
 	TemplateCode  *template.Code   `json:"template_code"`
@@ -1040,9 +1135,11 @@ type LibraryItemDTO struct {
 type LibraryItemDetails struct {
 	Item        LibraryItemDTO `json:"item"`
 	Permissions struct {
-		Update  bool `json:"update"`
-		Delete  bool `json:"delete"`
-		Restore bool `json:"restore"`
+		Update        bool `json:"update"`
+		Delete        bool `json:"delete"`
+		Restore       bool `json:"restore"`
+		HistoryRead   bool `json:"history_read"`
+		HistoryDelete bool `json:"history_delete"`
 	} `json:"permissions"`
 }
 
@@ -1066,8 +1163,9 @@ type LibraryItemCreateInput struct {
 
 type LibraryItemUpdateInput struct {
 	LibraryItemCreateInput
-	IsPublic     *bool
-	IsSearchable *bool
+	ExpectedVersion int64
+	IsPublic        *bool
+	IsSearchable    *bool
 }
 
 func (m *Resources) LibraryItems(ctx context.Context, actor security.Actor, siteID site.ID, libraryID resource.ID, cursor string, limit int, search string) (LibraryItemsPage, error) {
@@ -1144,14 +1242,14 @@ func (m *Resources) UpdateLibraryItem(ctx context.Context, actor security.Actor,
 	if input.IsPublic == nil || input.IsSearchable == nil {
 		return LibraryItemDetails{}, ErrValidation
 	}
-	item, err := m.libraryItems.Update(ctx, actor, resource.UpdateLibraryItemInput{ID: itemID, Template: input.Template, Title: input.Title, Slug: input.Slug, Annotation: input.Annotation, Content: input.Content, IsPublic: *input.IsPublic, IsSearchable: *input.IsSearchable, PublishedAt: input.PublishedAt, UnpublishedAt: input.UnpublishedAt, Fields: input.Fields})
+	item, err := m.libraryItems.Update(ctx, actor, resource.UpdateLibraryItemInput{ID: itemID, ExpectedVersion: input.ExpectedVersion, Template: input.Template, Title: input.Title, Slug: input.Slug, Annotation: input.Annotation, Content: input.Content, IsPublic: *input.IsPublic, IsSearchable: *input.IsSearchable, PublishedAt: input.PublishedAt, UnpublishedAt: input.UnpublishedAt, Fields: input.Fields})
 	if err != nil {
 		return LibraryItemDetails{}, validationError(err)
 	}
 	return m.libraryItemDetails(ctx, actor, item)
 }
 
-func (m *Resources) MoveLibraryItem(ctx context.Context, actor security.Actor, siteID site.ID, itemID, targetLibraryID resource.ID) (LibraryItemDetails, error) {
+func (m *Resources) MoveLibraryItem(ctx context.Context, actor security.Actor, siteID site.ID, itemID, targetLibraryID resource.ID, expectedVersion int64) (LibraryItemDetails, error) {
 	if m.libraryItems == nil {
 		return LibraryItemDetails{}, errors.New("library item service is unavailable")
 	}
@@ -1165,7 +1263,7 @@ func (m *Resources) MoveLibraryItem(ctx context.Context, actor security.Actor, s
 	if current.SiteID != siteID {
 		return LibraryItemDetails{}, resource.ErrNotFound
 	}
-	item, err := m.libraryItems.Move(ctx, actor, itemID, targetLibraryID)
+	item, err := m.libraryItems.Move(ctx, actor, itemID, targetLibraryID, expectedVersion)
 	if err != nil {
 		return LibraryItemDetails{}, validationError(err)
 	}
@@ -1217,6 +1315,12 @@ func (m *Resources) libraryItemDetails(ctx context.Context, actor security.Actor
 	}
 	result.Permissions.Delete, err = m.allowed(ctx, actor, ResourceDeletePermission)
 	result.Permissions.Restore = result.Permissions.Delete && library.DeletedAt == nil
+	if err == nil && m.revisions.LibraryHistoryEnabled(item.SiteID) {
+		result.Permissions.HistoryRead, err = m.allowed(ctx, actor, resource.HistoryReadPermission)
+		if err == nil {
+			result.Permissions.HistoryDelete, err = m.allowed(ctx, actor, resource.HistoryDeletePermission)
+		}
+	}
 	return result, err
 }
 
@@ -1226,7 +1330,7 @@ func libraryItemDTO(library resource.Resource, item resource.LibraryItem) Librar
 	for key, value := range item.Fields {
 		fields[key] = value
 	}
-	return LibraryItemDTO{ID: item.ID, SiteID: item.SiteID, LibraryID: item.LibraryID, TemplateCode: item.Template, Title: item.Title, Slug: item.Slug, Annotation: item.Annotation, ContentType: item.ContentType, Content: item.Content, IsPublic: item.IsPublic, IsSearchable: item.IsSearchable, PublishedAt: item.PublishedAt, UnpublishedAt: item.UnpublishedAt, Deleted: item.DeletedAt != nil, DeletedAt: item.DeletedAt, Fields: fields, Widgets: resourceWidgets(item.Widgets), EffectiveURL: url}
+	return LibraryItemDTO{ID: item.ID, Version: item.Version, SiteID: item.SiteID, LibraryID: item.LibraryID, TemplateCode: item.Template, Title: item.Title, Slug: item.Slug, Annotation: item.Annotation, ContentType: item.ContentType, Content: item.Content, IsPublic: item.IsPublic, IsSearchable: item.IsSearchable, PublishedAt: item.PublishedAt, UnpublishedAt: item.UnpublishedAt, Deleted: item.DeletedAt != nil, DeletedAt: item.DeletedAt, Fields: fields, Widgets: resourceWidgets(item.Widgets), EffectiveURL: url}
 }
 
 func (m *Resources) CreateResourceWidget(
@@ -1246,7 +1350,13 @@ func (m *Resources) CreateResourceWidget(
 	if err != nil {
 		return ResourceWidget{}, validationError(err)
 	}
-	return resourceWidgets([]widget.Binding{created})[0], nil
+	result := resourceWidgets([]widget.Binding{created})[0]
+	current, loadErr := m.resourceEntity(ctx, actor, resourceID)
+	if loadErr != nil {
+		return ResourceWidget{}, loadErr
+	}
+	result.ResourceVersion = current.Version
+	return result, nil
 }
 
 func (m *Resources) UpdateResourceWidget(
@@ -1270,7 +1380,13 @@ func (m *Resources) UpdateResourceWidget(
 		}
 		return ResourceWidget{}, validationError(err)
 	}
-	return resourceWidgets([]widget.Binding{updated})[0], nil
+	result := resourceWidgets([]widget.Binding{updated})[0]
+	current, loadErr := m.resourceEntity(ctx, actor, resourceID)
+	if loadErr != nil {
+		return ResourceWidget{}, loadErr
+	}
+	result.ResourceVersion = current.Version
+	return result, nil
 }
 
 func (m *Resources) DeleteResourceWidget(
@@ -1279,6 +1395,7 @@ func (m *Resources) DeleteResourceWidget(
 	siteID site.ID,
 	resourceID resource.ID,
 	bindingID widget.BindingID,
+	expectedVersion int64,
 ) error {
 	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission, SiteAccessEdit); err != nil {
 		return err
@@ -1286,7 +1403,7 @@ func (m *Resources) DeleteResourceWidget(
 	if err := m.requireResourceSite(ctx, actor, siteID, resourceID); err != nil {
 		return err
 	}
-	return m.resources.DeleteWidget(ctx, actor, resourceID, bindingID)
+	return m.resources.DeleteWidget(ctx, actor, resourceID, bindingID, expectedVersion)
 }
 
 func (m *Resources) ReorderResourceWidgets(
@@ -1294,6 +1411,7 @@ func (m *Resources) ReorderResourceWidgets(
 	actor security.Actor,
 	siteID site.ID,
 	resourceID resource.ID,
+	expectedVersion int64,
 	order []widget.Order,
 ) ([]ResourceWidget, error) {
 	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission, SiteAccessEdit); err != nil {
@@ -1302,7 +1420,7 @@ func (m *Resources) ReorderResourceWidgets(
 	if err := m.requireResourceSite(ctx, actor, siteID, resourceID); err != nil {
 		return nil, err
 	}
-	updated, err := m.resources.ReorderWidgets(ctx, actor, resourceID, order)
+	updated, err := m.resources.ReorderWidgets(ctx, actor, resourceID, expectedVersion, order)
 	if err != nil {
 		return nil, validationError(err)
 	}
@@ -1339,7 +1457,7 @@ func (m *Resources) resourceEntity(
 		return resource.Resource{}, err
 	}
 	return resource.Resource{
-		ID: item.ID, SiteID: item.SiteID, Type: resourcetype.Page,
+		ID: item.ID, SiteID: item.SiteID, Version: item.Version, Type: resourcetype.Page,
 		Template: item.Template, ContentType: item.ContentType,
 		Title: item.Title, Slug: item.Slug, Annotation: item.Annotation,
 		Content: item.Content, ImageMediaID: item.ImageMediaID,
@@ -1359,6 +1477,7 @@ func (m *Resources) MoveResource(
 	resourceID resource.ID,
 	parentID *resource.ID,
 	position int,
+	expectedVersion int64,
 ) (ResourceDTO, error) {
 	if err := m.requireSite(ctx, actor, siteID, ResourceUpdatePermission, SiteAccessEdit); err != nil {
 		return ResourceDTO{}, err
@@ -1379,7 +1498,7 @@ func (m *Resources) MoveResource(
 			return ResourceDTO{}, resource.ErrInvalidTree
 		}
 	}
-	updated, err := m.resources.Move(ctx, actor, resourceID, parentID, position)
+	updated, err := m.resources.Move(ctx, actor, resourceID, parentID, position, expectedVersion)
 	if err != nil {
 		return ResourceDTO{}, err
 	}
@@ -1761,6 +1880,7 @@ func treeItem(runtime *site.Runtime, item resource.Child, canCreate bool) Resour
 	}
 	return ResourceTreeItem{
 		ID:             item.ID,
+		Version:        item.Version,
 		ParentID:       item.ParentID,
 		TemplateCode:   item.Template,
 		Icon:           icon,
@@ -1797,6 +1917,7 @@ func resourceDTO(item resource.Resource) ResourceDTO {
 	return ResourceDTO{
 		ID:            item.ID,
 		SiteID:        item.SiteID,
+		Version:       item.Version,
 		ParentID:      item.ParentID,
 		Type:          item.Type,
 		TemplateCode:  item.Template,

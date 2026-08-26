@@ -193,7 +193,7 @@ type memoryLibraryRepository struct {
 	nextID ID
 }
 
-func (r *memoryLibraryRepository) CreateLibraryItem(_ context.Context, _ *security.UserID, item LibraryItem) (LibraryItem, error) {
+func (r *memoryLibraryRepository) CreateLibraryItem(_ context.Context, _ *security.UserID, item LibraryItem, _ bool) (LibraryItem, error) {
 	if r.items == nil {
 		r.items = map[ID]LibraryItem{}
 	}
@@ -205,6 +205,7 @@ func (r *memoryLibraryRepository) CreateLibraryItem(_ context.Context, _ *securi
 	r.nextID++
 	item.CreatedAt = time.Now().UTC()
 	item.UpdatedAt = item.CreatedAt
+	item.Version = 1
 	r.items[item.ID] = cloneLibraryItem(item)
 	return cloneLibraryItem(item), nil
 }
@@ -217,11 +218,12 @@ func (r *memoryLibraryRepository) LibraryItemByID(_ context.Context, id ID) (Lib
 	return cloneLibraryItem(item), nil
 }
 
-func (r *memoryLibraryRepository) UpdateLibraryItem(_ context.Context, _ *security.UserID, _ LibraryItem, item LibraryItem) (LibraryItem, error) {
+func (r *memoryLibraryRepository) UpdateLibraryItem(_ context.Context, _ *security.UserID, current LibraryItem, item LibraryItem, _ bool) (LibraryItem, error) {
 	if _, exists := r.items[item.ID]; !exists {
 		return LibraryItem{}, ErrNotFound
 	}
 	item.UpdatedAt = time.Now().UTC()
+	item.Version = current.Version + 1
 	r.items[item.ID] = cloneLibraryItem(item)
 	return cloneLibraryItem(item), nil
 }
@@ -255,12 +257,16 @@ func (r *memoryLibraryRepository) DeleteLibraryItem(_ context.Context, id ID) er
 	return nil
 }
 
-func (r *memoryLibraryRepository) MoveLibraryItem(_ context.Context, _ *security.UserID, id, libraryID ID) (LibraryItem, error) {
+func (r *memoryLibraryRepository) MoveLibraryItem(_ context.Context, _ *security.UserID, id, libraryID ID, expectedVersion int64, _ bool) (LibraryItem, error) {
 	item, exists := r.items[id]
 	if !exists {
 		return LibraryItem{}, ErrNotFound
 	}
+	if item.Version != expectedVersion {
+		return LibraryItem{}, ErrConflict
+	}
 	item.LibraryID = libraryID
+	item.Version++
 	r.items[id] = item
 	return cloneLibraryItem(item), nil
 }
@@ -286,7 +292,7 @@ func newMemoryRepository() *memoryRepository {
 	}
 }
 
-func (r *memoryRepository) CreateWidget(_ context.Context, id ID, binding widget.Binding) (widget.Binding, error) {
+func (r *memoryRepository) CreateWidget(_ context.Context, _ *security.UserID, id ID, _ int64, binding widget.Binding, _ bool) (widget.Binding, error) {
 	item, exists := r.items[id]
 	if !exists {
 		return widget.Binding{}, ErrNotFound
@@ -299,7 +305,7 @@ func (r *memoryRepository) CreateWidget(_ context.Context, id ID, binding widget
 	return widget.CloneBinding(binding), nil
 }
 
-func (r *memoryRepository) UpdateWidget(_ context.Context, id ID, binding widget.Binding) (widget.Binding, error) {
+func (r *memoryRepository) UpdateWidget(_ context.Context, _ *security.UserID, id ID, _ int64, binding widget.Binding, _ bool) (widget.Binding, error) {
 	item, exists := r.items[id]
 	if !exists {
 		return widget.Binding{}, ErrNotFound
@@ -314,7 +320,7 @@ func (r *memoryRepository) UpdateWidget(_ context.Context, id ID, binding widget
 	return widget.Binding{}, ErrNotFound
 }
 
-func (r *memoryRepository) DeleteWidget(_ context.Context, id ID, bindingID widget.BindingID) error {
+func (r *memoryRepository) DeleteWidget(_ context.Context, _ *security.UserID, id ID, _ int64, bindingID widget.BindingID, _ bool) error {
 	item, exists := r.items[id]
 	if !exists {
 		return ErrNotFound
@@ -341,7 +347,7 @@ func (r *memoryRepository) DeleteWidget(_ context.Context, id ID, bindingID widg
 	return nil
 }
 
-func (r *memoryRepository) ReorderWidgets(_ context.Context, id ID, order []widget.Order) ([]widget.Binding, error) {
+func (r *memoryRepository) ReorderWidgets(_ context.Context, _ *security.UserID, id ID, _ int64, order []widget.Order, _ bool) ([]widget.Binding, error) {
 	item, exists := r.items[id]
 	if !exists {
 		return nil, ErrNotFound
@@ -400,6 +406,7 @@ func (r *memoryRepository) Create(
 	now := time.Now().UTC()
 	item.CreatedAt = now
 	item.UpdatedAt = now
+	item.Version = 1
 
 	candidate := cloneResourceMap(r.items)
 	candidate[item.ID] = item
@@ -467,6 +474,9 @@ func (r *memoryRepository) Update(
 	if !exists {
 		return Resource{}, ErrNotFound
 	}
+	if current.Version != expected.Version {
+		return Resource{}, ErrConflict
+	}
 	if current.ImageMediaID == nil != (expected.ImageMediaID == nil) ||
 		current.ImageMediaID != nil &&
 			expected.ImageMediaID != nil &&
@@ -489,6 +499,7 @@ func (r *memoryRepository) Update(
 		}
 	}
 	item = Clone(item)
+	item.Version = current.Version + 1
 	item.CreatedAt = current.CreatedAt
 	item.UpdatedAt = time.Now().UTC()
 
@@ -949,7 +960,7 @@ func TestServiceKeepsLibraryTypeImmutableBothDirections(t *testing.T) {
 	}
 
 	_, err = service.Update(ctx, security.System(), UpdateInput{
-		ID: library.ID, ParentID: library.ParentID, Type: resourcetype.Page,
+		ID: library.ID, ExpectedVersion: library.Version, ParentID: library.ParentID, Type: resourcetype.Page,
 		Title: library.Title, Slug: library.Slug, IsPublic: library.IsPublic,
 		IsSearchable: library.IsSearchable, InMenu: library.InMenu,
 		InSitemap: library.InSitemap, Fields: library.Fields,
@@ -958,7 +969,7 @@ func TestServiceKeepsLibraryTypeImmutableBothDirections(t *testing.T) {
 		t.Fatalf("library to page error = %v", err)
 	}
 	_, err = service.Update(ctx, security.System(), UpdateInput{
-		ID: home.ID, Type: resourcetype.Library, Title: home.Title,
+		ID: home.ID, ExpectedVersion: home.Version, Type: resourcetype.Library, Title: home.Title,
 		IsPublic: home.IsPublic, IsSearchable: home.IsSearchable,
 		InMenu: home.InMenu, InSitemap: home.InSitemap,
 		TypeSettings: map[string]any{"item_url_pattern": "/{slug}"},
@@ -1008,7 +1019,7 @@ func TestLibraryServiceCopiesDefaultTemplateOnlyAtCreation(t *testing.T) {
 	}
 
 	_, err = common.Update(ctx, security.System(), UpdateInput{
-		ID: library.ID, ParentID: library.ParentID, Type: resourcetype.Library,
+		ID: library.ID, ExpectedVersion: library.Version, ParentID: library.ParentID, Type: resourcetype.Library,
 		Title: library.Title, Slug: library.Slug, IsPublic: library.IsPublic,
 		IsSearchable: library.IsSearchable, InMenu: library.InMenu,
 		InSitemap: library.InSitemap, Fields: library.Fields,
@@ -1047,14 +1058,16 @@ func TestServiceWidgetBindingsKeepIdentityAcrossReorderAndMove(t *testing.T) {
 	}
 	enabled := true
 	first, err := service.CreateWidget(ctx, security.System(), created.ID, CreateWidgetInput{
-		Code: "test_summary", Area: widget.AreaBody, Columns: 12, Enabled: &enabled,
+		ExpectedVersion: created.Version,
+		Code:            "test_summary", Area: widget.AreaBody, Columns: 12, Enabled: &enabled,
 		Params: map[string]any{"title": "Primary", "limit": json.Number("3")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	second, err := service.CreateWidget(ctx, security.System(), created.ID, CreateWidgetInput{
-		Code: "test_summary", Area: widget.AreaBody, Columns: 6, Enabled: &enabled,
+		ExpectedVersion: created.Version,
+		Code:            "test_summary", Area: widget.AreaBody, Columns: 6, Enabled: &enabled,
 		Params: map[string]any{"title": "Secondary"},
 	})
 	if err != nil {
@@ -1064,12 +1077,13 @@ func TestServiceWidgetBindingsKeepIdentityAcrossReorderAndMove(t *testing.T) {
 		t.Fatalf("bindings = %#v / %#v", first, second)
 	}
 	updated, err := service.UpdateWidget(ctx, security.System(), created.ID, first.ID, UpdateWidgetInput{
-		Columns: 8, Enabled: &enabled, Params: map[string]any{"title": "Updated"},
+		ExpectedVersion: created.Version,
+		Columns:         8, Enabled: &enabled, Params: map[string]any{"title": "Updated"},
 	})
 	if err != nil || updated.ID != first.ID || updated.Params["title"] != "Updated" {
 		t.Fatalf("updated = %#v, %v", updated, err)
 	}
-	ordered, err := service.ReorderWidgets(ctx, security.System(), created.ID, []widget.Order{
+	ordered, err := service.ReorderWidgets(ctx, security.System(), created.ID, created.Version, []widget.Order{
 		{ID: second.ID, Area: widget.AreaBody, Position: 0},
 		{ID: first.ID, Area: widget.AreaSidebar, Position: 0},
 	})
@@ -1083,7 +1097,7 @@ func TestServiceWidgetBindingsKeepIdentityAcrossReorderAndMove(t *testing.T) {
 	if err != nil || stored.Widgets[1].ID != first.ID {
 		t.Fatalf("stored = %#v, %v", stored.Widgets, err)
 	}
-	if err := service.DeleteWidget(ctx, security.System(), created.ID, second.ID); err != nil {
+	if err := service.DeleteWidget(ctx, security.System(), created.ID, second.ID, created.Version); err != nil {
 		t.Fatal(err)
 	}
 	stored, _ = service.Get(ctx, security.System(), created.ID)
@@ -1269,17 +1283,18 @@ func TestServiceUpdateMovesSubtreeAndBuildsSortedTree(t *testing.T) {
 	}
 
 	child, err = service.Update(context.Background(), security.System(), UpdateInput{
-		ID:           child.ID,
-		ParentID:     &second.ID,
-		Type:         resourcetype.Page,
-		Template:     &templateCode,
-		ContentType:  testStringPointer("html"),
-		Title:        "Moved child",
-		Slug:         "renamed",
-		IsPublic:     true,
-		IsSearchable: true,
-		InMenu:       true,
-		InSitemap:    true,
+		ID:              child.ID,
+		ExpectedVersion: child.Version,
+		ParentID:        &second.ID,
+		Type:            resourcetype.Page,
+		Template:        &templateCode,
+		ContentType:     testStringPointer("html"),
+		Title:           "Moved child",
+		Slug:            "renamed",
+		IsPublic:        true,
+		IsSearchable:    true,
+		InMenu:          true,
+		InSitemap:       true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1312,16 +1327,17 @@ func TestServiceUpdateMovesSubtreeAndBuildsSortedTree(t *testing.T) {
 	}
 
 	_, err = service.Update(context.Background(), security.System(), UpdateInput{
-		ID:           second.ID,
-		ParentID:     &grandchild.ID,
-		Type:         resourcetype.Page,
-		Template:     &templateCode,
-		Title:        "Cycle",
-		Slug:         "second",
-		IsPublic:     true,
-		IsSearchable: true,
-		InMenu:       true,
-		InSitemap:    true,
+		ID:              second.ID,
+		ExpectedVersion: second.Version,
+		ParentID:        &grandchild.ID,
+		Type:            resourcetype.Page,
+		Template:        &templateCode,
+		Title:           "Cycle",
+		Slug:            "second",
+		IsPublic:        true,
+		IsSearchable:    true,
+		InMenu:          true,
+		InSitemap:       true,
 	})
 	if !errors.Is(err, ErrInvalidTree) {
 		t.Fatalf("cycle error = %v", err)
@@ -1359,15 +1375,16 @@ func TestServiceUpdateFullyReplacesStateAndRejectsNoPathAncestor(
 
 	externalURL := "/new-target"
 	page, err = service.Update(context.Background(), security.System(), UpdateInput{
-		ID:           page.ID,
-		Type:         resourcetype.Link,
-		Title:        "Link now",
-		Slug:         "page",
-		ExternalURL:  &externalURL,
-		IsPublic:     false,
-		IsSearchable: false,
-		InMenu:       false,
-		InSitemap:    false,
+		ID:              page.ID,
+		ExpectedVersion: page.Version,
+		Type:            resourcetype.Link,
+		Title:           "Link now",
+		Slug:            "page",
+		ExternalURL:     &externalURL,
+		IsPublic:        false,
+		IsSearchable:    false,
+		InMenu:          false,
+		InSitemap:       false,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1384,14 +1401,15 @@ func TestServiceUpdateFullyReplacesStateAndRejectsNoPathAncestor(
 	}
 
 	_, err = service.Update(context.Background(), security.System(), UpdateInput{
-		ID:           page.ID,
-		Type:         "no_path",
-		Title:        "Container",
-		Slug:         "page",
-		IsPublic:     true,
-		IsSearchable: true,
-		InMenu:       true,
-		InSitemap:    true,
+		ID:              page.ID,
+		ExpectedVersion: page.Version,
+		Type:            "no_path",
+		Title:           "Container",
+		Slug:            "page",
+		IsPublic:        true,
+		IsSearchable:    true,
+		InMenu:          true,
+		InSitemap:       true,
 	})
 	if err == nil ||
 		!strings.Contains(err.Error(), "route descendants") {
@@ -1812,6 +1830,7 @@ func addResolvedMedia(
 func updateInputFrom(item Resource) UpdateInput {
 	return UpdateInput{
 		ID:               item.ID,
+		ExpectedVersion:  item.Version,
 		ParentID:         cloneID(item.ParentID),
 		Type:             item.Type,
 		Template:         cloneTemplateCode(item.Template),

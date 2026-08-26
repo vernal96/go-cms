@@ -8,12 +8,23 @@ import (
 	"github.com/jackc/pgx/v5"
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
+	"github.com/vernal96/go-cms/kernel/modules/core/group"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type Repository struct {
 	connector *connectorpostgres.Connector
+}
+
+func (r *Repository) IsAdministrator(ctx context.Context, userID security.UserID) (bool, error) {
+	var allowed bool
+	err := r.connector.Pool().QueryRow(ctx, `
+SELECT EXISTS (
+ SELECT 1 FROM core.user_groups ug JOIN core.groups g ON g.id=ug.group_id
+ WHERE ug.user_id=$1 AND g.code=$2
+);`, userID, group.AdminCode).Scan(&allowed)
+	return allowed, err
 }
 
 func NewRepository(

@@ -127,7 +127,7 @@ func writeManagementError(response http.ResponseWriter, err error) {
 		httptransport.WriteJSONError(response, http.StatusForbidden, "forbidden", "operation is forbidden")
 	case errors.Is(err, access.ErrNotPrivileged):
 		httptransport.WriteJSONError(response, http.StatusForbidden, "forbidden", "privileged access is required")
-	case errors.Is(err, site.ErrNotFound), errors.Is(err, resource.ErrNotFound), errors.Is(err, user.ErrNotFound), errors.Is(err, group.ErrNotFound), errors.Is(err, file.ErrNotFound), errors.Is(err, file.ErrFolderNotFound), errors.Is(err, file.ErrStorageNotFound):
+	case errors.Is(err, site.ErrNotFound), errors.Is(err, resource.ErrNotFound), errors.Is(err, resource.ErrRevisionNotFound), errors.Is(err, user.ErrNotFound), errors.Is(err, group.ErrNotFound), errors.Is(err, file.ErrNotFound), errors.Is(err, file.ErrFolderNotFound), errors.Is(err, file.ErrStorageNotFound):
 		httptransport.WriteJSONError(response, http.StatusNotFound, "not_found", "requested object was not found")
 	case errors.Is(err, site.ErrConflict), errors.Is(err, resource.ErrConflict), errors.Is(err, user.ErrConflict), errors.Is(err, group.ErrConflict), errors.Is(err, file.ErrConflict):
 		httptransport.WriteJSONError(response, http.StatusConflict, "conflict", "object conflicts with existing data")

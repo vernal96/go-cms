@@ -535,6 +535,10 @@ RETURNING
 	result.Fields = cloneFieldMap(item.Fields)
 	result.FieldValues = append([]field.StoredValue(nil), item.FieldValues...)
 	result.FileReferences = cloneFileReferences(item.FileReferences)
+	result.Version = 1
+	if err := r.appendRevision(ctx, transaction, result, resource.RevisionCreated, nil, actorID); err != nil {
+		return resource.Resource{}, err
+	}
 
 	if err := transaction.Commit(ctx); err != nil {
 		return resource.Resource{}, translateError(err)
@@ -583,6 +587,9 @@ WHERE id = $1;
 	}
 	if err := loadResourceFields(ctx, r.connector.Pool(), items); err != nil {
 		return resource.Resource{}, err
+	}
+	if err := r.connector.Pool().QueryRow(ctx, `SELECT version FROM core.resource_entities WHERE id=$1;`, id).Scan(&items[0].Version); err != nil {
+		return resource.Resource{}, translateError(err)
 	}
 
 	return items[0], nil
@@ -707,6 +714,7 @@ WITH valid_parent AS (
 ), children AS (
 SELECT
     current.id,
+	entity.version,
     current.site_id,
     current.parent_id,
     current.type,
@@ -724,13 +732,16 @@ SELECT
           AND child.parent_id = current.id
     ) AS has_children,
     current.sort
-FROM core.resources current, valid_parent
+FROM core.resources current
+JOIN core.resource_entities entity ON entity.id = current.id,
+valid_parent
 WHERE current.site_id = $1
   AND current.parent_id IS NOT DISTINCT FROM $2::bigint
 )
 SELECT
     EXISTS (SELECT 1 FROM valid_parent) AS parent_exists,
     children.id,
+	children.version,
     children.site_id,
     children.parent_id,
     children.type,
@@ -756,6 +767,7 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 		var (
 			parentExists     bool
 			rawID            *int64
+			rawVersion       *int64
 			rawSiteID        *int64
 			rawParent        *int64
 			rawType          *string
@@ -772,6 +784,7 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 		if err := rows.Scan(
 			&parentExists,
 			&rawID,
+			&rawVersion,
 			&rawSiteID,
 			&rawParent,
 			&rawType,
@@ -795,6 +808,7 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 		}
 		item := resource.Child{
 			ID:            resource.ID(*rawID),
+			Version:       *rawVersion,
 			SiteID:        site.ID(*rawSiteID),
 			Type:          resourcetype.Code(*rawType),
 			Title:         *rawTitle,
@@ -931,6 +945,9 @@ func (r *Repository) Update(
 	if current.ID != item.ID {
 		return resource.Resource{}, resource.ErrInvalidReference
 	}
+	if current.Version <= 0 {
+		return resource.Resource{}, resource.ErrConflict
+	}
 	if _, err := transaction.Exec(ctx, `LOCK TABLE core.resources IN SHARE ROW EXCLUSIVE MODE;`); err != nil {
 		return resource.Resource{}, fmt.Errorf("lock resources for update: %w", err)
 	}
@@ -975,6 +992,14 @@ FOR UPDATE;
 	}
 	if currentSiteID != item.SiteID {
 		return resource.Resource{}, resource.ErrInvalidReference
+	}
+	if err := transaction.QueryRow(ctx, `
+UPDATE core.resource_entities SET version=version+1
+WHERE id=$1 AND version=$2
+RETURNING version;`, item.ID, current.Version).Scan(&item.Version); errors.Is(err, pgx.ErrNoRows) {
+		return resource.Resource{}, resource.ErrConflict
+	} else if err != nil {
+		return resource.Resource{}, translateError(err)
 	}
 	if !equalMediaID(current.ImageMediaID, currentImageMediaID) {
 		return resource.Resource{}, resource.ErrConflict
@@ -1183,6 +1208,10 @@ WHERE item.id = tree.id
 	updated.Fields = cloneFieldMap(item.Fields)
 	updated.FieldValues = append([]field.StoredValue(nil), item.FieldValues...)
 	updated.FileReferences = cloneFileReferences(item.FileReferences)
+	updated.Version = item.Version
+	if err := r.appendRevision(ctx, transaction, updated, resource.RevisionUpdated, nil, actorID); err != nil {
+		return resource.Resource{}, err
+	}
 
 	if !sameMediaID(current.ImageMediaID, item.ImageMediaID) &&
 		current.ImageMediaID != nil {
@@ -1580,8 +1609,11 @@ type rowQueryer interface {
 
 func (r *Repository) CreateWidget(
 	ctx context.Context,
+	actorID *security.UserID,
 	resourceID resource.ID,
+	expectedVersion int64,
 	binding widget.Binding,
+	recordRevision bool,
 ) (widget.Binding, error) {
 	if ctx == nil || resourceID <= 0 {
 		return widget.Binding{}, errors.New("resource widget create input is invalid")
@@ -1595,7 +1627,8 @@ func (r *Repository) CreateWidget(
 		return widget.Binding{}, translateError(err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	if err := lockWidgetResource(ctx, tx, resourceID); err != nil {
+	version, err := lockWidgetResource(ctx, tx, resourceID, expectedVersion)
+	if err != nil {
 		return widget.Binding{}, err
 	}
 	var count int
@@ -1619,6 +1652,11 @@ RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bot
 	if err := touchWidgetResource(ctx, tx, resourceID); err != nil {
 		return widget.Binding{}, err
 	}
+	if recordRevision {
+		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
+			return widget.Binding{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return widget.Binding{}, translateError(err)
 	}
@@ -1627,8 +1665,11 @@ RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bot
 
 func (r *Repository) UpdateWidget(
 	ctx context.Context,
+	actorID *security.UserID,
 	resourceID resource.ID,
+	expectedVersion int64,
 	binding widget.Binding,
+	recordRevision bool,
 ) (widget.Binding, error) {
 	if ctx == nil || resourceID <= 0 || binding.ID <= 0 {
 		return widget.Binding{}, errors.New("resource widget update input is invalid")
@@ -1642,7 +1683,8 @@ func (r *Repository) UpdateWidget(
 		return widget.Binding{}, translateError(err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	if err := lockWidgetResource(ctx, tx, resourceID); err != nil {
+	version, err := lockWidgetResource(ctx, tx, resourceID, expectedVersion)
+	if err != nil {
 		return widget.Binding{}, err
 	}
 	updated, err := scanWidget(tx.QueryRow(ctx, `
@@ -1660,6 +1702,11 @@ RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bot
 	if err := touchWidgetResource(ctx, tx, resourceID); err != nil {
 		return widget.Binding{}, err
 	}
+	if recordRevision {
+		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
+			return widget.Binding{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return widget.Binding{}, translateError(err)
 	}
@@ -1668,8 +1715,11 @@ RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bot
 
 func (r *Repository) DeleteWidget(
 	ctx context.Context,
+	actorID *security.UserID,
 	resourceID resource.ID,
+	expectedVersion int64,
 	bindingID widget.BindingID,
+	recordRevision bool,
 ) error {
 	if ctx == nil || resourceID <= 0 || bindingID <= 0 {
 		return errors.New("resource widget delete input is invalid")
@@ -1679,7 +1729,8 @@ func (r *Repository) DeleteWidget(
 		return translateError(err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	if err := lockWidgetResource(ctx, tx, resourceID); err != nil {
+	version, err := lockWidgetResource(ctx, tx, resourceID, expectedVersion)
+	if err != nil {
 		return err
 	}
 	var area widget.AreaCode
@@ -1703,13 +1754,21 @@ func (r *Repository) DeleteWidget(
 	if err := touchWidgetResource(ctx, tx, resourceID); err != nil {
 		return err
 	}
+	if recordRevision {
+		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
+			return err
+		}
+	}
 	return translateError(tx.Commit(ctx))
 }
 
 func (r *Repository) ReorderWidgets(
 	ctx context.Context,
+	actorID *security.UserID,
 	resourceID resource.ID,
+	expectedVersion int64,
 	order []widget.Order,
+	recordRevision bool,
 ) ([]widget.Binding, error) {
 	if ctx == nil || resourceID <= 0 {
 		return nil, errors.New("resource widget reorder input is invalid")
@@ -1719,7 +1778,8 @@ func (r *Repository) ReorderWidgets(
 		return nil, translateError(err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	if err := lockWidgetResource(ctx, tx, resourceID); err != nil {
+	version, err := lockWidgetResource(ctx, tx, resourceID, expectedVersion)
+	if err != nil {
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `SELECT id FROM core.resource_widgets WHERE resource_id = $1 FOR UPDATE;`, resourceID)
@@ -1792,18 +1852,25 @@ func (r *Repository) ReorderWidgets(
 	if err := touchWidgetResource(ctx, tx, resourceID); err != nil {
 		return nil, err
 	}
+	if recordRevision {
+		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, translateError(err)
 	}
 	return loaded[0].Widgets, nil
 }
 
-func lockWidgetResource(ctx context.Context, tx pgx.Tx, resourceID resource.ID) error {
-	var id resource.ID
-	if err := tx.QueryRow(ctx, `SELECT id FROM core.resource_entities WHERE id = $1 FOR UPDATE;`, resourceID).Scan(&id); err != nil {
-		return translateError(err)
+func lockWidgetResource(ctx context.Context, tx pgx.Tx, resourceID resource.ID, expectedVersion int64) (int64, error) {
+	var version int64
+	if err := tx.QueryRow(ctx, `UPDATE core.resource_entities SET version=version+1 WHERE id=$1 AND version=$2 RETURNING version;`, resourceID, expectedVersion).Scan(&version); errors.Is(err, pgx.ErrNoRows) {
+		return 0, resource.ErrConflict
+	} else if err != nil {
+		return 0, translateError(err)
 	}
-	return nil
+	return version, nil
 }
 
 func touchWidgetResource(ctx context.Context, tx pgx.Tx, resourceID resource.ID) error {

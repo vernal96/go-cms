@@ -32,6 +32,7 @@ func (testAccess) IsPrivileged(
 ) (bool, error) {
 	return true, nil
 }
+func (testAccess) IsAdministrator(context.Context, security.Actor) (bool, error) { return true, nil }
 func (testAccess) IsGuestSubject(
 	context.Context,
 	security.Actor,

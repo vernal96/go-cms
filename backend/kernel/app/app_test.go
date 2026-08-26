@@ -855,6 +855,7 @@ func (r *appResourceRepository) Create(
 
 	item = resource.Clone(item)
 	item.ID = r.nextID
+	item.Version = 1
 	r.nextID++
 	r.items[item.ID] = item
 	return resource.Clone(item), nil
@@ -947,7 +948,7 @@ func (r *appResourceRepository) ListChildren(
 			continue
 		}
 		result = append(result, resource.Child{
-			ID: item.ID, SiteID: item.SiteID, ParentID: item.ParentID,
+			ID: item.ID, Version: item.Version, SiteID: item.SiteID, ParentID: item.ParentID,
 			Type: item.Type, Template: item.Template, Title: item.Title, MenuTitle: item.MenuTitle,
 		})
 	}
@@ -957,7 +958,7 @@ func (r *appResourceRepository) ListChildren(
 func (r *appResourceRepository) Update(
 	_ context.Context,
 	_ *security.UserID,
-	_ resource.Resource,
+	current resource.Resource,
 	item resource.Resource,
 	_ resource.ValidateImageMedia,
 ) (resource.Resource, error) {
@@ -967,6 +968,7 @@ func (r *appResourceRepository) Update(
 	if _, exists := r.items[item.ID]; !exists {
 		return resource.Resource{}, resource.ErrNotFound
 	}
+	item.Version = current.Version + 1
 	r.items[item.ID] = resource.Clone(item)
 	return resource.Clone(item), nil
 }
@@ -1740,7 +1742,7 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 	if moduleBuilds.Load() != 2 {
 		t.Fatalf("module Build calls = %d", moduleBuilds.Load())
 	}
-	if codes := application.Authorization().Codes(); len(codes) != 28 {
+	if codes := application.Authorization().Codes(); len(codes) != 30 {
 		t.Fatalf("permission catalog = %#v", codes)
 	}
 	if selected != logsFeature {
@@ -2076,14 +2078,15 @@ func TestAppResourceServices(t *testing.T) {
 		ctx,
 		security.System(),
 		resource.UpdateInput{
-			ID:           created.ID,
-			Type:         resourcetype.Page,
-			Template:     &templateCode,
-			Title:        "Updated home",
-			IsPublic:     true,
-			IsSearchable: true,
-			InMenu:       true,
-			InSitemap:    true,
+			ID:              created.ID,
+			ExpectedVersion: created.Version,
+			Type:            resourcetype.Page,
+			Template:        &templateCode,
+			Title:           "Updated home",
+			IsPublic:        true,
+			IsSearchable:    true,
+			InMenu:          true,
+			InSitemap:       true,
 		},
 	)
 	if err != nil {
@@ -2212,10 +2215,11 @@ func TestAppResourceWriteInvalidatesSiteRuntimeRepositoryCache(t *testing.T) {
 		ctx,
 		security.System(),
 		resource.UpdateInput{
-			ID:       created.ID,
-			Type:     created.Type,
-			Template: created.Template,
-			Title:    "After",
+			ID:              created.ID,
+			ExpectedVersion: created.Version,
+			Type:            created.Type,
+			Template:        created.Template,
+			Title:           "After",
 		},
 	)
 	if err != nil {

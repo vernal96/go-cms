@@ -23,6 +23,7 @@ import (
 type Services struct {
 	Sites         *site.Catalog
 	Resources     *resource.Service
+	Revisions     *resource.RevisionService
 	LibraryItems  *resource.LibraryService
 	Files         file.ManagementService
 	Media         media.Service
@@ -31,6 +32,7 @@ type Services struct {
 	Authorization access.Service
 
 	database    Database
+	revisions   resource.RevisionRepository
 	cachePolicy *repositoryCachePolicy
 }
 
@@ -48,6 +50,10 @@ func NewServices(
 		return nil, err
 	}
 	database = coherent
+	revisionRepository, ok := database.Resources().(resource.RevisionRepository)
+	if !ok {
+		return nil, errors.New("core resource revision repository is unavailable")
+	}
 	if permissions == nil {
 		return nil, errors.New("core permission catalog is nil")
 	}
@@ -114,6 +120,7 @@ func NewServices(
 		Groups:        groups,
 		Authorization: authorization,
 		database:      database,
+		revisions:     revisionRepository,
 		cachePolicy:   coherent.policy,
 	}, nil
 }
@@ -170,9 +177,14 @@ func (s *Services) BuildContent(
 	if err != nil {
 		return err
 	}
+	revisions, err := resource.NewRevisionService(s.revisions, resources, libraryItems, s.Authorization)
+	if err != nil {
+		return err
+	}
 
 	s.Sites = catalog
 	s.Resources = resources
+	s.Revisions = revisions
 	s.LibraryItems = libraryItems
 	return nil
 }

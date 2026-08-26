@@ -12,11 +12,14 @@ import (
 )
 
 type NavigationScope string
+type NavigationVisibility string
 
 const (
 	NavigationGlobal NavigationScope = "global"
 	NavigationSite   NavigationScope = "site"
 )
+
+const NavigationAdministrator NavigationVisibility = "administrator"
 
 var semanticCodePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
 
@@ -29,6 +32,7 @@ type NavigationItem struct {
 	Icon       string
 	Order      int
 	Permission permission.Code
+	Visibility NavigationVisibility
 	Scope      NavigationScope
 	Children   []NavigationItem
 }
@@ -153,6 +157,9 @@ func compileItem(
 				)
 			}
 		}
+	}
+	if item.Visibility != "" && item.Visibility != NavigationAdministrator {
+		return NavigationItem{}, fmt.Errorf("item %q has invalid visibility %q", item.Code, item.Visibility)
 	}
 
 	if len(item.Children) == 0 {

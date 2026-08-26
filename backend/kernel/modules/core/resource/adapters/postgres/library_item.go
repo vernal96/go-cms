@@ -31,7 +31,7 @@ type libraryRowQueryer interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
-func (r *Repository) CreateLibraryItem(ctx context.Context, actorID *security.UserID, item resource.LibraryItem) (_ resource.LibraryItem, resultErr error) {
+func (r *Repository) CreateLibraryItem(ctx context.Context, actorID *security.UserID, item resource.LibraryItem, recordRevision bool) (_ resource.LibraryItem, resultErr error) {
 	if ctx == nil {
 		return resource.LibraryItem{}, errors.New("create library item context is nil")
 	}
@@ -84,6 +84,12 @@ RETURNING `+libraryItemColumns+`;`, item.ID, item.SiteID, item.LibraryID, partit
 	}
 	stored.Fields, stored.FieldValues, stored.FileReferences = item.Fields, item.FieldValues, item.FileReferences
 	stored.Widgets = widget.CloneBindings(item.Widgets)
+	stored.Version = 1
+	if recordRevision {
+		if err := r.appendLibraryItemRevision(ctx, tx, stored, resource.RevisionCreated, nil, actorID); err != nil {
+			return resource.LibraryItem{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return resource.LibraryItem{}, translateError(err)
 	}
@@ -121,10 +127,13 @@ WHERE route.resource_id = $1`+suffix+`;`, id))
 	if err != nil {
 		return resource.LibraryItem{}, fmt.Errorf("query library item %d: %w", id, err)
 	}
+	if err := queryer.QueryRow(ctx, `SELECT version FROM core.resource_entities WHERE id=$1;`, id).Scan(&item.Version); err != nil {
+		return resource.LibraryItem{}, translateError(err)
+	}
 	return item, nil
 }
 
-func (r *Repository) UpdateLibraryItem(ctx context.Context, actorID *security.UserID, current, item resource.LibraryItem) (_ resource.LibraryItem, resultErr error) {
+func (r *Repository) UpdateLibraryItem(ctx context.Context, actorID *security.UserID, current, item resource.LibraryItem, recordRevision bool) (_ resource.LibraryItem, resultErr error) {
 	tx, err := r.connector.Pool().Begin(ctx)
 	if err != nil {
 		return resource.LibraryItem{}, err
@@ -137,6 +146,15 @@ func (r *Repository) UpdateLibraryItem(ctx context.Context, actorID *security.Us
 	locked, err := r.libraryItemByID(ctx, tx, current.ID, true)
 	if err != nil {
 		return resource.LibraryItem{}, err
+	}
+	if current.Version <= 0 || locked.Version != current.Version {
+		return resource.LibraryItem{}, resource.ErrConflict
+	}
+	var nextVersion int64
+	if err := tx.QueryRow(ctx, `UPDATE core.resource_entities SET version=version+1 WHERE id=$1 AND version=$2 RETURNING version;`, item.ID, current.Version).Scan(&nextVersion); errors.Is(err, pgx.ErrNoRows) {
+		return resource.LibraryItem{}, resource.ErrConflict
+	} else if err != nil {
+		return resource.LibraryItem{}, translateError(err)
 	}
 	if item.ImageMediaID != nil || locked.ImageMediaID != nil {
 		ids := make([]media.ID, 0, 2)
@@ -184,6 +202,12 @@ RETURNING `+libraryItemColumns+`;`, item.ID, partitionAt, item.Template, item.Co
 	}
 	updated.Fields, updated.FieldValues, updated.FileReferences = item.Fields, item.FieldValues, item.FileReferences
 	updated.Widgets = widget.CloneBindings(item.Widgets)
+	updated.Version = nextVersion
+	if recordRevision {
+		if err := r.appendLibraryItemRevision(ctx, tx, updated, resource.RevisionUpdated, nil, actorID); err != nil {
+			return resource.LibraryItem{}, err
+		}
+	}
 	if !sameMediaID(locked.ImageMediaID, item.ImageMediaID) && locked.ImageMediaID != nil {
 		if _, err := tx.Exec(ctx, `DELETE FROM core.media WHERE id=$1;`, *locked.ImageMediaID); err != nil {
 			return resource.LibraryItem{}, translateError(err)
@@ -250,7 +274,7 @@ func (r *Repository) DeleteLibraryItem(ctx context.Context, id resource.ID) erro
 	return tx.Commit(ctx)
 }
 
-func (r *Repository) MoveLibraryItem(ctx context.Context, actorID *security.UserID, id, targetLibraryID resource.ID) (_ resource.LibraryItem, resultErr error) {
+func (r *Repository) MoveLibraryItem(ctx context.Context, actorID *security.UserID, id, targetLibraryID resource.ID, expectedVersion int64, recordRevision bool) (_ resource.LibraryItem, resultErr error) {
 	tx, err := r.connector.Pool().Begin(ctx)
 	if err != nil {
 		return resource.LibraryItem{}, err
@@ -264,6 +288,14 @@ func (r *Repository) MoveLibraryItem(ctx context.Context, actorID *security.User
 	if err != nil {
 		return resource.LibraryItem{}, err
 	}
+	if item.Version != expectedVersion {
+		return resource.LibraryItem{}, resource.ErrConflict
+	}
+	if err := tx.QueryRow(ctx, `UPDATE core.resource_entities SET version=version+1 WHERE id=$1 AND version=$2 RETURNING version;`, id, expectedVersion).Scan(&item.Version); errors.Is(err, pgx.ErrNoRows) {
+		return resource.LibraryItem{}, resource.ErrConflict
+	} else if err != nil {
+		return resource.LibraryItem{}, translateError(err)
+	}
 	if err := ensureLibraryTarget(ctx, tx, item.SiteID, targetLibraryID); err != nil {
 		return resource.LibraryItem{}, err
 	}
@@ -273,6 +305,15 @@ func (r *Repository) MoveLibraryItem(ctx context.Context, actorID *security.User
 	moved, err := scanLibraryItem(tx.QueryRow(ctx, `UPDATE core.library_items AS item SET library_id=$2, updated_at=now(), updated_by=$3 WHERE id=$1 AND library_id=$4 RETURNING `+libraryItemColumns+`;`, id, targetLibraryID, actorID, item.LibraryID))
 	if err != nil {
 		return resource.LibraryItem{}, translateError(err)
+	}
+	moved.Version = item.Version
+	if recordRevision {
+		if err := r.loadLibraryItemFields(ctx, tx, &moved); err != nil {
+			return resource.LibraryItem{}, err
+		}
+		if err := r.appendLibraryItemRevision(ctx, tx, moved, resource.RevisionUpdated, nil, actorID); err != nil {
+			return resource.LibraryItem{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return resource.LibraryItem{}, translateError(err)

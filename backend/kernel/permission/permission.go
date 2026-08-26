@@ -26,7 +26,8 @@ var (
 )
 
 type Entity struct {
-	Code string
+	Code    string
+	Actions []Action
 }
 
 type Definition struct {
@@ -98,7 +99,19 @@ func Definitions(
 		}
 		used[entity.Code] = struct{}{}
 
-		for _, action := range actions {
+		entityActions := entity.Actions
+		if len(entityActions) == 0 {
+			entityActions = actions
+		}
+		actionUsed := make(map[Action]struct{}, len(entityActions))
+		for _, action := range entityActions {
+			if !validAction(action) {
+				return nil, fmt.Errorf("permission entity %q has invalid action %q", entity.Code, action)
+			}
+			if _, exists := actionUsed[action]; exists {
+				return nil, fmt.Errorf("permission entity %q action %q is duplicated", entity.Code, action)
+			}
+			actionUsed[action] = struct{}{}
 			code, err := NewCode(module, entity.Code, action)
 			if err != nil {
 				return nil, err

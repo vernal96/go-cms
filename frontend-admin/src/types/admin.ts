@@ -205,7 +205,8 @@ export interface DashboardResponse {
 }
 
 export interface ResourceTreeItem {
-  id: number
+	id: number
+	version: number
   parent_id: number | null
   template_code: string | null
   icon: string
@@ -285,7 +286,8 @@ export interface ResourceWidget {
   margin_top: number
   margin_bottom: number
   enabled: boolean
-  params: Record<string, unknown>
+	params: Record<string, unknown>
+	resource_version?: number
 }
 
 export interface ResourceExtensionMetadata {
@@ -337,8 +339,9 @@ export interface ResourceCreatePayload {
 }
 
 export interface Resource {
-  id: number
-  site_id: number
+	id: number
+	site_id: number
+	version: number
   parent_id: number | null
   type: ResourceTypeCode
   template_code: string | null
@@ -365,8 +368,8 @@ export interface Resource {
 }
 
 export interface ResourceDetailsResponse {
-  resource: Resource
-  permissions: { update: boolean; delete: boolean; restore: boolean }
+	resource: Resource
+	permissions: { update: boolean; delete: boolean; restore: boolean; history_read: boolean; history_delete: boolean }
 }
 
 export interface ResourceOption {
@@ -387,6 +390,7 @@ export interface ResourceLookupResponse {
 }
 
 export interface ResourceUpdatePayload {
+	expected_version: number
   parent_id: number | null
   type: ResourceTypeCode
   template_code: string | null
@@ -408,8 +412,23 @@ export interface ResourceUpdatePayload {
   type_settings: Record<string, unknown>
 }
 
+export interface ResourceRevision {
+	id: number
+	resource_id: number
+	site_id: number
+	version: number
+	kind: 'created' | 'updated' | 'restored'
+	source_version?: number
+	created_at: string
+	created_by?: number
+	created_by_name: string
+	snapshot?: Record<string, unknown>
+}
+export interface ResourceRevisionPage { items: ResourceRevision[]; page: number; per_page: number; total: number }
+
 export interface LibraryItem {
-  id: number
+	id: number
+	version: number
   site_id: number
   library_id: number
   template_code: string | null
@@ -428,9 +447,10 @@ export interface LibraryItem {
   widgets: ResourceWidget[]
   effective_url: string
 }
-export interface LibraryItemDetailsResponse { item: LibraryItem; permissions: { update: boolean; delete: boolean; restore: boolean } }
+export interface LibraryItemDetailsResponse { item: LibraryItem; permissions: { update: boolean; delete: boolean; restore: boolean; history_read: boolean; history_delete: boolean } }
 export interface LibraryItemsResponse { items: LibraryItem[]; next_cursor: string }
 export interface LibraryItemPayload {
+	expected_version?: number
   template_code: string | null
   title: string
   slug: string

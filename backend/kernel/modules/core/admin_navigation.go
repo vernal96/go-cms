@@ -26,6 +26,11 @@ func (Module) AdminNavigation() []adminui.NavigationItem {
 			Scope:      adminui.NavigationGlobal,
 		},
 		{
+			Code: "administration", Label: "Администрирование", Route: "core.administration",
+			Icon: "administration", Order: 900, Scope: adminui.NavigationGlobal,
+			Visibility: adminui.NavigationAdministrator,
+		},
+		{
 			Code:  "identity",
 			Label: "Пользователи",
 			Icon:  "users",

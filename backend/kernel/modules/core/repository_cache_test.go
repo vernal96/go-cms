@@ -267,7 +267,7 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 	store.invalidated = nil
 	changedWidget := updated.Widgets[0]
 	changedWidget.Presentation.Columns = 8
-	if _, err := repository.UpdateWidget(context.Background(), updated.ID, changedWidget); err != nil {
+	if _, err := repository.UpdateWidget(context.Background(), nil, updated.ID, updated.Version, changedWidget, true); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(store.invalidated, []cache.Tag{siteResourcesTag(4), resourceTag(7)}) {
@@ -692,12 +692,12 @@ func (r *resourceRepositoryStub) Delete(
 	return r.deleteErr
 }
 
-func (r *resourceRepositoryStub) CreateWidget(_ context.Context, _ resource.ID, binding widget.Binding) (widget.Binding, error) {
+func (r *resourceRepositoryStub) CreateWidget(_ context.Context, _ *security.UserID, _ resource.ID, _ int64, binding widget.Binding, _ bool) (widget.Binding, error) {
 	r.item.Widgets = append(r.item.Widgets, binding)
 	return binding, nil
 }
 
-func (r *resourceRepositoryStub) UpdateWidget(_ context.Context, _ resource.ID, binding widget.Binding) (widget.Binding, error) {
+func (r *resourceRepositoryStub) UpdateWidget(_ context.Context, _ *security.UserID, _ resource.ID, _ int64, binding widget.Binding, _ bool) (widget.Binding, error) {
 	for index := range r.item.Widgets {
 		if r.item.Widgets[index].ID == binding.ID {
 			r.item.Widgets[index] = binding
@@ -707,7 +707,7 @@ func (r *resourceRepositoryStub) UpdateWidget(_ context.Context, _ resource.ID, 
 	return widget.Binding{}, resource.ErrNotFound
 }
 
-func (r *resourceRepositoryStub) DeleteWidget(_ context.Context, _ resource.ID, bindingID widget.BindingID) error {
+func (r *resourceRepositoryStub) DeleteWidget(_ context.Context, _ *security.UserID, _ resource.ID, _ int64, bindingID widget.BindingID, _ bool) error {
 	for index, binding := range r.item.Widgets {
 		if binding.ID == bindingID {
 			r.item.Widgets = append(r.item.Widgets[:index], r.item.Widgets[index+1:]...)
@@ -717,7 +717,7 @@ func (r *resourceRepositoryStub) DeleteWidget(_ context.Context, _ resource.ID, 
 	return resource.ErrNotFound
 }
 
-func (r *resourceRepositoryStub) ReorderWidgets(_ context.Context, _ resource.ID, order []widget.Order) ([]widget.Binding, error) {
+func (r *resourceRepositoryStub) ReorderWidgets(_ context.Context, _ *security.UserID, _ resource.ID, _ int64, order []widget.Order, _ bool) ([]widget.Binding, error) {
 	for index := range r.item.Widgets {
 		for _, item := range order {
 			if r.item.Widgets[index].ID == item.ID {

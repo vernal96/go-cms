@@ -45,10 +45,15 @@ type Repository interface {
 	RevokeGuest(context.Context, permission.Code) error
 }
 
+type AdministratorRepository interface {
+	IsAdministrator(context.Context, security.UserID) (bool, error)
+}
+
 type Service interface {
 	security.Authorizer
 	Codes() []permission.Code
 	IsPrivileged(context.Context, security.Actor) (bool, error)
+	IsAdministrator(context.Context, security.Actor) (bool, error)
 	IsGuestSubject(context.Context, security.Actor) (bool, error)
 	GuestPermissions(context.Context, security.Actor) ([]Grant, error)
 	GrantGuest(

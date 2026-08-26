@@ -64,7 +64,7 @@ const loadNode: LoadFunction = async (node, resolve) => {
 
 function errorNode(parentId: number): TreeNodeData {
   return {
-    id: -parentId, parent_id: parentId, template_code: null, icon: 'document',
+		id: -parentId, version: 0, parent_id: parentId, template_code: null, icon: 'document',
     title: 'Не удалось загрузить дочерние ресурсы', menu_title: '',
     display_title: 'Не удалось загрузить дочерние ресурсы', sort: 0,
     deleted: false, published: false, deleted_at: null, has_children: false, can_create_child: false,
@@ -245,7 +245,7 @@ async function handleDrop(dragging: Node, drop: Node, type: 'before' | 'after' |
   moving.value = true
   try {
     await adminRequest(`/api/sites/${siteId.value}/resources/${source.id}/move`, props.accessToken, {
-      method: 'POST', body: JSON.stringify({ parent_id: parentId, position }),
+      method: 'POST', body: JSON.stringify({ parent_id: parentId, position, expected_version: source.version }),
     })
     ElMessage.success('Ресурс перемещён')
     notifyChanged()

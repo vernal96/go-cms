@@ -1,4 +1,4 @@
-import { FolderOpened, OfficeBuilding, UserFilled } from '@element-plus/icons-vue'
+import { FolderOpened, OfficeBuilding, Tools, UserFilled } from '@element-plus/icons-vue'
 
 import FilesystemView from '../views/FilesystemView.vue'
 import GroupFormView from '../views/GroupFormView.vue'
@@ -10,6 +10,7 @@ import SiteEditView from '../views/SiteEditView.vue'
 import SitesListView from '../views/SitesListView.vue'
 import UserFormView from '../views/UserFormView.vue'
 import UsersListView from '../views/UsersListView.vue'
+import AdministrationView from '../views/AdministrationView.vue'
 import type { AdminPlugin } from './plugin'
 
 export const coreAdminPlugin: AdminPlugin = {
@@ -17,7 +18,8 @@ export const coreAdminPlugin: AdminPlugin = {
   icons: {
     sites: OfficeBuilding,
     files: FolderOpened,
-    users: UserFilled,
+		users: UserFilled,
+		administration: Tools,
   },
   routes: [
     { name: 'core.files', path: '/admin/files', component: FilesystemView },
@@ -32,6 +34,7 @@ export const coreAdminPlugin: AdminPlugin = {
     { name: 'core.users.edit', path: '/admin/users/:userId/edit', component: UserFormView },
     { name: 'core.groups', path: '/admin/groups', component: GroupsListView },
     { name: 'core.groups.create', path: '/admin/groups/create', component: GroupFormView },
-    { name: 'core.groups.edit', path: '/admin/groups/:groupId/edit', component: GroupFormView },
+		{ name: 'core.groups.edit', path: '/admin/groups/:groupId/edit', component: GroupFormView },
+		{ name: 'core.administration', path: '/admin/administration', component: AdministrationView },
   ],
 }

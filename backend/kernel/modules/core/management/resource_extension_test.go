@@ -182,21 +182,29 @@ func (*extensionTestResources) Delete(context.Context, resource.ID) error {
 }
 func (r *extensionTestResources) CreateWidget(
 	_ context.Context,
+	_ *security.UserID,
 	_ resource.ID,
+	_ int64,
 	binding widget.Binding,
+	_ bool,
 ) (widget.Binding, error) {
 	binding.ID = widget.BindingID(len(r.item.Widgets) + 1)
 	r.item.Widgets = append(r.item.Widgets, widget.CloneBinding(binding))
+	r.item.Version++
 	return widget.CloneBinding(binding), nil
 }
 func (r *extensionTestResources) UpdateWidget(
 	_ context.Context,
+	_ *security.UserID,
 	_ resource.ID,
+	_ int64,
 	binding widget.Binding,
+	_ bool,
 ) (widget.Binding, error) {
 	for index := range r.item.Widgets {
 		if r.item.Widgets[index].ID == binding.ID {
 			r.item.Widgets[index] = widget.CloneBinding(binding)
+			r.item.Version++
 			return widget.CloneBinding(binding), nil
 		}
 	}
@@ -204,8 +212,11 @@ func (r *extensionTestResources) UpdateWidget(
 }
 func (r *extensionTestResources) DeleteWidget(
 	_ context.Context,
+	_ *security.UserID,
 	_ resource.ID,
+	_ int64,
 	bindingID widget.BindingID,
+	_ bool,
 ) error {
 	for index, binding := range r.item.Widgets {
 		if binding.ID != bindingID {
@@ -214,6 +225,7 @@ func (r *extensionTestResources) DeleteWidget(
 		area := binding.Area
 		position := binding.Position
 		r.item.Widgets = append(r.item.Widgets[:index], r.item.Widgets[index+1:]...)
+		r.item.Version++
 		for itemIndex := range r.item.Widgets {
 			if r.item.Widgets[itemIndex].Area == area && r.item.Widgets[itemIndex].Position > position {
 				r.item.Widgets[itemIndex].Position--
@@ -225,8 +237,11 @@ func (r *extensionTestResources) DeleteWidget(
 }
 func (r *extensionTestResources) ReorderWidgets(
 	_ context.Context,
+	_ *security.UserID,
 	_ resource.ID,
+	_ int64,
 	order []widget.Order,
+	_ bool,
 ) ([]widget.Binding, error) {
 	byID := make(map[widget.BindingID]widget.Binding, len(r.item.Widgets))
 	for _, binding := range r.item.Widgets {
@@ -243,6 +258,7 @@ func (r *extensionTestResources) ReorderWidgets(
 		result = append(result, binding)
 	}
 	r.item.Widgets = widget.CloneBindings(result)
+	r.item.Version++
 	return widget.CloneBindings(result), nil
 }
 func (r *extensionTestResources) ExistsInSite(

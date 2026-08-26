@@ -27,6 +27,7 @@ import RichTextEditor from '../components/RichTextEditor.vue'
 import ResourceExtensionEditor from '../components/resource-extensions/ResourceExtensionEditor.vue'
 import ResourceWidgetsEditor from '../components/resource-widgets/ResourceWidgetsEditor.vue'
 import LibraryItemsTab from '../components/LibraryItemsTab.vue'
+import ResourceHistoryTab from '../components/ResourceHistoryTab.vue'
 import {
   createFieldValues,
   fieldErrorMessage,
@@ -69,6 +70,9 @@ const serverFieldErrors = ref<FieldValidationError[]>([])
 const localFieldErrors = ref<DynamicFieldErrors>({})
 const resourceWidgets = ref<ResourceWidget[]>([])
 const resourcePath = ref<string | null>(null)
+const resourceVersion = ref(0)
+const canReadHistory = ref(false)
+const canDeleteHistory = ref(false)
 const siteDomain = ref('')
 const noTemplateValue = null as unknown as string
 
@@ -149,9 +153,12 @@ async function load(): Promise<void> {
     options.value = loadedOptions.items
     canUpdate.value = details.permissions.update
     canDelete.value = details.permissions.delete
-    canRestore.value = details.permissions.restore
+		canRestore.value = details.permissions.restore
+		canReadHistory.value = details.permissions.history_read
+		canDeleteHistory.value = details.permissions.history_delete
     const item = details.resource
-    resourcePath.value = item.path
+		resourcePath.value = item.path
+		resourceVersion.value = item.version
     siteDomain.value = loadedSite.site.domain
     deleted.value = item.deleted
     deletedAt.value = item.deleted_at
@@ -289,7 +296,8 @@ async function submit(): Promise<void> {
     return
   }
 
-  const payload: ResourceUpdatePayload = {
+	const payload: ResourceUpdatePayload = {
+		expected_version: resourceVersion.value,
     parent_id: form.parent_id,
     type: form.type,
     template_code: supportsTemplate.value ? form.template_code : null,
@@ -317,7 +325,8 @@ async function submit(): Promise<void> {
       props.accessToken,
       { method: 'PATCH', body: JSON.stringify(payload) },
     )
-    form.slug = response.resource.slug
+		form.slug = response.resource.slug
+		resourceVersion.value = response.resource.version
     form.position = response.resource.sort + 1
     form.fields = createFieldValues(fields, response.resource.fields)
     document.title = `${response.resource.title} — Админка`
@@ -468,7 +477,9 @@ watch(() => [route.params.siteId, route.params.resourceId], () => void load())
             :resource-id="resourceId"
               :template="selectedTemplate!"
             :definitions="metadata.widgets"
-            :can-update="canUpdate && !deleted"
+			:can-update="canUpdate && !deleted"
+			:resource-version="resourceVersion"
+			@changed="load"
             @unauthorized="emit('unauthorized')"
           />
         </el-tab-pane>
@@ -515,9 +526,13 @@ watch(() => [route.params.siteId, route.params.resourceId], () => void load())
           </div>
         </el-tab-pane>
 
-        <el-tab-pane v-if="ownsLibraryItems" label="Ресурсы" name="library-items">
+		<el-tab-pane v-if="ownsLibraryItems" label="Ресурсы" name="library-items">
           <library-items-tab :access-token="accessToken" :site-id="siteId" :library-id="resourceId" />
-        </el-tab-pane>
+		</el-tab-pane>
+
+		<el-tab-pane v-if="canReadHistory" label="История" name="history">
+			<resource-history-tab :access-token="accessToken" :site-id="siteId" :resource-id="resourceId" :resource-version="resourceVersion" :can-restore="canUpdate && !deleted" :can-delete="canDeleteHistory" @changed="load" @unauthorized="emit('unauthorized')" />
+		</el-tab-pane>
 
 			<el-tab-pane
 				v-for="extension in applicableExtensions"

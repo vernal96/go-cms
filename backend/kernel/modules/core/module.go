@@ -35,6 +35,7 @@ const defaultRepositoryCacheTTL = 5 * time.Minute
 type Config struct {
 	RepositoryCacheTTL time.Duration
 	ResourcePreview    resource.PreviewPolicy
+	ResourceRevisions  *resource.RevisionPolicy
 }
 
 type RepositoryCacheDescriptor struct {
@@ -92,6 +93,7 @@ func (Module) Registry() kernel.ModuleRegistry {
 		PermissionEntities: []permission.Entity{
 			{Code: "site"},
 			{Code: "resource"},
+			{Code: "resource_history", Actions: []permission.Action{permission.Read, permission.Delete}},
 			{Code: "file"},
 			{Code: "media"},
 			{Code: "user"},
@@ -151,6 +153,10 @@ func (m Module) Build(
 	if config.RepositoryCacheTTL < 0 {
 		return nil, errors.New("core repository cache TTL is invalid")
 	}
+	revisionPolicy := resource.DefaultRevisionPolicy()
+	if config.ResourceRevisions != nil {
+		revisionPolicy = *config.ResourceRevisions
+	}
 
 	var descriptor *RepositoryCacheDescriptor
 	var durableStore cache.Store
@@ -184,6 +190,7 @@ func (m Module) Build(
 		services:        m.services,
 		authorization:   m.services.Authorization,
 		resourcePreview: config.ResourcePreview,
+		revisionPolicy:  revisionPolicy,
 		logger:          ctx.Logger(),
 	}
 	if err := buildWidgets(runtime, durableStore, ctx.Registry().ResourceTypes(), ctx.Profile().Templates); err != nil {
@@ -198,8 +205,18 @@ type Runtime struct {
 	services        *Services
 	authorization   security.Authorizer
 	resourcePreview resource.PreviewPolicy
+	revisionPolicy  resource.RevisionPolicy
 	logger          *slog.Logger
 	widgets         []widget.Widget
+}
+
+// ResourceRevisionPolicy exposes the profile's semantic history policy without
+// leaking persistence details into resource services.
+func (r *Runtime) ResourceRevisionPolicy() resource.RevisionPolicy {
+	if r == nil {
+		return resource.DefaultRevisionPolicy()
+	}
+	return r.revisionPolicy
 }
 
 func (r *Runtime) ModuleCode() kernel.ModuleCode {

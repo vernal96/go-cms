@@ -256,6 +256,9 @@ func (s *Service) Update(
 	if input.ID <= 0 {
 		return Resource{}, errors.New("resource id is invalid")
 	}
+	if input.ExpectedVersion <= 0 {
+		return Resource{}, fmt.Errorf("%w: expected resource version is required", ErrInvalid)
+	}
 	if input.Type == "" {
 		return Resource{}, errors.New("resource type is empty")
 	}
@@ -267,6 +270,9 @@ func (s *Service) Update(
 			input.ID,
 			err,
 		)
+	}
+	if current.Version != input.ExpectedVersion {
+		return Resource{}, ErrConflict
 	}
 	current, err = s.validateStored(ctx, current)
 	if err != nil {
@@ -294,6 +300,7 @@ func (s *Service) Update(
 	item := Resource{
 		ID:               current.ID,
 		SiteID:           current.SiteID,
+		Version:          current.Version,
 		ParentID:         cloneID(input.ParentID),
 		Type:             input.Type,
 		Template:         cloneTemplateCode(input.Template),
@@ -431,7 +438,7 @@ func (s *Service) DeletePermanent(ctx context.Context, actor security.Actor, id 
 	return nil
 }
 
-func (s *Service) Move(ctx context.Context, actor security.Actor, id ID, parentID *ID, position int) (Resource, error) {
+func (s *Service) Move(ctx context.Context, actor security.Actor, id ID, parentID *ID, position int, expectedVersion int64) (Resource, error) {
 	if position < 0 {
 		return Resource{}, fmt.Errorf("%w: resource position is invalid", ErrInvalid)
 	}
@@ -439,11 +446,14 @@ func (s *Service) Move(ctx context.Context, actor security.Actor, id ID, parentI
 	if err != nil {
 		return Resource{}, err
 	}
+	if expectedVersion <= 0 || current.Version != expectedVersion {
+		return Resource{}, ErrConflict
+	}
 	if current.DeletedAt != nil {
 		return Resource{}, ErrInvalidTree
 	}
 	return s.Update(ctx, actor, UpdateInput{
-		ID: current.ID, ParentID: parentID, Type: current.Type, Template: current.Template,
+		ID: current.ID, ExpectedVersion: expectedVersion, ParentID: parentID, Type: current.Type, Template: current.Template,
 		ContentType: current.ContentType, Title: current.Title, MenuTitle: current.MenuTitle,
 		Slug: current.Slug, Annotation: current.Annotation, Content: current.Content,
 		ImageMediaID: current.ImageMediaID, TargetResourceID: current.TargetResourceID,
@@ -460,7 +470,7 @@ func (s *Service) CreateWidget(
 	resourceID ID,
 	input CreateWidgetInput,
 ) (widget.Binding, error) {
-	current, profileRuntime, templateRuntime, err := s.widgetMutationContext(ctx, actor, resourceID)
+	current, profileRuntime, templateRuntime, recordRevision, err := s.widgetMutationContext(ctx, actor, resourceID)
 	if err != nil {
 		return widget.Binding{}, err
 	}
@@ -492,10 +502,13 @@ func (s *Service) CreateWidget(
 			position++
 		}
 	}
-	created, err := s.widgets.CreateWidget(ctx, resourceID, widget.Binding{
+	if input.ExpectedVersion != current.Version {
+		return widget.Binding{}, ErrConflict
+	}
+	created, err := s.widgets.CreateWidget(ctx, actor.AuditUserID(), resourceID, input.ExpectedVersion, widget.Binding{
 		Code: input.Code, Area: input.Area, Position: position,
 		Presentation: presentation, Params: params,
-	})
+	}, recordRevision)
 	if err != nil {
 		return widget.Binding{}, fmt.Errorf("create resource %d widget: %w", resourceID, err)
 	}
@@ -509,7 +522,7 @@ func (s *Service) UpdateWidget(
 	bindingID widget.BindingID,
 	input UpdateWidgetInput,
 ) (widget.Binding, error) {
-	current, profileRuntime, _, err := s.widgetMutationContext(ctx, actor, resourceID)
+	current, profileRuntime, _, recordRevision, err := s.widgetMutationContext(ctx, actor, resourceID)
 	if err != nil {
 		return widget.Binding{}, err
 	}
@@ -536,7 +549,10 @@ func (s *Service) UpdateWidget(
 	if _, err := runtime.New(binding.Params); err != nil {
 		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	updated, err := s.widgets.UpdateWidget(ctx, resourceID, binding)
+	if input.ExpectedVersion != current.Version {
+		return widget.Binding{}, ErrConflict
+	}
+	updated, err := s.widgets.UpdateWidget(ctx, actor.AuditUserID(), resourceID, input.ExpectedVersion, binding, recordRevision)
 	if err != nil {
 		return widget.Binding{}, fmt.Errorf("update resource %d widget %d: %w", resourceID, bindingID, err)
 	}
@@ -548,15 +564,19 @@ func (s *Service) DeleteWidget(
 	actor security.Actor,
 	resourceID ID,
 	bindingID widget.BindingID,
+	expectedVersion int64,
 ) error {
-	current, _, _, err := s.widgetMutationContext(ctx, actor, resourceID)
+	current, _, _, recordRevision, err := s.widgetMutationContext(ctx, actor, resourceID)
 	if err != nil {
 		return err
 	}
 	if _, exists := findWidget(current.Widgets, bindingID); !exists {
 		return ErrNotFound
 	}
-	if err := s.widgets.DeleteWidget(ctx, resourceID, bindingID); err != nil {
+	if expectedVersion != current.Version {
+		return ErrConflict
+	}
+	if err := s.widgets.DeleteWidget(ctx, actor.AuditUserID(), resourceID, expectedVersion, bindingID, recordRevision); err != nil {
 		return fmt.Errorf("delete resource %d widget %d: %w", resourceID, bindingID, err)
 	}
 	return nil
@@ -566,14 +586,18 @@ func (s *Service) ReorderWidgets(
 	ctx context.Context,
 	actor security.Actor,
 	resourceID ID,
+	expectedVersion int64,
 	order []widget.Order,
 ) ([]widget.Binding, error) {
-	current, _, templateRuntime, err := s.widgetMutationContext(ctx, actor, resourceID)
+	current, _, templateRuntime, recordRevision, err := s.widgetMutationContext(ctx, actor, resourceID)
 	if err != nil {
 		return nil, err
 	}
 	if len(order) != len(current.Widgets) {
 		return nil, fmt.Errorf("%w: widget order must contain every binding", ErrInvalid)
+	}
+	if expectedVersion != current.Version {
+		return nil, ErrConflict
 	}
 	known := make(map[widget.BindingID]struct{}, len(current.Widgets))
 	for _, binding := range current.Widgets {
@@ -597,7 +621,7 @@ func (s *Service) ReorderWidgets(
 		}
 		positions[item.Area]++
 	}
-	updated, err := s.widgets.ReorderWidgets(ctx, resourceID, order)
+	updated, err := s.widgets.ReorderWidgets(ctx, actor.AuditUserID(), resourceID, expectedVersion, order, recordRevision)
 	if err != nil {
 		return nil, fmt.Errorf("reorder resource %d widgets: %w", resourceID, err)
 	}
@@ -612,29 +636,29 @@ func (s *Service) widgetMutationContext(
 	Widget(widget.Code) (*widget.Runtime, bool)
 }, interface {
 	AllowsResourceArea(widget.AreaCode) bool
-}, error) {
+}, bool, error) {
 	if err := validateContext(ctx, "resource widget mutation"); err != nil {
-		return Resource{}, nil, nil, err
+		return Resource{}, nil, nil, false, err
 	}
 	if err := s.authorizer.Check(ctx, actor, updatePermission); err != nil {
-		return Resource{}, nil, nil, err
+		return Resource{}, nil, nil, false, err
 	}
 	if resourceID <= 0 {
-		return Resource{}, nil, nil, errors.New("resource id is invalid")
+		return Resource{}, nil, nil, false, errors.New("resource id is invalid")
 	}
 	stored, err := s.repository.ByID(ctx, resourceID)
 	libraryItemProjection := false
 	if errors.Is(err, ErrNotFound) {
 		libraryRepository, ok := s.repository.(LibraryItemRepository)
 		if !ok {
-			return Resource{}, nil, nil, fmt.Errorf("get resource %d for widget mutation: %w", resourceID, err)
+			return Resource{}, nil, nil, false, fmt.Errorf("get resource %d for widget mutation: %w", resourceID, err)
 		}
 		libraryItem, itemErr := libraryRepository.LibraryItemByID(ctx, resourceID)
 		if itemErr != nil {
-			return Resource{}, nil, nil, fmt.Errorf("get resource %d for widget mutation: %w", resourceID, itemErr)
+			return Resource{}, nil, nil, false, fmt.Errorf("get resource %d for widget mutation: %w", resourceID, itemErr)
 		}
 		stored = Resource{
-			ID: libraryItem.ID, SiteID: libraryItem.SiteID, Type: resourcetype.Page,
+			ID: libraryItem.ID, SiteID: libraryItem.SiteID, Version: libraryItem.Version, Type: resourcetype.Page,
 			Template: libraryItem.Template, ContentType: libraryItem.ContentType,
 			Title: libraryItem.Title, Slug: libraryItem.Slug,
 			Annotation: libraryItem.Annotation, Content: libraryItem.Content,
@@ -650,24 +674,28 @@ func (s *Service) widgetMutationContext(
 		err = nil
 	}
 	if err != nil {
-		return Resource{}, nil, nil, fmt.Errorf("get resource %d for widget mutation: %w", resourceID, err)
+		return Resource{}, nil, nil, false, fmt.Errorf("get resource %d for widget mutation: %w", resourceID, err)
 	}
 	current := stored
 	if !libraryItemProjection {
 		current, err = s.validateStored(ctx, stored)
 		if err != nil {
-			return Resource{}, nil, nil, err
+			return Resource{}, nil, nil, false, err
 		}
 	}
 	siteRuntime, exists := s.sites.RuntimeByID(current.SiteID)
 	if !exists || current.Template == nil {
-		return Resource{}, nil, nil, fmt.Errorf("%w: resource template does not support widgets", ErrInvalid)
+		return Resource{}, nil, nil, false, fmt.Errorf("%w: resource template does not support widgets", ErrInvalid)
 	}
 	templateRuntime, exists := siteRuntime.Profile().Template(*current.Template)
 	if !exists || !templateRuntime.SupportsResourceWidgets() {
-		return Resource{}, nil, nil, fmt.Errorf("%w: resource template does not support widgets", ErrInvalid)
+		return Resource{}, nil, nil, false, fmt.Errorf("%w: resource template does not support widgets", ErrInvalid)
 	}
-	return current, siteRuntime.Profile(), templateRuntime, nil
+	recordRevision := true
+	if libraryItemProjection {
+		recordRevision = revisionPolicyFor(siteRuntime).LibraryItems
+	}
+	return current, siteRuntime.Profile(), templateRuntime, recordRevision, nil
 }
 
 func findWidget(bindings []widget.Binding, id widget.BindingID) (widget.Binding, bool) {

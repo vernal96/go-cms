@@ -27,6 +27,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
+	"github.com/vernal96/go-cms/kernel/security"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
@@ -79,10 +80,12 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 30 {
+	if len(entries) != 32 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	expected := map[string]bool{
+		"000016_resource_revisions.up.sql":                   false,
+		"000016_resource_revisions.down.sql":                 false,
 		"000005_identity.up.sql":                             false,
 		"000005_identity.down.sql":                           false,
 		"000006_permissions.up.sql":                          false,
@@ -205,7 +208,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 15 || !hasVersion || dirty {
+	if version != 16 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,
@@ -713,7 +716,11 @@ WHERE id = $1;
 	templateCode := template.Code("article")
 	contentType := "html"
 	rootPath := "/"
-	root, err := resourceRepository.Create(ctx, nil, resource.Resource{
+	var adminID security.UserID
+	if err := connector.Pool().QueryRow(ctx, `SELECT id FROM core.users WHERE login='admin';`).Scan(&adminID); err != nil {
+		t.Fatalf("load revision author: %v", err)
+	}
+	root, err := resourceRepository.Create(ctx, &adminID, resource.Resource{
 		SiteID:       siteIDs["localhost"],
 		Type:         resourcetype.Page,
 		Template:     &templateCode,
@@ -731,22 +738,30 @@ WHERE id = $1;
 	if err != nil {
 		t.Fatalf("create root resource: %v", err)
 	}
+	revisionRepository, ok := resourceRepository.(resource.RevisionRepository)
+	if !ok {
+		t.Fatal("resource revision repository is unavailable")
+	}
+	rootHistory, err := revisionRepository.ListRevisions(ctx, root.SiteID, root.ID, 1, 20)
+	if err != nil || root.Version != 1 || rootHistory.Total != 1 || rootHistory.Items[0].Kind != resource.RevisionCreated {
+		t.Fatalf("created resource history = %#v, resource = %#v, err = %v", rootHistory, root, err)
+	}
 	widgetRepository, ok := resourceRepository.(resource.WidgetRepository)
 	if !ok {
 		t.Fatal("resource widget repository is unavailable")
 	}
 	presentation := widget.DefaultPresentation()
-	firstWidget, err := widgetRepository.CreateWidget(ctx, root.ID, widget.Binding{
+	firstWidget, err := widgetRepository.CreateWidget(ctx, &adminID, root.ID, 1, widget.Binding{
 		Code: "content_summary", Area: widget.AreaBody, Position: 0,
 		Presentation: presentation, Params: map[string]any{"title": "Primary"},
-	})
+	}, true)
 	if err != nil {
 		t.Fatalf("create first root widget: %v", err)
 	}
-	secondWidget, err := widgetRepository.CreateWidget(ctx, root.ID, widget.Binding{
+	secondWidget, err := widgetRepository.CreateWidget(ctx, &adminID, root.ID, 2, widget.Binding{
 		Code: "content_summary", Area: widget.AreaBody, Position: 1,
 		Presentation: presentation, Params: map[string]any{"title": "Secondary"},
-	})
+	}, true)
 	if err != nil || firstWidget.ID <= 0 || secondWidget.ID <= 0 {
 		t.Fatalf("created root widgets = %#v / %#v, %v", firstWidget, secondWidget, err)
 	}
@@ -755,14 +770,32 @@ WHERE id = $1;
 		loadedRoot.Widgets[0].Code != "content_summary" {
 		t.Fatalf("loaded root widgets = %#v, %v", loadedRoot.Widgets, err)
 	}
-	reordered, err := widgetRepository.ReorderWidgets(ctx, root.ID, []widget.Order{
+	reordered, err := widgetRepository.ReorderWidgets(ctx, &adminID, root.ID, 3, []widget.Order{
 		{ID: secondWidget.ID, Area: widget.AreaBody, Position: 0},
 		{ID: firstWidget.ID, Area: widget.AreaSidebar, Position: 0},
-	})
+	}, true)
 	if err != nil || len(reordered) != 2 || reordered[0].ID != secondWidget.ID ||
 		reordered[1].ID != firstWidget.ID || reordered[1].Area != widget.AreaSidebar {
 		t.Fatalf("reordered root widgets = %#v, %v", reordered, err)
 	}
+	rootHistory, err = revisionRepository.ListRevisions(ctx, root.SiteID, root.ID, 1, 20)
+	latest, detailErr := revisionRepository.Revision(ctx, root.SiteID, root.ID, 4)
+	createdRevision, createdDetailErr := revisionRepository.Revision(ctx, root.SiteID, root.ID, 1)
+	if err != nil || detailErr != nil || rootHistory.Total != 4 || latest.Snapshot == nil ||
+		latest.CreatedBy == nil || *latest.CreatedBy != adminID || latest.CreatedByName != "Администратор" ||
+		createdDetailErr != nil || createdRevision.Snapshot == nil || createdRevision.Snapshot.Fields["headline"] != "Home" ||
+		len(latest.Snapshot.Widgets) != 2 {
+		t.Fatalf("widget revision history = %#v, latest = %#v, created = %#v, errors = %v / %v / %v", rootHistory, latest, createdRevision, err, detailErr, createdDetailErr)
+	}
+	if _, err := widgetRepository.UpdateWidget(ctx, &adminID, root.ID, 3, firstWidget, true); !errors.Is(err, resource.ErrConflict) {
+		t.Fatalf("stale widget update error = %v", err)
+	}
+	rootHistory, err = revisionRepository.ListRevisions(ctx, root.SiteID, root.ID, 1, 20)
+	loadedAfterConflict, loadErr := resourceRepository.ByID(ctx, root.ID)
+	if err != nil || loadErr != nil || rootHistory.Total != 4 || loadedAfterConflict.Version != 4 {
+		t.Fatalf("state after stale widget update = history %#v, resource %#v, errors = %v / %v", rootHistory, loadedAfterConflict, err, loadErr)
+	}
+	root.Version = 4
 	firstWidget.Area = widget.AreaSidebar
 	firstWidget.Position = 0
 	secondWidget.Position = 0
@@ -820,11 +853,11 @@ WHERE id = $1;
 	}
 	firstWidget.Params = map[string]any{"title": "Replacement"}
 	firstWidget.Presentation.Columns = 8
-	firstWidget, err = widgetRepository.UpdateWidget(ctx, root.ID, firstWidget)
+	firstWidget, err = widgetRepository.UpdateWidget(ctx, nil, root.ID, root.Version, firstWidget, true)
 	if err != nil || firstWidget.ID <= 0 {
 		t.Fatalf("update root widget: %#v, %v", firstWidget, err)
 	}
-	if err := widgetRepository.DeleteWidget(ctx, root.ID, secondWidget.ID); err != nil {
+	if err := widgetRepository.DeleteWidget(ctx, nil, root.ID, root.Version+1, secondWidget.ID, true); err != nil {
 		t.Fatalf("delete root widget: %v", err)
 	}
 	loadedRoot, err = resourceRepository.ByID(ctx, root.ID)
@@ -890,10 +923,10 @@ WHERE id = $1;
 	if err != nil {
 		t.Fatalf("create widget child: %v", err)
 	}
-	if _, err := widgetRepository.CreateWidget(ctx, widgetChild.ID, widget.Binding{
+	if _, err := widgetRepository.CreateWidget(ctx, nil, widgetChild.ID, widgetChild.Version, widget.Binding{
 		Code: "content_summary", Area: widget.AreaSidebar, Position: 0,
 		Presentation: presentation, Params: map[string]any{},
-	}); err != nil {
+	}, true); err != nil {
 		t.Fatalf("create child widget: %v", err)
 	}
 	children, err := resourceManagement.ListChildren(ctx, root.SiteID, &root.ID)
@@ -1398,7 +1431,7 @@ VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]
 		FieldValues: []field.StoredValue{{
 			Key: "headline", Kind: field.StorageString, Value: "Stored headline",
 		}},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("create partitioned library item: %v", err)
 	}
@@ -1406,10 +1439,10 @@ VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]
 	if err != nil || loadedLibraryItem.Fields["headline"] != "Stored headline" {
 		t.Fatalf("loaded library item = %#v, %v", loadedLibraryItem, err)
 	}
-	itemWidget, err := widgetRepository.CreateWidget(ctx, createdLibraryItem.ID, widget.Binding{
+	itemWidget, err := widgetRepository.CreateWidget(ctx, nil, createdLibraryItem.ID, createdLibraryItem.Version, widget.Binding{
 		Code: "content_summary", Area: widget.AreaBody, Position: 0,
 		Presentation: presentation, Params: map[string]any{"title": "Library item"},
-	})
+	}, false)
 	if err != nil || itemWidget.ID <= 0 {
 		t.Fatalf("create library item widget = %#v, %v", itemWidget, err)
 	}
@@ -1418,10 +1451,11 @@ VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]
 		t.Fatalf("loaded library item widgets = %#v, %v", loadedLibraryItem.Widgets, err)
 	}
 	futurePublication := time.Date(2040, time.December, 31, 23, 59, 0, 0, time.UTC)
+	currentLibraryItem := loadedLibraryItem
 	loadedLibraryItem.Title = "Moved item"
 	loadedLibraryItem.PublishedAt = &futurePublication
 	loadedLibraryItem, err = libraryItems.UpdateLibraryItem(
-		ctx, nil, createdLibraryItem, loadedLibraryItem,
+		ctx, nil, currentLibraryItem, loadedLibraryItem, false,
 	)
 	if err != nil || loadedLibraryItem.Title != "Moved item" {
 		t.Fatalf("update across time partitions = %#v, %v", loadedLibraryItem, err)
@@ -1436,7 +1470,7 @@ VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]
 		t.Fatalf("wrong dated library item route error = %v", err)
 	}
 	loadedLibraryItem, err = libraryItems.MoveLibraryItem(
-		ctx, nil, loadedLibraryItem.ID, archive.ID,
+		ctx, nil, loadedLibraryItem.ID, archive.ID, loadedLibraryItem.Version, false,
 	)
 	if err != nil || loadedLibraryItem.LibraryID != archive.ID {
 		t.Fatalf("move across library partitions = %#v, %v", loadedLibraryItem, err)
@@ -1458,7 +1492,7 @@ VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]
 	if _, _, err := libraryItems.ResolveLibraryItemRoute(ctx, siteIDs["localhost"], "/archive/typed-item"); !errors.Is(err, resource.ErrNotFound) {
 		t.Fatalf("old library item route error = %v", err)
 	}
-	if _, err := libraryItems.MoveLibraryItem(ctx, nil, loadedLibraryItem.ID, root.ID); !errors.Is(err, resource.ErrInvalidReference) {
+	if _, err := libraryItems.MoveLibraryItem(ctx, nil, loadedLibraryItem.ID, root.ID, loadedLibraryItem.Version, false); !errors.Is(err, resource.ErrInvalidReference) {
 		t.Fatalf("move to non-library error = %v", err)
 	}
 	crossSiteLibraryPath := "/cross-library"
@@ -1471,7 +1505,7 @@ VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]
 	if err != nil {
 		t.Fatalf("create cross-site library: %v", err)
 	}
-	if _, err := libraryItems.MoveLibraryItem(ctx, nil, loadedLibraryItem.ID, crossSiteLibrary.ID); !errors.Is(err, resource.ErrInvalidReference) {
+	if _, err := libraryItems.MoveLibraryItem(ctx, nil, loadedLibraryItem.ID, crossSiteLibrary.ID, loadedLibraryItem.Version, false); !errors.Is(err, resource.ErrInvalidReference) {
 		t.Fatalf("cross-site library item move error = %v", err)
 	}
 	itemPage, err := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{

@@ -46,6 +46,7 @@ var (
 type Resource struct {
 	ID               ID
 	SiteID           site.ID
+	Version          int64
 	ParentID         *ID
 	Type             resourcetype.Code
 	Template         *template.Code
@@ -106,6 +107,7 @@ type CreateInput struct {
 
 type UpdateInput struct {
 	ID               ID
+	ExpectedVersion  int64
 	ParentID         *ID
 	Type             resourcetype.Code
 	Template         *template.Code
@@ -130,23 +132,25 @@ type UpdateInput struct {
 }
 
 type CreateWidgetInput struct {
-	Code         widget.Code
-	Area         widget.AreaCode
-	View         widget.ViewCode
-	Columns      int
-	MarginTop    int
-	MarginBottom int
-	Enabled      *bool
-	Params       map[string]any
+	ExpectedVersion int64
+	Code            widget.Code
+	Area            widget.AreaCode
+	View            widget.ViewCode
+	Columns         int
+	MarginTop       int
+	MarginBottom    int
+	Enabled         *bool
+	Params          map[string]any
 }
 
 type UpdateWidgetInput struct {
-	View         widget.ViewCode
-	Columns      int
-	MarginTop    int
-	MarginBottom int
-	Enabled      *bool
-	Params       map[string]any
+	ExpectedVersion int64
+	View            widget.ViewCode
+	Columns         int
+	MarginTop       int
+	MarginBottom    int
+	Enabled         *bool
+	Params          map[string]any
 }
 
 type Node struct {
@@ -156,6 +160,7 @@ type Node struct {
 
 type Child struct {
 	ID            ID
+	Version       int64
 	SiteID        site.ID
 	ParentID      *ID
 	Type          resourcetype.Code
@@ -193,10 +198,10 @@ type Repository interface {
 }
 
 type WidgetRepository interface {
-	CreateWidget(context.Context, ID, widget.Binding) (widget.Binding, error)
-	UpdateWidget(context.Context, ID, widget.Binding) (widget.Binding, error)
-	DeleteWidget(context.Context, ID, widget.BindingID) error
-	ReorderWidgets(context.Context, ID, []widget.Order) ([]widget.Binding, error)
+	CreateWidget(context.Context, *security.UserID, ID, int64, widget.Binding, bool) (widget.Binding, error)
+	UpdateWidget(context.Context, *security.UserID, ID, int64, widget.Binding, bool) (widget.Binding, error)
+	DeleteWidget(context.Context, *security.UserID, ID, int64, widget.BindingID, bool) error
+	ReorderWidgets(context.Context, *security.UserID, ID, int64, []widget.Order, bool) ([]widget.Binding, error)
 }
 
 type LifecycleRepository interface {

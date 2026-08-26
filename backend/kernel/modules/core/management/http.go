@@ -28,6 +28,8 @@ type contentHTTP struct {
 
 func registerContentRoutes(router chi.Router, sites *Sites, resources *Resources) {
 	handler := &contentHTTP{sites: sites, resources: resources}
+	router.Get("/administration/resource-revisions", handler.administrationRevisionCount)
+	router.Delete("/administration/resource-revisions", handler.administrationPurgeRevisions)
 	router.Get("/sites/options", handler.listSiteOptions)
 	router.Get("/sites", handler.listSites)
 	router.Post("/sites", handler.createSite)
@@ -46,6 +48,10 @@ func registerContentRoutes(router chi.Router, sites *Sites, resources *Resources
 	router.Patch("/sites/{siteID}/resources/{resourceID}/widgets/{widgetID}", handler.updateResourceWidget)
 	router.Delete("/sites/{siteID}/resources/{resourceID}/widgets/{widgetID}", handler.deleteResourceWidget)
 	router.Put("/sites/{siteID}/resources/{resourceID}/widgets/order", handler.reorderResourceWidgets)
+	router.Get("/sites/{siteID}/resources/{resourceID}/revisions", handler.listResourceRevisions)
+	router.Get("/sites/{siteID}/resources/{resourceID}/revisions/{version}", handler.getResourceRevision)
+	router.Post("/sites/{siteID}/resources/{resourceID}/revisions/{version}/restore", handler.restoreResourceRevision)
+	router.Delete("/sites/{siteID}/resources/{resourceID}/revisions", handler.purgeResourceRevisions)
 	router.Get("/sites/{siteID}/resources/{resourceID}/extensions/{extensionCode}", handler.getResourceExtension)
 	router.Patch("/sites/{siteID}/resources/{resourceID}/extensions/{extensionCode}", handler.saveResourceExtension)
 	router.Post("/sites/{siteID}/resources/{resourceID}/extensions/{extensionCode}/preview", handler.previewResourceExtension)
@@ -62,6 +68,89 @@ func registerContentRoutes(router chi.Router, sites *Sites, resources *Resources
 	router.Delete("/sites/{siteID}/library-items/{itemID}/permanent", handler.deleteLibraryItemPermanent)
 	router.Post("/sites/{siteID}/library-items/{itemID}/restore", handler.restoreLibraryItem)
 	router.Get("/sites/{siteID}/menu", handler.menu)
+}
+
+func (h *contentHTTP) administrationRevisionCount(response http.ResponseWriter, request *http.Request) {
+	count, err := h.resources.AdministrationRevisionCount(request.Context(), actor(request))
+	writeResult(response, http.StatusOK, struct {
+		Count int64 `json:"count"`
+	}{Count: count}, err)
+}
+
+func (h *contentHTTP) administrationPurgeRevisions(response http.ResponseWriter, request *http.Request) {
+	count, err := h.resources.AdministrationPurgeRevisions(request.Context(), actor(request))
+	writeResult(response, http.StatusOK, struct {
+		Count int64 `json:"count"`
+	}{Count: count}, err)
+}
+
+func revisionVersion(response http.ResponseWriter, request *http.Request) (int64, bool) {
+	version, err := strconv.ParseInt(chi.URLParam(request, "version"), 10, 64)
+	if err != nil || version <= 0 {
+		writeBadRequest(response, "revision version is invalid")
+		return 0, false
+	}
+	return version, true
+}
+
+func (h *contentHTTP) listResourceRevisions(response http.ResponseWriter, request *http.Request) {
+	siteID, resourceID, ok := resourceWidgetResourceParams(response, request)
+	if !ok {
+		return
+	}
+	page, perPage, ok := parsePagination(response, request)
+	if !ok {
+		return
+	}
+	result, err := h.resources.Revisions(request.Context(), actor(request), siteID, resourceID, page, perPage)
+	writeResult(response, http.StatusOK, result, err)
+}
+
+func (h *contentHTTP) getResourceRevision(response http.ResponseWriter, request *http.Request) {
+	siteID, resourceID, ok := resourceWidgetResourceParams(response, request)
+	if !ok {
+		return
+	}
+	version, ok := revisionVersion(response, request)
+	if !ok {
+		return
+	}
+	result, err := h.resources.Revision(request.Context(), actor(request), siteID, resourceID, version)
+	writeResult(response, http.StatusOK, result, err)
+}
+
+func (h *contentHTTP) restoreResourceRevision(response http.ResponseWriter, request *http.Request) {
+	siteID, resourceID, ok := resourceWidgetResourceParams(response, request)
+	if !ok {
+		return
+	}
+	version, ok := revisionVersion(response, request)
+	if !ok {
+		return
+	}
+	var payload struct {
+		ExpectedVersion int64 `json:"expected_version"`
+	}
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	if payload.ExpectedVersion <= 0 {
+		writeValidation(response, "expected_version is required")
+		return
+	}
+	result, err := h.resources.RestoreRevision(request.Context(), actor(request), siteID, resourceID, version, payload.ExpectedVersion)
+	writeResult(response, http.StatusOK, result, err)
+}
+
+func (h *contentHTTP) purgeResourceRevisions(response http.ResponseWriter, request *http.Request) {
+	siteID, resourceID, ok := resourceWidgetResourceParams(response, request)
+	if !ok {
+		return
+	}
+	count, err := h.resources.PurgeRevisions(request.Context(), actor(request), siteID, resourceID)
+	writeResult(response, http.StatusOK, struct {
+		Count int64 `json:"count"`
+	}{Count: count}, err)
 }
 
 func (h *contentHTTP) listSites(response http.ResponseWriter, request *http.Request) {
@@ -285,25 +374,26 @@ func (h *contentHTTP) getResource(response http.ResponseWriter, request *http.Re
 }
 
 type updateResourceRequest struct {
-	ParentID      *resource.ID      `json:"parent_id"`
-	Type          resourcetype.Code `json:"type"`
-	Template      *template.Code    `json:"template_code"`
-	Title         string            `json:"title"`
-	MenuTitle     string            `json:"menu_title"`
-	Slug          string            `json:"slug"`
-	Annotation    string            `json:"annotation"`
-	Content       string            `json:"content"`
-	ContentType   *string           `json:"content_type"`
-	ExternalURL   *string           `json:"external_url"`
-	IsPublic      *bool             `json:"is_public"`
-	IsSearchable  *bool             `json:"is_searchable"`
-	InMenu        *bool             `json:"in_menu"`
-	InSitemap     *bool             `json:"in_sitemap"`
-	Sort          *int              `json:"sort"`
-	PublishedAt   *time.Time        `json:"published_at"`
-	UnpublishedAt *time.Time        `json:"unpublished_at"`
-	Fields        map[string]any    `json:"fields"`
-	TypeSettings  map[string]any    `json:"type_settings"`
+	ExpectedVersion int64             `json:"expected_version"`
+	ParentID        *resource.ID      `json:"parent_id"`
+	Type            resourcetype.Code `json:"type"`
+	Template        *template.Code    `json:"template_code"`
+	Title           string            `json:"title"`
+	MenuTitle       string            `json:"menu_title"`
+	Slug            string            `json:"slug"`
+	Annotation      string            `json:"annotation"`
+	Content         string            `json:"content"`
+	ContentType     *string           `json:"content_type"`
+	ExternalURL     *string           `json:"external_url"`
+	IsPublic        *bool             `json:"is_public"`
+	IsSearchable    *bool             `json:"is_searchable"`
+	InMenu          *bool             `json:"in_menu"`
+	InSitemap       *bool             `json:"in_sitemap"`
+	Sort            *int              `json:"sort"`
+	PublishedAt     *time.Time        `json:"published_at"`
+	UnpublishedAt   *time.Time        `json:"unpublished_at"`
+	Fields          map[string]any    `json:"fields"`
+	TypeSettings    map[string]any    `json:"type_settings"`
 }
 
 func (h *contentHTTP) updateResource(response http.ResponseWriter, request *http.Request) {
@@ -325,40 +415,46 @@ func (h *contentHTTP) updateResource(response http.ResponseWriter, request *http
 		writeValidation(response, "resource flags, sort, fields and type_settings are required")
 		return
 	}
+	if payload.ExpectedVersion <= 0 {
+		writeValidation(response, "expected_version is required")
+		return
+	}
 	result, err := h.resources.UpdateResource(
 		request.Context(), actor(request), siteID, resourceID,
 		ResourceUpdateInput{
-			ParentID:      payload.ParentID,
-			Type:          payload.Type,
-			Template:      payload.Template,
-			Title:         payload.Title,
-			MenuTitle:     payload.MenuTitle,
-			Slug:          payload.Slug,
-			Annotation:    payload.Annotation,
-			Content:       payload.Content,
-			ContentType:   payload.ContentType,
-			ExternalURL:   payload.ExternalURL,
-			IsPublic:      *payload.IsPublic,
-			IsSearchable:  *payload.IsSearchable,
-			InMenu:        *payload.InMenu,
-			InSitemap:     *payload.InSitemap,
-			Sort:          *payload.Sort,
-			PublishedAt:   payload.PublishedAt,
-			UnpublishedAt: payload.UnpublishedAt,
-			Fields:        payload.Fields,
-			TypeSettings:  payload.TypeSettings,
+			ExpectedVersion: payload.ExpectedVersion,
+			ParentID:        payload.ParentID,
+			Type:            payload.Type,
+			Template:        payload.Template,
+			Title:           payload.Title,
+			MenuTitle:       payload.MenuTitle,
+			Slug:            payload.Slug,
+			Annotation:      payload.Annotation,
+			Content:         payload.Content,
+			ContentType:     payload.ContentType,
+			ExternalURL:     payload.ExternalURL,
+			IsPublic:        *payload.IsPublic,
+			IsSearchable:    *payload.IsSearchable,
+			InMenu:          *payload.InMenu,
+			InSitemap:       *payload.InSitemap,
+			Sort:            *payload.Sort,
+			PublishedAt:     payload.PublishedAt,
+			UnpublishedAt:   payload.UnpublishedAt,
+			Fields:          payload.Fields,
+			TypeSettings:    payload.TypeSettings,
 		},
 	)
 	writeResult(response, http.StatusOK, result, err)
 }
 
 type resourceWidgetPresentationRequest struct {
-	View         widget.ViewCode `json:"view"`
-	Columns      int             `json:"columns"`
-	MarginTop    int             `json:"margin_top"`
-	MarginBottom int             `json:"margin_bottom"`
-	Enabled      *bool           `json:"enabled"`
-	Params       map[string]any  `json:"params"`
+	ExpectedVersion int64           `json:"expected_version"`
+	View            widget.ViewCode `json:"view"`
+	Columns         int             `json:"columns"`
+	MarginTop       int             `json:"margin_top"`
+	MarginBottom    int             `json:"margin_bottom"`
+	Enabled         *bool           `json:"enabled"`
+	Params          map[string]any  `json:"params"`
 }
 
 type createResourceWidgetRequest struct {
@@ -380,9 +476,14 @@ func (h *contentHTTP) createResourceWidget(response http.ResponseWriter, request
 		writeValidation(response, "widget params are required")
 		return
 	}
+	if payload.ExpectedVersion <= 0 {
+		writeValidation(response, "expected_version is required")
+		return
+	}
 	result, err := h.resources.CreateResourceWidget(request.Context(), actor(request), siteID, resourceID, resource.CreateWidgetInput{
 		Code: payload.Code, Area: payload.Area, View: payload.View, Columns: payload.Columns,
-		MarginTop: payload.MarginTop, MarginBottom: payload.MarginBottom,
+		ExpectedVersion: payload.ExpectedVersion,
+		MarginTop:       payload.MarginTop, MarginBottom: payload.MarginBottom,
 		Enabled: payload.Enabled, Params: payload.Params,
 	})
 	writeResult(response, http.StatusCreated, result, err)
@@ -405,9 +506,14 @@ func (h *contentHTTP) updateResourceWidget(response http.ResponseWriter, request
 		writeValidation(response, "widget params and enabled are required")
 		return
 	}
+	if payload.ExpectedVersion <= 0 {
+		writeValidation(response, "expected_version is required")
+		return
+	}
 	result, err := h.resources.UpdateResourceWidget(request.Context(), actor(request), siteID, resourceID, bindingID, resource.UpdateWidgetInput{
 		View: payload.View, Columns: payload.Columns, MarginTop: payload.MarginTop,
-		MarginBottom: payload.MarginBottom, Enabled: payload.Enabled, Params: payload.Params,
+		ExpectedVersion: payload.ExpectedVersion,
+		MarginBottom:    payload.MarginBottom, Enabled: payload.Enabled, Params: payload.Params,
 	})
 	writeResult(response, http.StatusOK, result, err)
 }
@@ -421,7 +527,17 @@ func (h *contentHTTP) deleteResourceWidget(response http.ResponseWriter, request
 	if !ok {
 		return
 	}
-	if err := h.resources.DeleteResourceWidget(request.Context(), actor(request), siteID, resourceID, bindingID); err != nil {
+	var payload struct {
+		ExpectedVersion int64 `json:"expected_version"`
+	}
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	if payload.ExpectedVersion <= 0 {
+		writeValidation(response, "expected_version is required")
+		return
+	}
+	if err := h.resources.DeleteResourceWidget(request.Context(), actor(request), siteID, resourceID, bindingID, payload.ExpectedVersion); err != nil {
 		writeManagementError(response, err)
 		return
 	}
@@ -429,7 +545,8 @@ func (h *contentHTTP) deleteResourceWidget(response http.ResponseWriter, request
 }
 
 type reorderResourceWidgetsRequest struct {
-	Items []widget.Order `json:"items"`
+	ExpectedVersion int64          `json:"expected_version"`
+	Items           []widget.Order `json:"items"`
 }
 
 func (h *contentHTTP) reorderResourceWidgets(response http.ResponseWriter, request *http.Request) {
@@ -445,7 +562,11 @@ func (h *contentHTTP) reorderResourceWidgets(response http.ResponseWriter, reque
 		writeValidation(response, "widget order items are required")
 		return
 	}
-	result, err := h.resources.ReorderResourceWidgets(request.Context(), actor(request), siteID, resourceID, payload.Items)
+	if payload.ExpectedVersion <= 0 {
+		writeValidation(response, "expected_version is required")
+		return
+	}
+	result, err := h.resources.ReorderResourceWidgets(request.Context(), actor(request), siteID, resourceID, payload.ExpectedVersion, payload.Items)
 	writeResult(response, http.StatusOK, struct {
 		Items []ResourceWidget `json:"items"`
 	}{Items: result}, err)
@@ -473,8 +594,9 @@ func widgetID(response http.ResponseWriter, request *http.Request) (widget.Bindi
 }
 
 type moveResourceRequest struct {
-	ParentID *resource.ID `json:"parent_id"`
-	Position *int         `json:"position"`
+	ParentID        *resource.ID `json:"parent_id"`
+	Position        *int         `json:"position"`
+	ExpectedVersion int64        `json:"expected_version"`
 }
 
 func (h *contentHTTP) moveResource(response http.ResponseWriter, request *http.Request) {
@@ -490,11 +612,11 @@ func (h *contentHTTP) moveResource(response http.ResponseWriter, request *http.R
 	if !decodeBody(response, request, &payload) {
 		return
 	}
-	if payload.Position == nil || *payload.Position < 0 {
+	if payload.Position == nil || *payload.Position < 0 || payload.ExpectedVersion <= 0 {
 		writeValidation(response, "position is required")
 		return
 	}
-	result, err := h.resources.MoveResource(request.Context(), actor(request), siteID, resourceID, payload.ParentID, *payload.Position)
+	result, err := h.resources.MoveResource(request.Context(), actor(request), siteID, resourceID, payload.ParentID, *payload.Position, payload.ExpectedVersion)
 	writeResult(response, http.StatusOK, result, err)
 }
 
@@ -619,16 +741,17 @@ func (h *contentHTTP) restoreResource(response http.ResponseWriter, request *htt
 }
 
 type libraryItemRequest struct {
-	Template      *template.Code `json:"template_code"`
-	Title         string         `json:"title"`
-	Slug          string         `json:"slug"`
-	Annotation    string         `json:"annotation"`
-	Content       string         `json:"content"`
-	IsPublic      *bool          `json:"is_public"`
-	IsSearchable  *bool          `json:"is_searchable"`
-	PublishedAt   *time.Time     `json:"published_at"`
-	UnpublishedAt *time.Time     `json:"unpublished_at"`
-	Fields        map[string]any `json:"fields"`
+	ExpectedVersion int64          `json:"expected_version"`
+	Template        *template.Code `json:"template_code"`
+	Title           string         `json:"title"`
+	Slug            string         `json:"slug"`
+	Annotation      string         `json:"annotation"`
+	Content         string         `json:"content"`
+	IsPublic        *bool          `json:"is_public"`
+	IsSearchable    *bool          `json:"is_searchable"`
+	PublishedAt     *time.Time     `json:"published_at"`
+	UnpublishedAt   *time.Time     `json:"unpublished_at"`
+	Fields          map[string]any `json:"fields"`
 }
 
 func (h *contentHTTP) listLibraryItems(response http.ResponseWriter, request *http.Request) {
@@ -688,7 +811,11 @@ func (h *contentHTTP) updateLibraryItem(response http.ResponseWriter, request *h
 		writeValidation(response, "fields and publication flags are required")
 		return
 	}
-	result, err := h.resources.UpdateLibraryItem(request.Context(), actor(request), siteID, itemID, LibraryItemUpdateInput{LibraryItemCreateInput: LibraryItemCreateInput{Template: payload.Template, Title: payload.Title, Slug: payload.Slug, Annotation: payload.Annotation, Content: payload.Content, PublishedAt: payload.PublishedAt, UnpublishedAt: payload.UnpublishedAt, Fields: payload.Fields}, IsPublic: payload.IsPublic, IsSearchable: payload.IsSearchable})
+	if payload.ExpectedVersion <= 0 {
+		writeValidation(response, "expected_version is required")
+		return
+	}
+	result, err := h.resources.UpdateLibraryItem(request.Context(), actor(request), siteID, itemID, LibraryItemUpdateInput{ExpectedVersion: payload.ExpectedVersion, LibraryItemCreateInput: LibraryItemCreateInput{Template: payload.Template, Title: payload.Title, Slug: payload.Slug, Annotation: payload.Annotation, Content: payload.Content, PublishedAt: payload.PublishedAt, UnpublishedAt: payload.UnpublishedAt, Fields: payload.Fields}, IsPublic: payload.IsPublic, IsSearchable: payload.IsSearchable})
 	writeResult(response, http.StatusOK, result, err)
 }
 
@@ -698,12 +825,17 @@ func (h *contentHTTP) moveLibraryItem(response http.ResponseWriter, request *htt
 		return
 	}
 	var payload struct {
-		LibraryID resource.ID `json:"library_id"`
+		LibraryID       resource.ID `json:"library_id"`
+		ExpectedVersion int64       `json:"expected_version"`
 	}
 	if !decodeBody(response, request, &payload) {
 		return
 	}
-	result, err := h.resources.MoveLibraryItem(request.Context(), actor(request), siteID, itemID, payload.LibraryID)
+	if payload.ExpectedVersion <= 0 {
+		writeValidation(response, "expected_version is required")
+		return
+	}
+	result, err := h.resources.MoveLibraryItem(request.Context(), actor(request), siteID, itemID, payload.LibraryID, payload.ExpectedVersion)
 	writeResult(response, http.StatusOK, result, err)
 }
 
@@ -821,7 +953,7 @@ func writeManagementError(response http.ResponseWriter, err error) {
 		writeUnauthorized(response)
 	case errors.Is(err, security.ErrForbidden):
 		httptransport.WriteJSONError(response, http.StatusForbidden, "forbidden", "operation is forbidden")
-	case errors.Is(err, site.ErrNotFound), errors.Is(err, resource.ErrNotFound), errors.Is(err, file.ErrNotFound), errors.Is(err, file.ErrFolderNotFound), errors.Is(err, file.ErrStorageNotFound):
+	case errors.Is(err, site.ErrNotFound), errors.Is(err, resource.ErrNotFound), errors.Is(err, resource.ErrRevisionNotFound), errors.Is(err, file.ErrNotFound), errors.Is(err, file.ErrFolderNotFound), errors.Is(err, file.ErrStorageNotFound):
 		httptransport.WriteJSONError(response, http.StatusNotFound, "not_found", "requested object was not found")
 	case errors.Is(err, site.ErrConflict), errors.Is(err, resource.ErrConflict), errors.Is(err, file.ErrConflict):
 		httptransport.WriteJSONError(response, http.StatusConflict, "conflict", "object conflicts with existing data")

@@ -38,10 +38,16 @@ const (
 	FileDeletePermission     = management.FileDeletePermission
 )
 
+var (
+	ResourceHistoryReadPermission   = resource.HistoryReadPermission
+	ResourceHistoryDeletePermission = resource.HistoryDeletePermission
+)
+
 var AdminPermissionCodes = []permission.Code{
 	AccessPermission,
 	SiteReadPermission, SiteCreatePermission, SiteUpdatePermission, SiteDeletePermission,
 	ResourceReadPermission, ResourceCreatePermission, ResourceUpdatePermission, ResourceDeletePermission,
+	ResourceHistoryReadPermission, ResourceHistoryDeletePermission,
 	UserReadPermission, UserCreatePermission, UserUpdatePermission, UserBlockPermission,
 	GroupReadPermission, GroupCreatePermission, GroupUpdatePermission, GroupDeletePermission,
 	FileReadPermission, FileCreatePermission, FileUpdatePermission, FileDeletePermission,
@@ -132,7 +138,7 @@ func NewManagement(dependencies ManagementDependencies) (*Management, error) {
 	if dependencies.AvatarMaxSize <= 0 {
 		dependencies.AvatarMaxSize = 5 << 20
 	}
-	navigation, err := newNavigationComposer(dependencies.Profiles, dependencies.Authorizer, dependencies.Permissions)
+	navigation, err := newNavigationComposer(dependencies.Profiles, dependencies.Authorizer, dependencies.Permissions, dependencies.Access)
 	if err != nil {
 		return nil, err
 	}

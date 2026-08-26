@@ -107,6 +107,35 @@ func (s *ApplicationService) IsPrivileged(
 	return subject.IsSuper, nil
 }
 
+func (s *ApplicationService) IsAdministrator(ctx context.Context, actor security.Actor) (bool, error) {
+	if err := validateContext(ctx); err != nil {
+		return false, err
+	}
+	if actor.IsSystem() {
+		return true, nil
+	}
+	userID, exists := actor.UserID()
+	if !exists {
+		return false, security.ErrUnauthenticated
+	}
+	subject, err := s.repository.Subject(ctx, userID)
+	if err != nil {
+		return false, fmt.Errorf("load administrator subject: %w", err)
+	}
+	if !subject.Exists || !subject.Active {
+		return false, security.ErrUnauthenticated
+	}
+	repository, ok := s.repository.(AdministratorRepository)
+	if !ok {
+		return false, errors.New("administrator membership repository is unavailable")
+	}
+	allowed, err := repository.IsAdministrator(ctx, userID)
+	if err != nil {
+		return false, fmt.Errorf("check administrator membership: %w", err)
+	}
+	return allowed, nil
+}
+
 func (s *ApplicationService) IsGuestSubject(
 	ctx context.Context,
 	actor security.Actor,

@@ -44,6 +44,27 @@ func (managementHTTPMediaService) Delete(context.Context, security.Actor, media.
 
 var _ media.Service = managementHTTPMediaService{}
 
+type managementAdministrator bool
+
+func (a managementAdministrator) IsAdministrator(context.Context, security.Actor) (bool, error) {
+	return bool(a), nil
+}
+
+func TestAdministrationRevisionAPIDeniesDirectNonAdministrator(t *testing.T) {
+	t.Parallel()
+	router := chi.NewRouter()
+	registerContentRoutes(router, nil, &Resources{administrator: managementAdministrator(false)})
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		request := httptest.NewRequest(method, "/administration/resource-revisions", nil)
+		request = request.WithContext(httptransport.WithActor(request.Context(), security.User(1)))
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("%s status = %d, body = %s", method, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestManagementHTTPListSiteOptionsAndErrors(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -162,7 +183,7 @@ func TestManagementHTTPWidgetLifecycleUsesStableBindingID(t *testing.T) {
 
 	createdResponse := request(http.MethodPost, "/sites/7/resources/9/widgets", `{
 		"code":"feature_content","area":"body","view":"default","columns":12,
-		"margin_top":0,"margin_bottom":0,"enabled":true,"params":{}
+		"margin_top":0,"margin_bottom":0,"enabled":true,"params":{},"expected_version":1
 	}`)
 	if createdResponse.Code != http.StatusCreated {
 		t.Fatalf("create response = %d, %s", createdResponse.Code, createdResponse.Body.String())
@@ -177,7 +198,7 @@ func TestManagementHTTPWidgetLifecycleUsesStableBindingID(t *testing.T) {
 
 	updatedResponse := request(http.MethodPatch, "/sites/7/resources/9/widgets/1", `{
 		"view":"default","columns":6,"margin_top":1,"margin_bottom":2,
-		"enabled":false,"params":{}
+		"enabled":false,"params":{},"expected_version":2
 	}`)
 	if updatedResponse.Code != http.StatusOK {
 		t.Fatalf("update response = %d, %s", updatedResponse.Code, updatedResponse.Body.String())
@@ -191,7 +212,7 @@ func TestManagementHTTPWidgetLifecycleUsesStableBindingID(t *testing.T) {
 	}
 
 	orderResponse := request(http.MethodPut, "/sites/7/resources/9/widgets/order", `{
-		"items":[{"id":1,"area":"sidebar","position":0}]
+		"expected_version":3,"items":[{"id":1,"area":"sidebar","position":0}]
 	}`)
 	if orderResponse.Code != http.StatusOK {
 		t.Fatalf("order response = %d, %s", orderResponse.Code, orderResponse.Body.String())
@@ -206,7 +227,7 @@ func TestManagementHTTPWidgetLifecycleUsesStableBindingID(t *testing.T) {
 		t.Fatalf("ordered widgets = %#v", ordered.Items)
 	}
 
-	deletedResponse := request(http.MethodDelete, "/sites/7/resources/9/widgets/1", "")
+	deletedResponse := request(http.MethodDelete, "/sites/7/resources/9/widgets/1", `{"expected_version":4}`)
 	if deletedResponse.Code != http.StatusNoContent || len(repository.item.Widgets) != 0 {
 		t.Fatalf("delete response = %d, %s; widgets = %#v", deletedResponse.Code, deletedResponse.Body.String(), repository.item.Widgets)
 	}
@@ -245,7 +266,7 @@ func contentHTTPWidgetFixture(t *testing.T) (*Resources, *extensionTestResources
 	contentType := "html"
 	path := "/"
 	repository := &extensionTestResources{item: resource.Resource{
-		ID: 9, SiteID: 7, Type: resourcetype.Page, Template: &templateCode,
+		ID: 9, SiteID: 7, Version: 1, Type: resourcetype.Page, Template: &templateCode,
 		ContentType: &contentType, Title: "Home", Path: &path, Fields: map[string]any{},
 	}}
 	authorizer := managementAuthorizer{denied: map[permission.Code]error{}}

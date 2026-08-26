@@ -27,9 +27,12 @@ type NavigationItem struct {
 }
 
 type navigationComposer struct {
-	global      []adminui.NavigationItem
-	authorizer  security.Authorizer
-	permissions adminui.PermissionValidator
+	global        []adminui.NavigationItem
+	authorizer    security.Authorizer
+	permissions   adminui.PermissionValidator
+	administrator interface {
+		IsAdministrator(context.Context, security.Actor) (bool, error)
+	}
 }
 
 type moduleNavigation struct {
@@ -41,12 +44,21 @@ func newNavigationComposer(
 	profiles []kernel.Profile,
 	authorizer security.Authorizer,
 	permissions adminui.PermissionValidator,
+	administrators ...interface {
+		IsAdministrator(context.Context, security.Actor) (bool, error)
+	},
 ) (*navigationComposer, error) {
 	if authorizer == nil {
 		return nil, errors.New("admin navigation authorizer is nil")
 	}
 	if permissions == nil {
 		return nil, errors.New("admin navigation permission catalog is nil")
+	}
+	var administrator interface {
+		IsAdministrator(context.Context, security.Actor) (bool, error)
+	} = denyAdministrator{}
+	if len(administrators) > 0 && administrators[0] != nil {
+		administrator = administrators[0]
 	}
 
 	seen := make(map[kernel.ModuleCode]moduleNavigation)
@@ -95,10 +107,17 @@ func newNavigationComposer(
 		return nil, fmt.Errorf("compile global admin navigation: %w", err)
 	}
 	return &navigationComposer{
-		global:      global,
-		authorizer:  authorizer,
-		permissions: permissions,
+		global:        global,
+		authorizer:    authorizer,
+		permissions:   permissions,
+		administrator: administrator,
 	}, nil
+}
+
+type denyAdministrator struct{}
+
+func (denyAdministrator) IsAdministrator(context.Context, security.Actor) (bool, error) {
+	return false, nil
 }
 
 func (c *navigationComposer) compose(
@@ -160,6 +179,18 @@ func (c *navigationComposer) filter(
 ) ([]adminui.NavigationItem, error) {
 	result := make([]adminui.NavigationItem, 0, len(items))
 	for _, item := range items {
+		if item.Visibility == adminui.NavigationAdministrator {
+			allowed, err := c.administrator.IsAdministrator(ctx, actor)
+			if err != nil {
+				if errors.Is(err, security.ErrForbidden) || errors.Is(err, security.ErrUnauthenticated) {
+					continue
+				}
+				return nil, err
+			}
+			if !allowed {
+				continue
+			}
+		}
 		if item.Permission != "" {
 			err := c.authorizer.Check(ctx, actor, item.Permission)
 			switch {

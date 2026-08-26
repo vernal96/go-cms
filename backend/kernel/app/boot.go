@@ -173,6 +173,8 @@ func (a *App) boot(ctx context.Context) error {
 	}
 	cmsResources, err := coremanagement.NewResources(coremanagement.ResourceDependencies{
 		Sites: catalog, Resources: resourceService, LibraryItems: coreServices.LibraryItems,
+		Revisions:          coreServices.Revisions,
+		Administrator:      coreServices.Authorization,
 		ResourceRepository: resourceManagementRepository,
 		Authorizer:         coreServices.Authorization, SiteAccessPolicy: siteAccessPolicy,
 	})

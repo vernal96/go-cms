@@ -17,8 +17,9 @@ describe('ResourceCreateDialog', () => {
   })
 
   it('creates a root Page with the minimal supported payload', async () => {
-    const created: ResourceTreeItem = {
-      id: 10,
+	const created: ResourceTreeItem = {
+		id: 10,
+		version: 1,
       parent_id: null,
       template_code: null,
       icon: 'document',

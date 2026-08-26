@@ -37,6 +37,37 @@ type navigationTestRuntime struct {
 	items []adminui.NavigationItem
 }
 
+type navigationAdministrator bool
+
+func (a navigationAdministrator) IsAdministrator(context.Context, security.Actor) (bool, error) {
+	return bool(a), nil
+}
+
+func TestNavigationComposerRequiresAdministratorVisibility(t *testing.T) {
+	t.Parallel()
+	catalog := corePermissionCatalog(t)
+	profiles := []kernel.Profile{{Code: "dev", Modules: []kernel.ProfileModule{{Module: core.Module{}}}}}
+	for _, test := range []struct {
+		name    string
+		admin   navigationAdministrator
+		visible bool
+	}{{"ordinary user", false, false}, {"built-in administrator", true, true}} {
+		t.Run(test.name, func(t *testing.T) {
+			composer, err := newNavigationComposer(profiles, managementAuthorizer{denied: map[permission.Code]error{}}, catalog, test.admin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			items, err := composer.compose(context.Background(), security.User(1), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := navigationContains(items, "administration"); got != test.visible {
+				t.Fatalf("administration visible = %v, want %v: %#v", got, test.visible, items)
+			}
+		})
+	}
+}
+
 func (navigationTestRuntime) ModuleCode() kernel.ModuleCode { return "forms" }
 func (r navigationTestRuntime) AdminNavigation() []adminui.NavigationItem {
 	return r.items

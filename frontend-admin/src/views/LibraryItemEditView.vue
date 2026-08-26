@@ -8,6 +8,7 @@ import DynamicFieldsForm from '../components/fields/DynamicFieldsForm.vue'
 import RichTextEditor from '../components/RichTextEditor.vue'
 import ResourceExtensionEditor from '../components/resource-extensions/ResourceExtensionEditor.vue'
 import ResourceWidgetsEditor from '../components/resource-widgets/ResourceWidgetsEditor.vue'
+import ResourceHistoryTab from '../components/ResourceHistoryTab.vue'
 import { createFieldValues, unsupportedFieldTypes, validateFieldValues, type DynamicFieldErrors } from '../components/fields/model'
 import { generateResourceCode } from '../resource-code'
 import type { LibraryItemDetailsResponse, LibraryItemPayload, ResourceDetailsResponse, ResourceMetadata, ResourceOptionsResponse, ResourceWidget } from '../types/admin'
@@ -26,7 +27,10 @@ const metadata = ref<ResourceMetadata>({ types: [], templates: [], widgets: [], 
 const libraries = ref<Array<{ id: number; display_title: string }>>([])
 const fieldErrors = ref<DynamicFieldErrors>({})
 const canUpdate = ref(true)
+const canReadHistory = ref(false)
+const canDeleteHistory = ref(false)
 const resourceWidgets = ref<ResourceWidget[]>([])
+const resourceVersion = ref(0)
 const form = reactive({ library_id: 0, template_code: null as string | null, title: '', slug: '', annotation: '', content: '', is_public: true, is_searchable: true, published_at: null as Date | null, unpublished_at: null as Date | null, fields: {} as Record<string, unknown> })
 const selectedTemplate = computed(() => metadata.value.templates.find((item) => item.code === form.template_code) ?? null)
 const applicableExtensions = computed(() => metadata.value.extensions.filter((extension) => extension.applies_to.includes('page')))
@@ -49,7 +53,10 @@ async function load(): Promise<void> {
     } else {
       const details = await adminRequest<LibraryItemDetailsResponse>(`/api/sites/${siteId.value}/library-items/${itemId.value}`, props.accessToken)
       const item = details.item
+      resourceVersion.value = item.version
       canUpdate.value = details.permissions.update
+      canReadHistory.value = details.permissions.history_read
+      canDeleteHistory.value = details.permissions.history_delete
       resourceWidgets.value = item.widgets
       Object.assign(form, { library_id: item.library_id, template_code: item.template_code, title: item.title, slug: item.slug, annotation: item.annotation, content: item.content, is_public: item.is_public, is_searchable: item.is_searchable, published_at: item.published_at ? new Date(item.published_at) : null, unpublished_at: item.unpublished_at ? new Date(item.unpublished_at) : null, fields: createFieldValues(loadedMetadata.templates.find((template) => template.code === item.template_code)?.fields ?? [], item.fields) })
     }
@@ -65,15 +72,16 @@ async function submit(): Promise<void> {
   const fields = selectedTemplate.value?.fields ?? []
   if (unsupportedFieldTypes(fields).length) { errorMessage.value = 'Шаблон содержит неподдерживаемые поля.'; return }
   fieldErrors.value = validateFieldValues(fields, form.fields); if (Object.keys(fieldErrors.value).length) return
-  const payload: LibraryItemPayload = { template_code: form.template_code, title: form.title.trim(), slug: form.slug.trim(), annotation: form.annotation, content: form.content, is_public: form.is_public, is_searchable: form.is_searchable, published_at: form.published_at?.toISOString() ?? null, unpublished_at: form.unpublished_at?.toISOString() ?? null, fields: { ...form.fields } }
+  const payload: LibraryItemPayload = { expected_version: creating.value ? undefined : resourceVersion.value, template_code: form.template_code, title: form.title.trim(), slug: form.slug.trim(), annotation: form.annotation, content: form.content, is_public: form.is_public, is_searchable: form.is_searchable, published_at: form.published_at?.toISOString() ?? null, unpublished_at: form.unpublished_at?.toISOString() ?? null, fields: { ...form.fields } }
   submitting.value = true
   try {
     if (creating.value) {
       const result = await adminRequest<LibraryItemDetailsResponse>(`/api/sites/${siteId.value}/resources/${originalLibraryId.value}/items`, props.accessToken, { method: 'POST', body: JSON.stringify(payload) })
       await router.replace(`/admin/sites/${siteId.value}/resources/${result.item.library_id}/items/${result.item.id}/edit`)
     } else {
-      await adminRequest<LibraryItemDetailsResponse>(`/api/sites/${siteId.value}/library-items/${itemId.value}`, props.accessToken, { method: 'PATCH', body: JSON.stringify(payload) })
-      if (form.library_id !== originalLibraryId.value) await adminRequest(`/api/sites/${siteId.value}/library-items/${itemId.value}/move`, props.accessToken, { method: 'POST', body: JSON.stringify({ library_id: form.library_id }) })
+      const updated = await adminRequest<LibraryItemDetailsResponse>(`/api/sites/${siteId.value}/library-items/${itemId.value}`, props.accessToken, { method: 'PATCH', body: JSON.stringify(payload) })
+      resourceVersion.value = updated.item.version
+      if (form.library_id !== originalLibraryId.value) { const moved = await adminRequest<LibraryItemDetailsResponse>(`/api/sites/${siteId.value}/library-items/${itemId.value}/move`, props.accessToken, { method: 'POST', body: JSON.stringify({ library_id: form.library_id, expected_version: resourceVersion.value }) }); resourceVersion.value = moved.item.version }
       ElMessage.success('Ресурс сохранён')
     }
   } catch (error) { errorMessage.value = error instanceof AdminAPIError ? error.message : 'Не удалось сохранить ресурс.' }
@@ -112,6 +120,8 @@ onMounted(() => void load())
         :template="selectedTemplate"
         :definitions="metadata.widgets"
         :can-update="canUpdate"
+        :resource-version="resourceVersion"
+        @changed="load"
       />
       <resource-extension-editor
         v-for="extension in (!creating ? applicableExtensions : [])"
@@ -122,6 +132,7 @@ onMounted(() => void load())
         :access-token="accessToken"
         :can-update="canUpdate"
       />
+	  <section v-if="canReadHistory" class="library-history"><h2>История</h2><resource-history-tab :access-token="accessToken" :site-id="siteId" :resource-id="itemId!" :resource-version="resourceVersion" :can-restore="canUpdate" :can-delete="canDeleteHistory" @changed="load" /></section>
     </el-form>
   </section>
 </template>

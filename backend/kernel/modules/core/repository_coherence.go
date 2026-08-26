@@ -266,6 +266,81 @@ type invalidatingResourceRepository struct {
 	policy *repositoryCachePolicy
 }
 
+func (r *invalidatingResourceRepository) revisionRepository() (resource.RevisionRepository, error) {
+	repository, ok := r.base.(resource.RevisionRepository)
+	if !ok {
+		return nil, errors.New("resource revision repository is unavailable")
+	}
+	return repository, nil
+}
+
+func (r *invalidatingResourceRepository) ListRevisions(ctx context.Context, siteID site.ID, id resource.ID, page, perPage int) (resource.RevisionPage, error) {
+	repository, err := r.revisionRepository()
+	if err != nil {
+		return resource.RevisionPage{}, err
+	}
+	return repository.ListRevisions(ctx, siteID, id, page, perPage)
+}
+func (r *invalidatingResourceRepository) Revision(ctx context.Context, siteID site.ID, id resource.ID, version int64) (resource.Revision, error) {
+	repository, err := r.revisionRepository()
+	if err != nil {
+		return resource.Revision{}, err
+	}
+	return repository.Revision(ctx, siteID, id, version)
+}
+func (r *invalidatingResourceRepository) PurgeRevisions(ctx context.Context, siteID site.ID, id resource.ID) (int64, error) {
+	repository, err := r.revisionRepository()
+	if err != nil {
+		return 0, err
+	}
+	return repository.PurgeRevisions(ctx, siteID, id)
+}
+func (r *invalidatingResourceRepository) CountRevisions(ctx context.Context) (int64, error) {
+	repository, err := r.revisionRepository()
+	if err != nil {
+		return 0, err
+	}
+	return repository.CountRevisions(ctx)
+}
+func (r *invalidatingResourceRepository) PurgeAllRevisions(ctx context.Context) (int64, error) {
+	repository, err := r.revisionRepository()
+	if err != nil {
+		return 0, err
+	}
+	return repository.PurgeAllRevisions(ctx)
+}
+func (r *invalidatingResourceRepository) RestoreRevision(ctx context.Context, actorID *security.UserID, current, candidate resource.Resource, source int64) (resource.Resource, error) {
+	repository, err := r.revisionRepository()
+	if err != nil {
+		return resource.Resource{}, err
+	}
+	var result resource.Resource
+	err = withRepositoryCacheWrite(r.policy, resourceTags(current), func() error {
+		var mutationErr error
+		result, mutationErr = repository.RestoreRevision(ctx, actorID, current, candidate, source)
+		return mutationErr
+	})
+	return result, err
+}
+
+func (r *invalidatingResourceRepository) RestoreLibraryItemRevision(ctx context.Context, actorID *security.UserID, current, candidate resource.LibraryItem, source int64) (resource.LibraryItem, error) {
+	repository, err := r.revisionRepository()
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
+	var result resource.LibraryItem
+	tags := append(libraryItemTags(current), resourceTag(candidate.LibraryID))
+	err = withRepositoryCacheWrite(r.policy, tags, func() error {
+		var mutationErr error
+		result, mutationErr = repository.RestoreLibraryItemRevision(ctx, actorID, current, candidate, source)
+		if mutationErr == nil {
+			r.policy.invalidate(ctx, append(tags, libraryItemTags(result)...)...)
+		}
+		return mutationErr
+	})
+	return result, err
+}
+
 func (r *invalidatingResourceRepository) Create(
 	ctx context.Context,
 	actorID *security.UserID,
@@ -388,7 +463,7 @@ func (r *invalidatingResourceRepository) Update(
 	return result, err
 }
 
-func (r *invalidatingResourceRepository) CreateWidget(ctx context.Context, id resource.ID, binding widget.Binding) (widget.Binding, error) {
+func (r *invalidatingResourceRepository) CreateWidget(ctx context.Context, actorID *security.UserID, id resource.ID, expectedVersion int64, binding widget.Binding, recordRevision bool) (widget.Binding, error) {
 	repository, ok := r.base.(resource.WidgetRepository)
 	if !ok {
 		return widget.Binding{}, errors.New("resource widget repository is unavailable")
@@ -396,13 +471,13 @@ func (r *invalidatingResourceRepository) CreateWidget(ctx context.Context, id re
 	var result widget.Binding
 	err := r.mutateWidgets(ctx, id, func() error {
 		var err error
-		result, err = repository.CreateWidget(ctx, id, binding)
+		result, err = repository.CreateWidget(ctx, actorID, id, expectedVersion, binding, recordRevision)
 		return err
 	})
 	return result, err
 }
 
-func (r *invalidatingResourceRepository) UpdateWidget(ctx context.Context, id resource.ID, binding widget.Binding) (widget.Binding, error) {
+func (r *invalidatingResourceRepository) UpdateWidget(ctx context.Context, actorID *security.UserID, id resource.ID, expectedVersion int64, binding widget.Binding, recordRevision bool) (widget.Binding, error) {
 	repository, ok := r.base.(resource.WidgetRepository)
 	if !ok {
 		return widget.Binding{}, errors.New("resource widget repository is unavailable")
@@ -410,23 +485,23 @@ func (r *invalidatingResourceRepository) UpdateWidget(ctx context.Context, id re
 	var result widget.Binding
 	err := r.mutateWidgets(ctx, id, func() error {
 		var err error
-		result, err = repository.UpdateWidget(ctx, id, binding)
+		result, err = repository.UpdateWidget(ctx, actorID, id, expectedVersion, binding, recordRevision)
 		return err
 	})
 	return result, err
 }
 
-func (r *invalidatingResourceRepository) DeleteWidget(ctx context.Context, id resource.ID, bindingID widget.BindingID) error {
+func (r *invalidatingResourceRepository) DeleteWidget(ctx context.Context, actorID *security.UserID, id resource.ID, expectedVersion int64, bindingID widget.BindingID, recordRevision bool) error {
 	repository, ok := r.base.(resource.WidgetRepository)
 	if !ok {
 		return errors.New("resource widget repository is unavailable")
 	}
 	return r.mutateWidgets(ctx, id, func() error {
-		return repository.DeleteWidget(ctx, id, bindingID)
+		return repository.DeleteWidget(ctx, actorID, id, expectedVersion, bindingID, recordRevision)
 	})
 }
 
-func (r *invalidatingResourceRepository) ReorderWidgets(ctx context.Context, id resource.ID, order []widget.Order) ([]widget.Binding, error) {
+func (r *invalidatingResourceRepository) ReorderWidgets(ctx context.Context, actorID *security.UserID, id resource.ID, expectedVersion int64, order []widget.Order, recordRevision bool) ([]widget.Binding, error) {
 	repository, ok := r.base.(resource.WidgetRepository)
 	if !ok {
 		return nil, errors.New("resource widget repository is unavailable")
@@ -434,7 +509,7 @@ func (r *invalidatingResourceRepository) ReorderWidgets(ctx context.Context, id 
 	var result []widget.Binding
 	err := r.mutateWidgets(ctx, id, func() error {
 		var err error
-		result, err = repository.ReorderWidgets(ctx, id, order)
+		result, err = repository.ReorderWidgets(ctx, actorID, id, expectedVersion, order, recordRevision)
 		return err
 	})
 	return result, err
@@ -528,7 +603,7 @@ func libraryItemTags(item resource.LibraryItem) []cache.Tag {
 	return []cache.Tag{siteResourcesTag(item.SiteID), resourceTag(item.LibraryID), resourceTag(item.ID)}
 }
 
-func (r *invalidatingResourceRepository) CreateLibraryItem(ctx context.Context, actorID *security.UserID, item resource.LibraryItem) (resource.LibraryItem, error) {
+func (r *invalidatingResourceRepository) CreateLibraryItem(ctx context.Context, actorID *security.UserID, item resource.LibraryItem, recordRevision bool) (resource.LibraryItem, error) {
 	repository, err := r.libraryItems()
 	if err != nil {
 		return resource.LibraryItem{}, err
@@ -536,7 +611,7 @@ func (r *invalidatingResourceRepository) CreateLibraryItem(ctx context.Context, 
 	var result resource.LibraryItem
 	err = withRepositoryCacheWrite(r.policy, []cache.Tag{siteResourcesTag(item.SiteID), resourceTag(item.LibraryID)}, func() error {
 		var writeErr error
-		result, writeErr = repository.CreateLibraryItem(ctx, actorID, item)
+		result, writeErr = repository.CreateLibraryItem(ctx, actorID, item, recordRevision)
 		if writeErr == nil {
 			r.policy.invalidate(ctx, libraryItemTags(result)...)
 		}
@@ -551,7 +626,7 @@ func (r *invalidatingResourceRepository) LibraryItemByID(ctx context.Context, id
 	}
 	return repository.LibraryItemByID(ctx, id)
 }
-func (r *invalidatingResourceRepository) UpdateLibraryItem(ctx context.Context, actorID *security.UserID, current, item resource.LibraryItem) (resource.LibraryItem, error) {
+func (r *invalidatingResourceRepository) UpdateLibraryItem(ctx context.Context, actorID *security.UserID, current, item resource.LibraryItem, recordRevision bool) (resource.LibraryItem, error) {
 	repository, err := r.libraryItems()
 	if err != nil {
 		return resource.LibraryItem{}, err
@@ -560,7 +635,7 @@ func (r *invalidatingResourceRepository) UpdateLibraryItem(ctx context.Context, 
 	tags := libraryItemTags(current)
 	err = withRepositoryCacheWrite(r.policy, tags, func() error {
 		var writeErr error
-		result, writeErr = repository.UpdateLibraryItem(ctx, actorID, current, item)
+		result, writeErr = repository.UpdateLibraryItem(ctx, actorID, current, item, recordRevision)
 		if writeErr == nil {
 			r.policy.invalidate(ctx, append(tags, libraryItemTags(result)...)...)
 		}
@@ -599,7 +674,7 @@ func (r *invalidatingResourceRepository) RestoreLibraryItem(ctx context.Context,
 func (r *invalidatingResourceRepository) DeleteLibraryItem(ctx context.Context, id resource.ID) error {
 	return r.mutateLibraryItem(ctx, id, func(repository resource.LibraryItemRepository) error { return repository.DeleteLibraryItem(ctx, id) })
 }
-func (r *invalidatingResourceRepository) MoveLibraryItem(ctx context.Context, actorID *security.UserID, id, target resource.ID) (resource.LibraryItem, error) {
+func (r *invalidatingResourceRepository) MoveLibraryItem(ctx context.Context, actorID *security.UserID, id, target resource.ID, expectedVersion int64, recordRevision bool) (resource.LibraryItem, error) {
 	repository, err := r.libraryItems()
 	if err != nil {
 		return resource.LibraryItem{}, err
@@ -612,7 +687,7 @@ func (r *invalidatingResourceRepository) MoveLibraryItem(ctx context.Context, ac
 	var result resource.LibraryItem
 	err = withRepositoryCacheWrite(r.policy, tags, func() error {
 		var writeErr error
-		result, writeErr = repository.MoveLibraryItem(ctx, actorID, id, target)
+		result, writeErr = repository.MoveLibraryItem(ctx, actorID, id, target, expectedVersion, recordRevision)
 		if writeErr == nil {
 			r.policy.invalidate(ctx, append(tags, libraryItemTags(result)...)...)
 		}

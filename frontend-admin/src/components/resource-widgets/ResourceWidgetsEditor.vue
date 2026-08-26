@@ -14,17 +14,19 @@ import WidgetCard from './WidgetCard.vue'
 import WidgetPickerDialog from './WidgetPickerDialog.vue'
 import WidgetSettingsDialog from './WidgetSettingsDialog.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   accessToken: string
   siteId: number
   resourceId: number
   template: ResourceTemplate
   definitions: WidgetDefinition[]
   modelValue: ResourceWidget[]
-  canUpdate: boolean
-}>()
+	canUpdate: boolean
+	resourceVersion?: number
+}>(), { resourceVersion: 1 })
 const emit = defineEmits<{
-  'update:modelValue': [value: ResourceWidget[]]
+	'update:modelValue': [value: ResourceWidget[]]
+	changed: []
   unauthorized: []
 }>()
 
@@ -83,19 +85,20 @@ async function save(value: WidgetSettingsValue): Promise<void> {
     const path = `/api/sites/${props.siteId}/resources/${props.resourceId}/widgets`
     const saved = editingWidget.value
       ? await adminRequest<ResourceWidget>(`${path}/${editingWidget.value.id}`, props.accessToken, {
-          method: 'PATCH', body: JSON.stringify(value),
+			method: 'PATCH', body: JSON.stringify({ ...value, expected_version: props.resourceVersion }),
         })
       : await adminRequest<ResourceWidget>(path, props.accessToken, {
           method: 'POST', body: JSON.stringify({
             code: selectedDefinition.value.code,
             area: pendingArea.value,
-            ...value,
+			...value, expected_version: props.resourceVersion,
           }),
         })
     const current = editingWidget.value
       ? props.modelValue.map((widget) => widget.id === saved.id ? saved : widget)
       : [...props.modelValue, saved]
-    emit('update:modelValue', normalizeWidgetPositions(current))
+	emit('update:modelValue', normalizeWidgetPositions(current))
+	emit('changed')
     settingsOpen.value = false
     ElMessage.success(editingWidget.value ? 'Виджет обновлён' : 'Виджет добавлен')
   } catch (error) {
@@ -117,9 +120,10 @@ async function remove(value: ResourceWidget): Promise<void> {
     await adminRequestVoid(
       `/api/sites/${props.siteId}/resources/${props.resourceId}/widgets/${value.id}`,
       props.accessToken,
-      { method: 'DELETE' },
+		{ method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_version: props.resourceVersion }) },
     )
-    emit('update:modelValue', normalizeWidgetPositions(props.modelValue.filter((widget) => widget.id !== value.id)))
+	emit('update:modelValue', normalizeWidgetPositions(props.modelValue.filter((widget) => widget.id !== value.id)))
+	emit('changed')
     ElMessage.success('Виджет удалён')
   } catch (error) {
     handleError(error, 'Не удалось удалить виджет.')
@@ -168,9 +172,10 @@ async function drop(area: WidgetArea, index: number, event: DragEvent): Promise<
     const response = await adminRequest<{ items: ResourceWidget[] }>(
       `/api/sites/${props.siteId}/resources/${props.resourceId}/widgets/order`,
       props.accessToken,
-      { method: 'PUT', body: JSON.stringify({ items: widgetOrder(moved) }) },
+		{ method: 'PUT', body: JSON.stringify({ expected_version: props.resourceVersion, items: widgetOrder(moved) }) },
     )
-    emit('update:modelValue', normalizeWidgetPositions(response.items))
+	emit('update:modelValue', normalizeWidgetPositions(response.items))
+	emit('changed')
   } catch (error) {
     emit('update:modelValue', previous)
     handleError(error, 'Не удалось изменить порядок виджетов.')
