@@ -113,6 +113,7 @@ type LibraryItemRepository interface {
 	DeleteLibraryItem(context.Context, ID) error
 	MoveLibraryItem(context.Context, *security.UserID, ID, ID, int64, bool) (LibraryItem, error)
 	QueryLibraryItems(context.Context, LibraryItemQuery) (LibraryItemPage, error)
+	LibraryItemTemplateCodes(context.Context, site.ID, ID) ([]template.Code, error)
 	ResolveLibraryItemRoute(context.Context, site.ID, string) (LibraryItem, Resource, error)
 }
 
@@ -249,11 +250,15 @@ func (s *LibraryService) Query(ctx context.Context, actor security.Actor, query 
 	if err := s.common.authorizer.Check(ctx, actor, readPermission); err != nil {
 		return LibraryItemPage{}, err
 	}
+	library, runtime, err := s.library(ctx, query.SiteID, query.LibraryID)
+	if err != nil {
+		return LibraryItemPage{}, err
+	}
+	if err := s.resolveLibraryQuery(ctx, library, runtime, &query); err != nil {
+		return LibraryItemPage{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
 	if err := query.Validate(); err != nil {
 		return LibraryItemPage{}, ErrInvalid
-	}
-	if _, _, err := s.library(ctx, query.SiteID, query.LibraryID); err != nil {
-		return LibraryItemPage{}, err
 	}
 	page, err := s.repository.QueryLibraryItems(ctx, query)
 	if err != nil {
@@ -263,6 +268,104 @@ func (s *LibraryService) Query(ctx context.Context, actor security.Actor, query 
 		page.Items[index] = cloneLibraryItem(page.Items[index])
 	}
 	return page, nil
+}
+
+func (s *LibraryService) resolveLibraryQuery(ctx context.Context, library Resource, runtime *site.Runtime, query *LibraryItemQuery) error {
+	kinds := make(map[FieldPath]field.StorageKind)
+	resolve := func(path FieldPath) (field.StorageKind, error) {
+		if kind, exists := kinds[path]; exists {
+			return kind, nil
+		}
+		if !IsCustomFieldPath(path) {
+			kind, err := BuiltinFieldStorageKind(path)
+			if err == nil {
+				kinds[path] = kind
+			}
+			return kind, err
+		}
+		codes, err := s.repository.LibraryItemTemplateCodes(ctx, library.SiteID, library.ID)
+		if err != nil {
+			return "", err
+		}
+		if len(codes) == 0 {
+			if code, ok := library.TypeSettings["default_item_template"].(string); ok && code != "" {
+				codes = []template.Code{template.Code(code)}
+			}
+		}
+		key := strings.TrimPrefix(string(path), "resource.field.")
+		var resolved field.StorageKind
+		for _, code := range codes {
+			templateRuntime, exists := runtime.Profile().Template(code)
+			if !exists {
+				return "", fmt.Errorf("library item template %q is unavailable", code)
+			}
+			kind, exists := templateRuntime.FieldSchema().StorageKind(key)
+			if !exists {
+				continue
+			}
+			if resolved != "" && resolved != kind {
+				return "", fmt.Errorf("field %q has incompatible storage kinds %q and %q", path, resolved, kind)
+			}
+			resolved = kind
+		}
+		if resolved == "" {
+			return "", fmt.Errorf("field %q is not defined by LibraryItem templates", path)
+		}
+		kinds[path] = resolved
+		return resolved, nil
+	}
+	for index := range query.Filters {
+		kind, err := resolve(query.Filters[index].Field)
+		if err != nil {
+			return err
+		}
+		query.Filters[index].Kind = kind
+		query.Filters[index].Value, err = normalizeQueryFilterValue(kind, query.Filters[index].Operator, query.Filters[index].Value)
+		if err != nil {
+			return fmt.Errorf("field %q: %w", query.Filters[index].Field, err)
+		}
+	}
+	for index := range query.Sort {
+		kind, err := resolve(query.Sort[index].Field)
+		if err != nil {
+			return err
+		}
+		query.Sort[index].Kind = kind
+	}
+	return nil
+}
+
+func normalizeQueryFilterValue(kind field.StorageKind, operator FilterOperator, value any) (any, error) {
+	if operator == FilterIn || operator == FilterNotIn {
+		items, ok := value.([]any)
+		if !ok {
+			return nil, errors.New("set filter value is invalid")
+		}
+		result := make([]any, len(items))
+		for index, item := range items {
+			normalized, err := normalizeQueryFilterValue(kind, FilterEqual, item)
+			if err != nil {
+				return nil, err
+			}
+			result[index] = normalized
+		}
+		return result, nil
+	}
+	if kind == field.StorageTimestamp {
+		if timestamp, ok := value.(time.Time); ok {
+			return timestamp, nil
+		}
+		raw, ok := value.(string)
+		if !ok {
+			return nil, errors.New("timestamp filter value must be RFC3339")
+		}
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return nil, errors.New("timestamp filter value must be RFC3339")
+		}
+		return parsed, nil
+	}
+	return value, nil
 }
 
 func (s *LibraryService) Delete(ctx context.Context, actor security.Actor, id ID, permanent bool) error {

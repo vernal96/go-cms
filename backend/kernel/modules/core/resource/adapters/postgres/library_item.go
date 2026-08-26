@@ -144,6 +144,12 @@ WHERE route.resource_id = $1`+suffix+`;`, id))
 }
 
 func (r *Repository) UpdateLibraryItem(ctx context.Context, actorID *security.UserID, current, item resource.LibraryItem, recordRevision bool) (_ resource.LibraryItem, resultErr error) {
+	return retryLibraryItemTransaction(ctx, func() (resource.LibraryItem, error) {
+		return r.updateLibraryItemOnce(ctx, actorID, current, item, recordRevision)
+	})
+}
+
+func (r *Repository) updateLibraryItemOnce(ctx context.Context, actorID *security.UserID, current, item resource.LibraryItem, recordRevision bool) (_ resource.LibraryItem, resultErr error) {
 	tx, err := r.connector.Pool().Begin(ctx)
 	if err != nil {
 		return resource.LibraryItem{}, err
@@ -317,6 +323,12 @@ func (r *Repository) DeleteLibraryItem(ctx context.Context, id resource.ID) erro
 }
 
 func (r *Repository) MoveLibraryItem(ctx context.Context, actorID *security.UserID, id, targetLibraryID resource.ID, expectedVersion int64, recordRevision bool) (_ resource.LibraryItem, resultErr error) {
+	return retryLibraryItemTransaction(ctx, func() (resource.LibraryItem, error) {
+		return r.moveLibraryItemOnce(ctx, actorID, id, targetLibraryID, expectedVersion, recordRevision)
+	})
+}
+
+func (r *Repository) moveLibraryItemOnce(ctx context.Context, actorID *security.UserID, id, targetLibraryID resource.ID, expectedVersion int64, recordRevision bool) (_ resource.LibraryItem, resultErr error) {
 	tx, err := r.connector.Pool().Begin(ctx)
 	if err != nil {
 		return resource.LibraryItem{}, err
@@ -417,6 +429,13 @@ func (r *Repository) QueryLibraryItems(ctx context.Context, query resource.Libra
 			return resource.LibraryItemPage{}, err
 		}
 		where = append(where, fragment)
+		if libraryItemPartitionFilter(condition) {
+			partitionFragment, err := resourceQueryFilterFor(condition, add, "item", libraryItemPartitionQueryColumn)
+			if err != nil {
+				return resource.LibraryItemPage{}, err
+			}
+			where = append(where, partitionFragment)
+		}
 	}
 	sorts, idDirection := resource.LibraryItemSorts(query)
 	expressions, order, err := libraryItemQueryOrder(sorts, idDirection, &args)
@@ -466,6 +485,23 @@ func (r *Repository) QueryLibraryItems(ctx context.Context, query resource.Libra
 	return page, nil
 }
 
+func (r *Repository) LibraryItemTemplateCodes(ctx context.Context, siteID site.ID, libraryID resource.ID) ([]template.Code, error) {
+	rows, err := r.connector.Pool().Query(ctx, `SELECT DISTINCT template FROM core.library_items WHERE site_id=$1 AND library_id=$2 AND template IS NOT NULL ORDER BY template;`, siteID, libraryID)
+	if err != nil {
+		return nil, translateError(err)
+	}
+	defer rows.Close()
+	result := make([]template.Code, 0, 4)
+	for rows.Next() {
+		var code template.Code
+		if err := rows.Scan(&code); err != nil {
+			return nil, err
+		}
+		result = append(result, code)
+	}
+	return result, translateError(rows.Err())
+}
+
 type libraryItemSortExpression struct {
 	sort resource.Sort
 	sql  string
@@ -495,6 +531,26 @@ func libraryItemQueryColumn(path resource.FieldPath) (string, bool) {
 		return "item.updated_at", false
 	default:
 		return "", true
+	}
+}
+
+func libraryItemPartitionQueryColumn(path resource.FieldPath) (string, bool) {
+	if path == resource.FieldPublishedAt {
+		return "item.partition_at", false
+	}
+	return libraryItemQueryColumn(path)
+}
+
+func libraryItemPartitionFilter(condition resource.FilterCondition) bool {
+	if condition.Field != resource.FieldPublishedAt {
+		return false
+	}
+	switch condition.Operator {
+	case resource.FilterEqual, resource.FilterIn, resource.FilterGreaterThan,
+		resource.FilterGreaterThanOrEqual, resource.FilterLessThan, resource.FilterLessThanOrEqual:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -553,7 +609,7 @@ func sortDirectionSQL(direction resource.SortDirection) string {
 }
 
 func (r *Repository) ResolveLibraryItemRoute(ctx context.Context, siteID site.ID, path string) (resource.LibraryItem, resource.Resource, error) {
-	rows, err := r.connector.Pool().Query(ctx, `SELECT id, site_id, parent_id, type, template, content_type, title, menu_title, slug, path, annotation, content, image_media_id, target_resource_id, external_url, is_public, is_searchable, in_menu, in_sitemap, sort, published_at, unpublished_at, type_settings, created_at, updated_at, created_by, updated_by, deleted_at, deleted_by FROM core.resources WHERE site_id=$1 AND type='library' AND path IS NOT NULL AND (path='/' OR $2=path OR $2 LIKE path||'/%') ORDER BY length(path) DESC, id LIMIT 16;`, siteID, path)
+	rows, err := r.connector.Pool().Query(ctx, `SELECT id, site_id, parent_id, type, template, content_type, title, menu_title, slug, path, annotation, content, image_media_id, target_resource_id, external_url, is_public, is_searchable, in_menu, in_sitemap, sort, published_at, unpublished_at, type_settings, created_at, updated_at, created_by, updated_by, deleted_at, deleted_by FROM core.resources WHERE site_id=$1 AND type='library' AND path IS NOT NULL AND (path='/' OR $2=path OR $2 LIKE path||'/%') ORDER BY length(path) DESC, id;`, siteID, path)
 	if err != nil {
 		return resource.LibraryItem{}, resource.Resource{}, err
 	}

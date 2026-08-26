@@ -280,6 +280,22 @@ func TestMenuFiltersOrdersAndBuildsHierarchy(t *testing.T) {
 	}
 }
 
+func TestResourceDTOReturnsGenericTargetAndTypeSettings(t *testing.T) {
+	t.Parallel()
+	targetID := resource.ID(42)
+	item := resource.Resource{
+		ID: 9, SiteID: 7, Type: "custom", Title: "Custom",
+		TargetResourceID: &targetID,
+		TypeSettings:     map[string]any{"unknown": map[string]any{"enabled": true}},
+		Fields:           map[string]any{"rank": int64(3)},
+	}
+	dto := resourceDTO(item)
+	if dto.TargetResourceID == nil || *dto.TargetResourceID != targetID ||
+		dto.TypeSettings["unknown"] == nil || dto.Fields["rank"] != int64(3) {
+		t.Fatalf("resource DTO = %#v", dto)
+	}
+}
+
 var _ site.ManagementRepository = (*managementSiteRepository)(nil)
 var _ security.Authorizer = managementAuthorizer{}
 var _ SiteAccessPolicy = scopedPolicy{}

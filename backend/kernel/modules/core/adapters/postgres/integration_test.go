@@ -80,36 +80,34 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 34 {
+	if len(entries) != 32 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	expected := map[string]bool{
-		"000017_library_item_year_partitions_search.up.sql":   false,
-		"000017_library_item_year_partitions_search.down.sql": false,
-		"000016_resource_revisions.up.sql":                    false,
-		"000016_resource_revisions.down.sql":                  false,
-		"000005_identity.up.sql":                              false,
-		"000005_identity.down.sql":                            false,
-		"000006_permissions.up.sql":                           false,
-		"000006_permissions.down.sql":                         false,
-		"000007_resource_widgets.up.sql":                      false,
-		"000007_resource_widgets.down.sql":                    false,
-		"000008_user_blocking.up.sql":                         false,
-		"000008_user_blocking.down.sql":                       false,
-		"000009_file_field_references.up.sql":                 false,
-		"000009_file_field_references.down.sql":               false,
-		"000010_user_preferences.up.sql":                      false,
-		"000010_user_preferences.down.sql":                    false,
-		"000011_user_accent_color.up.sql":                     false,
-		"000011_user_accent_color.down.sql":                   false,
-		"000012_resource_editor_tree.up.sql":                  false,
-		"000012_resource_editor_tree.down.sql":                false,
-		"000013_resource_widget_bindings.up.sql":              false,
-		"000013_resource_widget_bindings.down.sql":            false,
-		"000014_group_site_access.up.sql":                     false,
-		"000014_group_site_access.down.sql":                   false,
-		"000015_resource_entities_fields_libraries.up.sql":    false,
-		"000015_resource_entities_fields_libraries.down.sql":  false,
+		"000016_resource_revisions.up.sql":                   false,
+		"000016_resource_revisions.down.sql":                 false,
+		"000005_identity.up.sql":                             false,
+		"000005_identity.down.sql":                           false,
+		"000006_permissions.up.sql":                          false,
+		"000006_permissions.down.sql":                        false,
+		"000007_resource_widgets.up.sql":                     false,
+		"000007_resource_widgets.down.sql":                   false,
+		"000008_user_blocking.up.sql":                        false,
+		"000008_user_blocking.down.sql":                      false,
+		"000009_file_field_references.up.sql":                false,
+		"000009_file_field_references.down.sql":              false,
+		"000010_user_preferences.up.sql":                     false,
+		"000010_user_preferences.down.sql":                   false,
+		"000011_user_accent_color.up.sql":                    false,
+		"000011_user_accent_color.down.sql":                  false,
+		"000012_resource_editor_tree.up.sql":                 false,
+		"000012_resource_editor_tree.down.sql":               false,
+		"000013_resource_widget_bindings.up.sql":             false,
+		"000013_resource_widget_bindings.down.sql":           false,
+		"000014_group_site_access.up.sql":                    false,
+		"000014_group_site_access.down.sql":                  false,
+		"000015_resource_entities_fields_libraries.up.sql":   false,
+		"000015_resource_entities_fields_libraries.down.sql": false,
 	}
 	for _, entry := range entries {
 		if _, exists := expected[entry.Name()]; exists {
@@ -210,13 +208,37 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 17 || !hasVersion || dirty {
+	if version != 16 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,
 			hasVersion,
 			dirty,
 		)
+	}
+	var hashPartitions, rangePartitions, defaultPartitions, searchIndexes int
+	var legacySettingsColumn bool
+	if err := connector.Pool().QueryRow(ctx, `
+SELECT
+    (SELECT count(*) FROM pg_inherits WHERE inhparent='core.library_items'::regclass),
+    (SELECT count(*) FROM pg_inherits inherited
+      JOIN pg_class child ON child.oid=inherited.inhrelid
+      WHERE inherited.inhparent IN (
+        SELECT inhrelid FROM pg_inherits WHERE inhparent='core.library_items'::regclass
+      )),
+    (SELECT count(*) FROM pg_class WHERE relnamespace='core'::regnamespace AND relname ~ '^library_items_h[0-7]_default$'),
+    (SELECT count(*) FROM pg_indexes WHERE schemaname='core' AND indexname IN (
+      'idx_library_items_library_created', 'idx_library_items_library_publication',
+      'idx_library_items_library_template', 'idx_library_items_title_trgm',
+      'idx_library_items_slug_trgm'
+    )),
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='core' AND table_name='resources' AND column_name='settings');
+`).Scan(&hashPartitions, &rangePartitions, &defaultPartitions, &searchIndexes, &legacySettingsColumn); err != nil {
+		t.Fatal(err)
+	}
+	if hashPartitions != 8 || rangePartitions != 104 || defaultPartitions != 8 || searchIndexes != 5 || legacySettingsColumn {
+		t.Fatalf("migration topology = hash:%d range:%d default:%d indexes:%d legacy_settings:%t",
+			hashPartitions, rangePartitions, defaultPartitions, searchIndexes, legacySettingsColumn)
 	}
 
 	var sitesTable *string
@@ -1412,6 +1434,50 @@ VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]
 	if err != nil {
 		t.Fatalf("create library: %v", err)
 	}
+	seasonPath := "/catalog/2025"
+	seasonLibrary, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: siteIDs["localhost"], ParentID: &library.ID, Type: resourcetype.Library,
+		Title: "Season 2025", Slug: "2025", Path: &seasonPath,
+		IsPublic: true, IsSearchable: true, InMenu: true, InSitemap: true,
+		Fields: map[string]any{}, TypeSettings: map[string]any{"item_url_pattern": "/{slug}"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create structurally overlapping library: %v", err)
+	}
+	seasonItem, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
+		SiteID: siteIDs["localhost"], LibraryID: seasonLibrary.ID,
+		Title: "Seasonal", Slug: "seasonal", ContentType: &contentType,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+	}, false)
+	if err != nil {
+		t.Fatalf("create nested namespace item: %v", err)
+	}
+	publication2026 := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.UTC)
+	datedItem, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
+		SiteID: siteIDs["localhost"], LibraryID: library.ID,
+		Title: "Dated seasonal", Slug: "seasonal", ContentType: &contentType,
+		IsPublic: true, IsSearchable: true, PublishedAt: &publication2026, Fields: map[string]any{},
+	}, false)
+	if err != nil {
+		t.Fatalf("same slug in a different year conflicted: %v", err)
+	}
+	publication2025 := time.Date(2025, time.March, 1, 0, 0, 0, 0, time.UTC)
+	conflictingDatedItem := datedItem
+	conflictingDatedItem.PublishedAt = &publication2025
+	if _, err := libraryItems.UpdateLibraryItem(ctx, nil, datedItem, conflictingDatedItem, false); !errors.Is(err, resource.ErrRouteConflict) {
+		t.Fatalf("same slug in the same year error = %v", err)
+	}
+	maintenanceMutation := library
+	maintenanceMutation.TypeSettings = map[string]any{"item_url_pattern": "/2025/{slug}"}
+	if _, err := resourceRepository.Update(ctx, nil, library, maintenanceMutation, nil); !errors.Is(err, resource.ErrRouteMutationRequiresMaintenance) {
+		t.Fatalf("unsafe online Library namespace mutation error = %v", err)
+	}
+	if err := libraryItems.DeleteLibraryItem(ctx, datedItem.ID); err != nil {
+		t.Fatalf("delete dated route fixture: %v", err)
+	}
+	if err := libraryItems.DeleteLibraryItem(ctx, seasonItem.ID); err != nil {
+		t.Fatalf("delete nested route fixture: %v", err)
+	}
 	archivePath := "/archive"
 	archive, err := resourceRepository.Create(ctx, nil, resource.Resource{
 		SiteID: siteIDs["localhost"], Type: resourcetype.Library,
@@ -1547,6 +1613,34 @@ VALUES ((SELECT id FROM entity), $1, 'Invalid settings', 'invalid-settings', '[]
 	}
 	if err := connector.Pool().QueryRow(ctx, `SELECT tableoid::regclass::text FROM core.library_items WHERE id=$1 AND library_id=$2;`, loadedLibraryItem.ID, loadedLibraryItem.LibraryID).Scan(&physicalPartition); err != nil || !strings.HasSuffix(physicalPartition, "_y2026") {
 		t.Fatalf("current item partition = %q, %v", physicalPartition, err)
+	}
+	partitionExplainRows, err := connector.Pool().Query(ctx, `
+EXPLAIN (COSTS OFF)
+SELECT id FROM core.library_items
+WHERE library_id=$1
+  AND published_at >= '2026-01-01 00:00:00+00'
+  AND published_at < '2027-01-01 00:00:00+00'
+  AND partition_at >= '2026-01-01 00:00:00+00'
+  AND partition_at < '2027-01-01 00:00:00+00';`, library.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var partitionExplain strings.Builder
+	for partitionExplainRows.Next() {
+		var line string
+		if err := partitionExplainRows.Scan(&line); err != nil {
+			partitionExplainRows.Close()
+			t.Fatal(err)
+		}
+		partitionExplain.WriteString(line)
+		partitionExplain.WriteByte('\n')
+	}
+	partitionExplainRows.Close()
+	if !strings.Contains(partitionExplain.String(), "_y2026") ||
+		strings.Contains(partitionExplain.String(), "_y2025") ||
+		strings.Contains(partitionExplain.String(), "_y2027") ||
+		strings.Contains(partitionExplain.String(), "_default") {
+		t.Fatalf("publication partition pruning plan = %s", partitionExplain.String())
 	}
 	futurePublication := time.Date(2040, time.December, 31, 23, 59, 0, 0, time.UTC)
 	currentLibraryItem = loadedLibraryItem

@@ -1,9 +1,13 @@
 package postgres
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 )
@@ -20,6 +24,71 @@ func TestCustomNegativeFilterUsesNotExists(t *testing.T) {
 	}
 	if !strings.HasPrefix(fragment, "NOT EXISTS") || !strings.Contains(fragment, "value.resource_id = item.id") || !strings.Contains(fragment, "= ANY") {
 		t.Fatalf("negative filter SQL = %s", fragment)
+	}
+}
+
+func TestPublishedAtPartitionFilterOnlyUsesPrunableOperators(t *testing.T) {
+	for _, operator := range []resource.FilterOperator{
+		resource.FilterEqual, resource.FilterIn, resource.FilterGreaterThan,
+		resource.FilterGreaterThanOrEqual, resource.FilterLessThan, resource.FilterLessThanOrEqual,
+	} {
+		if !libraryItemPartitionFilter(resource.FilterCondition{Field: resource.FieldPublishedAt, Operator: operator}) {
+			t.Fatalf("operator %q did not constrain partition_at", operator)
+		}
+	}
+	for _, operator := range []resource.FilterOperator{resource.FilterNotEqual, resource.FilterNotIn} {
+		if libraryItemPartitionFilter(resource.FilterCondition{Field: resource.FieldPublishedAt, Operator: operator}) {
+			t.Fatalf("operator %q unexpectedly constrained partition_at", operator)
+		}
+	}
+	if libraryItemPartitionFilter(resource.FilterCondition{Field: resource.FieldCreatedAt, Operator: resource.FilterGreaterThan}) {
+		t.Fatal("created_at unexpectedly constrained partition_at")
+	}
+}
+
+func TestLibraryNamespaceStructuralOverlap(t *testing.T) {
+	t.Parallel()
+	library := func(path, pattern string) resource.Resource {
+		return resource.Resource{Path: &path, TypeSettings: map[string]any{"item_url_pattern": pattern}}
+	}
+	for _, test := range []struct {
+		name        string
+		left, right resource.Resource
+		overlaps    bool
+	}{
+		{name: "different depth", left: library("/blog", "/{slug}"), right: library("/blog/archive", "/{slug}"), overlaps: false},
+		{name: "literal rejects year", left: library("/blog", "/{year}/{slug}"), right: library("/blog/archive", "/{slug}"), overlaps: false},
+		{name: "year can overlap descendant", left: library("/blog", "/{year}/{slug}"), right: library("/blog/2026", "/{slug}"), overlaps: true},
+		{name: "different literal prefixes", left: library("/blog", "/news-{slug}"), right: library("/blog", "/docs-{slug}"), overlaps: false},
+		{name: "id and slug overlap", left: library("/blog", "/{id}"), right: library("/blog", "/{slug}"), overlaps: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if actual := libraryNamespacesMayOverlap(test.left, test.right); actual != test.overlaps {
+				t.Fatalf("overlap = %v, want %v", actual, test.overlaps)
+			}
+		})
+	}
+}
+
+func TestLibraryItemTransactionRetryIsBoundedAndRespectsCancellation(t *testing.T) {
+	attempts := 0
+	_, err := retryLibraryItemTransaction(context.Background(), func() (resource.LibraryItem, error) {
+		attempts++
+		return resource.LibraryItem{}, &pgconn.PgError{Code: pgerrcode.SerializationFailure}
+	})
+	if err == nil || attempts != libraryItemTransactionAttempts {
+		t.Fatalf("retry result = %v after %d attempts", err, attempts)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	attempts = 0
+	_, err = retryLibraryItemTransaction(ctx, func() (resource.LibraryItem, error) {
+		attempts++
+		return resource.LibraryItem{}, nil
+	})
+	if !errors.Is(err, context.Canceled) || attempts != 0 {
+		t.Fatalf("canceled retry result = %v after %d attempts", err, attempts)
 	}
 }
 

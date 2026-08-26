@@ -57,6 +57,7 @@ describe('ResourceCreateDialog', () => {
         ],
 			extensions: [],
       })
+      .mockResolvedValueOnce({ items: [] })
       .mockResolvedValueOnce(created)
     const wrapper = shallowMount(ResourceCreateDialog, {
       props: { accessToken: 'token', siteId: 7 },
@@ -89,16 +90,19 @@ describe('ResourceCreateDialog', () => {
     await flushPromises()
 
     expect(requestMock).toHaveBeenNthCalledWith(
-      2,
+      3,
       '/api/sites/7/resources',
       'token',
       expect.objectContaining({ method: 'POST' }),
     )
-    const init = requestMock.mock.calls[1]?.[2] as RequestInit
+    const init = requestMock.mock.calls[2]?.[2] as RequestInit
     expect(JSON.parse(String(init.body))).toEqual({
       parent_id: null,
       type: 'page',
       template_code: null,
+      content_type: null,
+      content: '',
+      target_resource_id: null,
       title: 'Home',
       menu_title: '',
       slug: '',
@@ -106,5 +110,32 @@ describe('ResourceCreateDialog', () => {
 		type_settings: {},
     })
     expect(wrapper.emitted('created')?.[0]).toEqual([created, null])
+  })
+
+  it('uses capabilities for a custom target resource type', async () => {
+    requestMock
+      .mockResolvedValueOnce({
+        types: [{ code: 'custom_target', label: 'Custom target', capabilities: { supports_target_resource: true, mutable_type: true } }],
+        templates: [], widgets: [], extensions: [],
+      })
+      .mockResolvedValueOnce({ items: [{ id: 12, parent_id: null, type: 'page', display_title: 'Target', path: '/target' }] })
+      .mockResolvedValueOnce({ id: 13, title: 'Reference' })
+    const wrapper = shallowMount(ResourceCreateDialog, {
+      props: { accessToken: 'token', siteId: 7 },
+      global: { renderStubDefaultSlot: true, stubs: { ElDialog: { template: '<div><slot /><slot name="footer" /></div>' } } },
+    })
+    await (wrapper.vm as unknown as { open(parent: ResourceTreeItem | null): Promise<void> }).open(null)
+    await flushPromises()
+    const model = wrapper.findComponent({ name: 'ElForm' }).props('model') as Record<string, unknown>
+    Object.assign(model, { title: 'Reference', target_resource_id: 12 })
+    const buttons = wrapper.findAllComponents({ name: 'ElButton' })
+    buttons[buttons.length - 1]?.vm.$emit('click')
+    await flushPromises()
+
+    const init = requestMock.mock.calls[2]?.[2] as RequestInit
+    expect(JSON.parse(String(init.body))).toEqual(expect.objectContaining({
+      type: 'custom_target', target_resource_id: 12, template_code: null,
+    }))
+    expect(wrapper.findAllComponents({ name: 'ElSelect' })).toHaveLength(2)
   })
 })

@@ -61,6 +61,7 @@ func (testModule) Registry() kernel.ModuleRegistry {
 		ResourceTypes: append(
 			resourcetype.StandardTypes(),
 			noPathType{},
+			genericPayloadType{},
 		),
 	}
 }
@@ -131,6 +132,31 @@ func (noPathType) Code() resourcetype.Code {
 	return "no_path"
 }
 
+type genericPayloadType struct{}
+
+func (genericPayloadType) Code() resourcetype.Code { return "generic_payload" }
+func (genericPayloadType) PathMode() resourcetype.PathMode {
+	return resourcetype.PathRoute
+}
+func (genericPayloadType) Capabilities() resourcetype.Capabilities {
+	return resourcetype.Capabilities{
+		SupportsTemplate: true, SupportsContent: true, SupportsFields: true,
+		SupportsExternalURL: true, SupportsTargetResource: true, MutableType: true,
+	}
+}
+func (genericPayloadType) Normalize(payload resourcetype.Payload) (resourcetype.Payload, error) {
+	if payload.Template == nil || *payload.Template != "article" ||
+		payload.ContentType == nil || *payload.ContentType != "markdown" ||
+		payload.Content != "generic body" ||
+		payload.TargetResourceID == nil || *payload.TargetResourceID <= 0 ||
+		payload.ExternalURL == nil || *payload.ExternalURL != "https://example.com/generic" ||
+		payload.Fields["headline"] != "Generic headline" ||
+		payload.TypeSettings["custom_option"] != "preserved" {
+		return resourcetype.Payload{}, errors.New("generic payload was not transported intact")
+	}
+	return payload, nil
+}
+
 func (noPathType) PathMode() resourcetype.PathMode {
 	return resourcetype.PathNone
 }
@@ -189,8 +215,9 @@ type memoryRepository struct {
 
 type memoryLibraryRepository struct {
 	*memoryRepository
-	items  map[ID]LibraryItem
-	nextID ID
+	items     map[ID]LibraryItem
+	nextID    ID
+	lastQuery LibraryItemQuery
 }
 
 func (r *memoryLibraryRepository) CreateLibraryItem(_ context.Context, _ *security.UserID, item LibraryItem, _ bool) (LibraryItem, error) {
@@ -272,12 +299,28 @@ func (r *memoryLibraryRepository) MoveLibraryItem(_ context.Context, _ *security
 }
 
 func (r *memoryLibraryRepository) QueryLibraryItems(_ context.Context, query LibraryItemQuery) (LibraryItemPage, error) {
+	r.lastQuery = query
 	result := LibraryItemPage{}
 	for _, item := range r.items {
 		if item.SiteID == query.SiteID && item.LibraryID == query.LibraryID {
 			result.Items = append(result.Items, cloneLibraryItem(item))
 		}
 	}
+	return result, nil
+}
+
+func (r *memoryLibraryRepository) LibraryItemTemplateCodes(_ context.Context, siteID site.ID, libraryID ID) ([]template.Code, error) {
+	seen := make(map[template.Code]struct{})
+	for _, item := range r.items {
+		if item.SiteID == siteID && item.LibraryID == libraryID && item.Template != nil {
+			seen[*item.Template] = struct{}{}
+		}
+	}
+	result := make([]template.Code, 0, len(seen))
+	for code := range seen {
+		result = append(result, code)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result, nil
 }
 
@@ -808,6 +851,13 @@ func newTestService(
 						Sidebar: []template.Item{template.ResourceWidgets{}},
 					},
 				},
+				{
+					Code:  "article_number",
+					Label: "Numeric article",
+					Fields: []field.Definition{{
+						Key: "headline", Type: field.TypeInteger, Label: "Headline number",
+					}},
+				},
 			},
 		},
 	)
@@ -937,6 +987,41 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 	}
 }
 
+func TestServiceTransportsGenericRegisteredTypePayload(t *testing.T) {
+	service, _, _ := newTestService(t)
+	target, err := service.Create(context.Background(), security.System(), CreateInput{
+		SiteID: 1,
+		Title:  "Target",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	templateCode := template.Code("article")
+	contentType := "markdown"
+	externalURL := "https://example.com/generic"
+	created, err := service.Create(context.Background(), security.System(), CreateInput{
+		SiteID:           1,
+		Type:             "generic_payload",
+		Template:         &templateCode,
+		ContentType:      &contentType,
+		Content:          "generic body",
+		TargetResourceID: &target.ID,
+		ExternalURL:      &externalURL,
+		Title:            "Generic",
+		Slug:             "generic",
+		Fields:           map[string]any{"headline": "Generic headline"},
+		TypeSettings:     map[string]any{"custom_option": "preserved"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Type != "generic_payload" || created.ContentType == nil ||
+		*created.ContentType != contentType || created.TargetResourceID == nil ||
+		*created.TargetResourceID != target.ID || created.TypeSettings["custom_option"] != "preserved" {
+		t.Fatalf("created generic resource = %#v", created)
+	}
+}
+
 func TestServiceKeepsLibraryTypeImmutableBothDirections(t *testing.T) {
 	service, _, _ := newTestService(t)
 	ctx := context.Background()
@@ -1043,6 +1128,78 @@ func TestLibraryServiceCopiesDefaultTemplateOnlyAtCreation(t *testing.T) {
 	}
 	if second.Template == nil || *second.Template != template.Code("empty") {
 		t.Fatalf("second item template = %#v", second.Template)
+	}
+}
+
+func TestLibraryServiceResolvesSemanticQueryKindsAndTimestamps(t *testing.T) {
+	common, treeRepository, _ := newTestService(t)
+	ctx := context.Background()
+	home, err := common.Create(ctx, security.System(), CreateInput{SiteID: 1, Title: "Home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	library, err := common.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, ParentID: &home.ID, Type: resourcetype.Library,
+		Title: "Catalog", Slug: "catalog", TypeSettings: map[string]any{"item_url_pattern": "/{slug}"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	article := template.Code("article")
+	repository := &memoryLibraryRepository{
+		memoryRepository: treeRepository,
+		items: map[ID]LibraryItem{1000: {
+			ID: 1000, SiteID: 1, LibraryID: library.ID, Template: &article,
+		}},
+	}
+	common.repository = repository
+	service, err := NewLibraryService(repository, common)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Query(ctx, security.System(), LibraryItemQuery{
+		SiteID: 1, LibraryID: library.ID, Limit: 20,
+		Filters: []FilterCondition{
+			{Field: FieldPublishedAt, Operator: FilterGreaterThanOrEqual, Value: "2026-01-01T00:00:00Z"},
+			{Field: "resource.field.headline", Operator: FilterEqual, Value: "News"},
+		},
+		Sort: []Sort{{Field: "resource.field.headline", Direction: SortAscending}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repository.lastQuery.Filters[0].Kind != field.StorageTimestamp ||
+		repository.lastQuery.Filters[1].Kind != field.StorageString ||
+		repository.lastQuery.Sort[0].Kind != field.StorageString {
+		t.Fatalf("resolved query = %#v", repository.lastQuery)
+	}
+	if _, ok := repository.lastQuery.Filters[0].Value.(time.Time); !ok {
+		t.Fatalf("published_at value = %T", repository.lastQuery.Filters[0].Value)
+	}
+
+	_, err = service.Query(ctx, security.System(), LibraryItemQuery{
+		SiteID: 1, LibraryID: library.ID, Limit: 20,
+		Filters: []FilterCondition{{Field: FieldPublishedAt, Operator: FilterEqual, Value: "not-a-time"}},
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid timestamp error = %v", err)
+	}
+	_, err = service.Query(ctx, security.System(), LibraryItemQuery{
+		SiteID: 1, LibraryID: library.ID, Limit: 20,
+		Filters: []FilterCondition{{Field: "resource.field.missing", Operator: FilterEqual, Value: "x"}},
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("missing field error = %v", err)
+	}
+
+	numeric := template.Code("article_number")
+	repository.items[1001] = LibraryItem{ID: 1001, SiteID: 1, LibraryID: library.ID, Template: &numeric}
+	_, err = service.Query(ctx, security.System(), LibraryItemQuery{
+		SiteID: 1, LibraryID: library.ID, Limit: 20,
+		Filters: []FilterCondition{{Field: "resource.field.headline", Operator: FilterEqual, Value: "x"}},
+	})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "incompatible storage kinds") {
+		t.Fatalf("incompatible kinds error = %v", err)
 	}
 }
 

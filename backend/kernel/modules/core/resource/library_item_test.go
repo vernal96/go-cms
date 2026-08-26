@@ -39,6 +39,23 @@ func TestEffectiveLibraryItemURLUsesCurrentLibraryPath(t *testing.T) {
 		t.Fatalf("matched key = %#v, matched = %t", key, matched)
 	}
 
+	library.TypeSettings["item_url_pattern"] = "/{year}/{month}/{day}/{id}"
+	url, err = EffectiveLibraryItemURL(library, item)
+	if err != nil || url != "/company/updates/2026/08/22/42" {
+		t.Fatalf("dated ID URL = %q, %v", url, err)
+	}
+	key, matched = MatchLibraryItemPattern("/{year}/{month}/{day}/{id}", "/2026/08/22/42")
+	if !matched || key.ID != item.ID || key.Slug != "" {
+		t.Fatalf("matched dated ID key = %#v, matched = %t", key, matched)
+	}
+	createdAt := time.Date(2024, time.January, 3, 0, 0, 0, 0, time.UTC)
+	item.PublishedAt = nil
+	item.CreatedAt = createdAt
+	url, err = EffectiveLibraryItemURL(library, item)
+	if err != nil || url != "/company/updates/2024/01/03/42" {
+		t.Fatalf("created-at fallback URL = %q, %v", url, err)
+	}
+
 	library.TypeSettings["item_url_pattern"] = resourcetype.DefaultItemURLPattern
 	url, err = EffectiveLibraryItemURL(library, item)
 	if err != nil || url != "/company/updates/release" {
@@ -69,6 +86,16 @@ func TestLibraryItemQueryCursorBindsFullQueryAndSortTuple(t *testing.T) {
 	query.Search = "different"
 	if _, err := DecodeLibraryCursor(query); err == nil {
 		t.Fatal("cursor from another query was accepted")
+	}
+	query.Search = "article"
+	query.Filters[0].Value = false
+	if _, err := DecodeLibraryCursor(query); err == nil {
+		t.Fatal("cursor from another filter was accepted")
+	}
+	query.Filters[0].Value = true
+	query.Sort[0].Direction = SortAscending
+	if _, err := DecodeLibraryCursor(query); err == nil {
+		t.Fatal("cursor from another sort was accepted")
 	}
 }
 

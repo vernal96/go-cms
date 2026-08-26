@@ -150,6 +150,56 @@ func TestManagementHTTPWritesStructuredFieldErrors(t *testing.T) {
 	}
 }
 
+func TestManagementHTTPWritesRouteMaintenanceConflict(t *testing.T) {
+	t.Parallel()
+	response := httptest.NewRecorder()
+	writeManagementError(response, resource.ErrRouteMutationRequiresMaintenance)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"route_mutation_requires_maintenance"`) {
+		t.Fatalf("response = %d, %s", response.Code, response.Body.String())
+	}
+}
+
+func TestParseLibraryItemSemanticQuery(t *testing.T) {
+	t.Parallel()
+	request := httptest.NewRequest(http.MethodGet,
+		`/items?filters=%5B%7B%22field%22%3A%22published_at%22%2C%22operator%22%3A%22gte%22%2C%22value%22%3A%222026-01-01T00%3A00%3A00Z%22%7D%2C%7B%22field%22%3A%22resource.field.rank%22%2C%22operator%22%3A%22in%22%2C%22value%22%3A%5B1%2C2%5D%7D%2C%7B%22field%22%3A%22is_public%22%2C%22operator%22%3A%22eq%22%2C%22value%22%3Atrue%7D%5D&sort=%5B%7B%22field%22%3A%22created_at%22%2C%22direction%22%3A%22desc%22%7D%5D`, nil)
+	filters, sorts, err := parseLibraryItemSemanticQuery(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filters) != 3 || filters[0].Field != resource.FieldPublishedAt ||
+		filters[1].Field != "resource.field.rank" || filters[2].Field != resource.FieldIsPublic {
+		t.Fatalf("filters = %#v", filters)
+	}
+	values, ok := filters[1].Value.([]any)
+	if !ok || len(values) != 2 {
+		t.Fatalf("numeric set = %#v", filters[1].Value)
+	}
+	if _, ok := values[0].(json.Number); !ok {
+		t.Fatalf("numeric type = %T", values[0])
+	}
+	if value, ok := filters[2].Value.(bool); !ok || !value {
+		t.Fatalf("boolean value = %#v", filters[2].Value)
+	}
+	if len(sorts) != 1 || sorts[0].Field != resource.FieldCreatedAt || sorts[0].Direction != resource.SortDescending {
+		t.Fatalf("sorts = %#v", sorts)
+	}
+}
+
+func TestParseLibraryItemSemanticQueryRejectsUnknownJSON(t *testing.T) {
+	t.Parallel()
+	for _, query := range []string{
+		`filters=%5B%7B%22field%22%3A%22title%22%2C%22operator%22%3A%22eq%22%2C%22value%22%3A%22x%22%2C%22kind%22%3A%22string%22%7D%5D`,
+		`filters=%5B%7B%22field%22%3A%22unknown%22%2C%22operator%22%3A%22eq%22%2C%22value%22%3A%22x%22%7D%5D`,
+		`sort=%5B%7B%22field%22%3A%22created_at%22%2C%22direction%22%3A%22desc%22%7D%5Dtrailing`,
+	} {
+		request := httptest.NewRequest(http.MethodGet, "/items?"+query, nil)
+		if _, _, err := parseLibraryItemSemanticQuery(request); err == nil {
+			t.Fatalf("accepted query %q", query)
+		}
+	}
+}
+
 func TestManagementHTTPWidgetRoutesValidateStableBindingID(t *testing.T) {
 	t.Parallel()
 	router := chi.NewRouter()

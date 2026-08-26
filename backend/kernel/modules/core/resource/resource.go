@@ -35,13 +35,14 @@ type Ref struct {
 const ImageMediaUsage media.UsageKind = "resource.image"
 
 var (
-	ErrNotFound         = errors.New("resource not found")
-	ErrConflict         = errors.New("resource conflict")
-	ErrRouteConflict    = errors.New("resource route conflict")
-	ErrInvalid          = errors.New("invalid resource")
-	ErrInvalidReference = errors.New("invalid resource reference")
-	ErrInvalidTree      = errors.New("invalid resource tree")
-	ErrReferenced       = errors.New("resource is referenced")
+	ErrNotFound                         = errors.New("resource not found")
+	ErrConflict                         = errors.New("resource conflict")
+	ErrRouteConflict                    = errors.New("resource route conflict")
+	ErrRouteMutationRequiresMaintenance = errors.New("resource route mutation requires maintenance")
+	ErrInvalid                          = errors.New("invalid resource")
+	ErrInvalidReference                 = errors.New("invalid resource reference")
+	ErrInvalidTree                      = errors.New("invalid resource tree")
+	ErrReferenced                       = errors.New("resource is referenced")
 )
 
 type Resource struct {

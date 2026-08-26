@@ -581,13 +581,15 @@ type ResourceType struct {
 }
 
 type ResourceTypeCapabilities struct {
-	SupportsTemplate bool   `json:"supports_template"`
-	SupportsContent  bool   `json:"supports_content"`
-	SupportsWidgets  bool   `json:"supports_widgets"`
-	SupportsFields   bool   `json:"supports_fields"`
-	MutableType      bool   `json:"mutable_type"`
-	OwnsLibraryItems bool   `json:"owns_library_items"`
-	DefaultIcon      string `json:"default_icon"`
+	SupportsTemplate       bool   `json:"supports_template"`
+	SupportsContent        bool   `json:"supports_content"`
+	SupportsWidgets        bool   `json:"supports_widgets"`
+	SupportsFields         bool   `json:"supports_fields"`
+	SupportsExternalURL    bool   `json:"supports_external_url"`
+	SupportsTargetResource bool   `json:"supports_target_resource"`
+	MutableType            bool   `json:"mutable_type"`
+	OwnsLibraryItems       bool   `json:"owns_library_items"`
+	DefaultIcon            string `json:"default_icon"`
 }
 
 type ResourceMetadata struct {
@@ -661,7 +663,7 @@ func (m *Resources) ResourceMetadata(
 			label = string(code)
 		}
 		capabilities := resourceType.Capabilities()
-		types = append(types, ResourceType{Code: code, Label: label, Capabilities: ResourceTypeCapabilities{SupportsTemplate: capabilities.SupportsTemplate, SupportsContent: capabilities.SupportsContent, SupportsWidgets: capabilities.SupportsWidgets, SupportsFields: capabilities.SupportsFields, MutableType: capabilities.MutableType, OwnsLibraryItems: capabilities.OwnsLibraryItems, DefaultIcon: capabilities.DefaultIcon}})
+		types = append(types, ResourceType{Code: code, Label: label, Capabilities: ResourceTypeCapabilities{SupportsTemplate: capabilities.SupportsTemplate, SupportsContent: capabilities.SupportsContent, SupportsWidgets: capabilities.SupportsWidgets, SupportsFields: capabilities.SupportsFields, SupportsExternalURL: capabilities.SupportsExternalURL, SupportsTargetResource: capabilities.SupportsTargetResource, MutableType: capabilities.MutableType, OwnsLibraryItems: capabilities.OwnsLibraryItems, DefaultIcon: capabilities.DefaultIcon}})
 	}
 	extensions := make([]resourceextension.Metadata, 0)
 	for _, moduleRuntime := range runtime.Profile().Modules() {
@@ -800,15 +802,18 @@ func resourceExtensionError(err error) error {
 }
 
 type ResourceCreateInput struct {
-	ParentID     *resource.ID
-	Type         resourcetype.Code
-	Template     *template.Code
-	Title        string
-	MenuTitle    string
-	Slug         string
-	ExternalURL  *string
-	Fields       map[string]any
-	TypeSettings map[string]any
+	ParentID         *resource.ID
+	Type             resourcetype.Code
+	Template         *template.Code
+	ContentType      *string
+	Content          string
+	TargetResourceID *resource.ID
+	Title            string
+	MenuTitle        string
+	Slug             string
+	ExternalURL      *string
+	Fields           map[string]any
+	TypeSettings     map[string]any
 }
 
 func (m *Resources) CreateResource(
@@ -837,16 +842,19 @@ func (m *Resources) CreateResource(
 		}
 	}
 	created, err := m.resources.Create(ctx, actor, resource.CreateInput{
-		SiteID:       siteID,
-		ParentID:     input.ParentID,
-		Type:         input.Type,
-		Template:     input.Template,
-		Title:        input.Title,
-		MenuTitle:    input.MenuTitle,
-		Slug:         input.Slug,
-		ExternalURL:  input.ExternalURL,
-		Fields:       input.Fields,
-		TypeSettings: input.TypeSettings,
+		SiteID:           siteID,
+		ParentID:         input.ParentID,
+		Type:             input.Type,
+		Template:         input.Template,
+		ContentType:      input.ContentType,
+		Content:          input.Content,
+		TargetResourceID: input.TargetResourceID,
+		Title:            input.Title,
+		MenuTitle:        input.MenuTitle,
+		Slug:             input.Slug,
+		ExternalURL:      input.ExternalURL,
+		Fields:           input.Fields,
+		TypeSettings:     input.TypeSettings,
 	})
 	if err != nil {
 		if errors.Is(err, resource.ErrNotFound) {
@@ -872,32 +880,33 @@ func (m *Resources) CreateResource(
 }
 
 type ResourceDTO struct {
-	ID            resource.ID       `json:"id"`
-	SiteID        site.ID           `json:"site_id"`
-	Version       int64             `json:"version"`
-	ParentID      *resource.ID      `json:"parent_id"`
-	Type          resourcetype.Code `json:"type"`
-	TemplateCode  *template.Code    `json:"template_code"`
-	Title         string            `json:"title"`
-	MenuTitle     string            `json:"menu_title"`
-	Slug          string            `json:"slug"`
-	Path          *string           `json:"path"`
-	Annotation    string            `json:"annotation"`
-	ContentType   *string           `json:"content_type"`
-	Content       string            `json:"content"`
-	ExternalURL   *string           `json:"external_url"`
-	IsPublic      bool              `json:"is_public"`
-	IsSearchable  bool              `json:"is_searchable"`
-	InMenu        bool              `json:"in_menu"`
-	InSitemap     bool              `json:"in_sitemap"`
-	Sort          int               `json:"sort"`
-	PublishedAt   *time.Time        `json:"published_at"`
-	UnpublishedAt *time.Time        `json:"unpublished_at"`
-	Deleted       bool              `json:"deleted"`
-	DeletedAt     *time.Time        `json:"deleted_at"`
-	Fields        map[string]any    `json:"fields"`
-	TypeSettings  map[string]any    `json:"type_settings"`
-	Widgets       []ResourceWidget  `json:"widgets"`
+	ID               resource.ID       `json:"id"`
+	SiteID           site.ID           `json:"site_id"`
+	Version          int64             `json:"version"`
+	ParentID         *resource.ID      `json:"parent_id"`
+	Type             resourcetype.Code `json:"type"`
+	TemplateCode     *template.Code    `json:"template_code"`
+	Title            string            `json:"title"`
+	MenuTitle        string            `json:"menu_title"`
+	Slug             string            `json:"slug"`
+	Path             *string           `json:"path"`
+	Annotation       string            `json:"annotation"`
+	ContentType      *string           `json:"content_type"`
+	Content          string            `json:"content"`
+	TargetResourceID *resource.ID      `json:"target_resource_id"`
+	ExternalURL      *string           `json:"external_url"`
+	IsPublic         bool              `json:"is_public"`
+	IsSearchable     bool              `json:"is_searchable"`
+	InMenu           bool              `json:"in_menu"`
+	InSitemap        bool              `json:"in_sitemap"`
+	Sort             int               `json:"sort"`
+	PublishedAt      *time.Time        `json:"published_at"`
+	UnpublishedAt    *time.Time        `json:"unpublished_at"`
+	Deleted          bool              `json:"deleted"`
+	DeletedAt        *time.Time        `json:"deleted_at"`
+	Fields           map[string]any    `json:"fields"`
+	TypeSettings     map[string]any    `json:"type_settings"`
+	Widgets          []ResourceWidget  `json:"widgets"`
 }
 
 type ResourceWidget struct {
@@ -926,26 +935,27 @@ type ResourceDetails struct {
 }
 
 type ResourceUpdateInput struct {
-	ExpectedVersion int64
-	ParentID        *resource.ID
-	Type            resourcetype.Code
-	Template        *template.Code
-	Title           string
-	MenuTitle       string
-	Slug            string
-	Annotation      string
-	ContentType     *string
-	Content         string
-	ExternalURL     *string
-	IsPublic        bool
-	IsSearchable    bool
-	InMenu          bool
-	InSitemap       bool
-	Sort            int
-	PublishedAt     *time.Time
-	UnpublishedAt   *time.Time
-	Fields          map[string]any
-	TypeSettings    map[string]any
+	ExpectedVersion  int64
+	ParentID         *resource.ID
+	Type             resourcetype.Code
+	Template         *template.Code
+	Title            string
+	MenuTitle        string
+	Slug             string
+	Annotation       string
+	ContentType      *string
+	Content          string
+	TargetResourceID *resource.ID
+	ExternalURL      *string
+	IsPublic         bool
+	IsSearchable     bool
+	InMenu           bool
+	InSitemap        bool
+	Sort             int
+	PublishedAt      *time.Time
+	UnpublishedAt    *time.Time
+	Fields           map[string]any
+	TypeSettings     map[string]any
 }
 
 func (m *Resources) Resource(
@@ -1075,14 +1085,14 @@ func (m *Resources) UpdateResource(
 		ParentID:         input.ParentID,
 		Type:             input.Type,
 		Template:         input.Template,
-		ContentType:      nil,
+		ContentType:      input.ContentType,
 		Title:            input.Title,
 		MenuTitle:        input.MenuTitle,
 		Slug:             input.Slug,
 		Annotation:       input.Annotation,
 		Content:          input.Content,
 		ImageMediaID:     current.ImageMediaID,
-		TargetResourceID: nil,
+		TargetResourceID: input.TargetResourceID,
 		ExternalURL:      input.ExternalURL,
 		IsPublic:         input.IsPublic,
 		IsSearchable:     input.IsSearchable,
@@ -1146,6 +1156,14 @@ type LibraryItemsPage struct {
 	NextCursor string           `json:"next_cursor"`
 }
 
+type LibraryItemsInput struct {
+	Cursor  string
+	Limit   int
+	Search  string
+	Filters []resource.FilterCondition
+	Sort    []resource.Sort
+}
+
 type LibraryItemCreateInput struct {
 	Template      *template.Code
 	Title         string
@@ -1166,16 +1184,19 @@ type LibraryItemUpdateInput struct {
 	IsSearchable    *bool
 }
 
-func (m *Resources) LibraryItems(ctx context.Context, actor security.Actor, siteID site.ID, libraryID resource.ID, cursor string, limit int, search string) (LibraryItemsPage, error) {
+func (m *Resources) LibraryItems(ctx context.Context, actor security.Actor, siteID site.ID, libraryID resource.ID, input LibraryItemsInput) (LibraryItemsPage, error) {
 	if m.libraryItems == nil {
 		return LibraryItemsPage{}, errors.New("library item service is unavailable")
 	}
 	if err := m.requireSite(ctx, actor, siteID, ResourceReadPermission, SiteAccessEdit); err != nil {
 		return LibraryItemsPage{}, err
 	}
-	page, err := m.libraryItems.Query(ctx, actor, resource.LibraryItemQuery{SiteID: siteID, LibraryID: libraryID, Cursor: cursor, Limit: limit, Search: search})
+	page, err := m.libraryItems.Query(ctx, actor, resource.LibraryItemQuery{
+		SiteID: siteID, LibraryID: libraryID, Cursor: input.Cursor, Limit: input.Limit,
+		Search: input.Search, Filters: input.Filters, Sort: input.Sort,
+	})
 	if err != nil {
-		return LibraryItemsPage{}, err
+		return LibraryItemsPage{}, validationError(err)
 	}
 	library, err := m.resources.Get(ctx, actor, libraryID)
 	if err != nil {
@@ -1917,32 +1938,33 @@ func resourceDTO(item resource.Resource) ResourceDTO {
 		typeSettings[key] = value
 	}
 	return ResourceDTO{
-		ID:            item.ID,
-		SiteID:        item.SiteID,
-		Version:       item.Version,
-		ParentID:      item.ParentID,
-		Type:          item.Type,
-		TemplateCode:  item.Template,
-		Title:         item.Title,
-		MenuTitle:     item.MenuTitle,
-		Slug:          item.Slug,
-		Path:          item.Path,
-		Annotation:    item.Annotation,
-		ContentType:   item.ContentType,
-		Content:       item.Content,
-		ExternalURL:   item.ExternalURL,
-		IsPublic:      item.IsPublic,
-		IsSearchable:  item.IsSearchable,
-		InMenu:        item.InMenu,
-		InSitemap:     item.InSitemap,
-		Sort:          item.Sort,
-		PublishedAt:   item.PublishedAt,
-		UnpublishedAt: item.UnpublishedAt,
-		Deleted:       item.DeletedAt != nil,
-		DeletedAt:     item.DeletedAt,
-		Fields:        fields,
-		TypeSettings:  typeSettings,
-		Widgets:       resourceWidgets(item.Widgets),
+		ID:               item.ID,
+		SiteID:           item.SiteID,
+		Version:          item.Version,
+		ParentID:         item.ParentID,
+		Type:             item.Type,
+		TemplateCode:     item.Template,
+		Title:            item.Title,
+		MenuTitle:        item.MenuTitle,
+		Slug:             item.Slug,
+		Path:             item.Path,
+		Annotation:       item.Annotation,
+		ContentType:      item.ContentType,
+		Content:          item.Content,
+		TargetResourceID: item.TargetResourceID,
+		ExternalURL:      item.ExternalURL,
+		IsPublic:         item.IsPublic,
+		IsSearchable:     item.IsSearchable,
+		InMenu:           item.InMenu,
+		InSitemap:        item.InSitemap,
+		Sort:             item.Sort,
+		PublishedAt:      item.PublishedAt,
+		UnpublishedAt:    item.UnpublishedAt,
+		Deleted:          item.DeletedAt != nil,
+		DeletedAt:        item.DeletedAt,
+		Fields:           fields,
+		TypeSettings:     typeSettings,
+		Widgets:          resourceWidgets(item.Widgets),
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres/medialock"
@@ -235,8 +236,8 @@ func (r *Repository) RestoreRevision(ctx context.Context, actorID *security.User
 	if err := ensureTreePathsAvailable(ctx, tx, candidate.SiteID, paths, &candidate); err != nil {
 		return resource.Resource{}, err
 	}
-	if candidate.Type == resourcetype.Library {
-		if err := ensureProspectiveLibraryRoutesAvailable(ctx, tx, candidate); err != nil {
+	if candidate.Type == resourcetype.Library && (!sameOptionalText(current.Path, candidate.Path) || !reflect.DeepEqual(current.TypeSettings, candidate.TypeSettings)) {
+		if err := ensureProspectiveLibraryNamespaceAvailable(ctx, tx, candidate); err != nil {
 			return resource.Resource{}, err
 		}
 	}
@@ -318,6 +319,12 @@ UPDATE core.resources item SET path=tree.path,updated_at=now(),updated_by=$2 FRO
 }
 
 func (r *Repository) RestoreLibraryItemRevision(ctx context.Context, actorID *security.UserID, current, candidate resource.LibraryItem, sourceVersion int64) (_ resource.LibraryItem, resultErr error) {
+	return retryLibraryItemTransaction(ctx, func() (resource.LibraryItem, error) {
+		return r.restoreLibraryItemRevisionOnce(ctx, actorID, current, candidate, sourceVersion)
+	})
+}
+
+func (r *Repository) restoreLibraryItemRevisionOnce(ctx context.Context, actorID *security.UserID, current, candidate resource.LibraryItem, sourceVersion int64) (_ resource.LibraryItem, resultErr error) {
 	tx, err := r.connector.Pool().Begin(ctx)
 	if err != nil {
 		return resource.LibraryItem{}, translateError(err)

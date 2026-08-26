@@ -1214,7 +1214,7 @@ SELECT EXISTS
 		return resource.Resource{}, err
 	}
 	if item.Type == resourcetype.Library && (!sameOptionalText(current.Path, item.Path) || !reflect.DeepEqual(current.TypeSettings, item.TypeSettings)) {
-		if err := ensureProspectiveLibraryRoutesAvailable(ctx, transaction, item); err != nil {
+		if err := ensureProspectiveLibraryNamespaceAvailable(ctx, transaction, item); err != nil {
 			return resource.Resource{}, err
 		}
 	}

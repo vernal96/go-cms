@@ -47,7 +47,12 @@ async function load(): Promise<void> {
       adminRequest<ResourceDetailsResponse>(`/api/sites/${siteId.value}/resources/${originalLibraryId.value}`, props.accessToken),
     ])
     metadata.value = loadedMetadata
-    libraries.value = options.items.filter((item) => item.type === 'library')
+    const libraryTypeCodes = new Set(
+      loadedMetadata.types
+        .filter((item) => item.capabilities.owns_library_items === true)
+        .map((item) => item.code),
+    )
+    libraries.value = options.items.filter((item) => libraryTypeCodes.has(item.type))
     form.library_id = originalLibraryId.value
     ownerLibraryId.value = originalLibraryId.value
     if (creating.value) {

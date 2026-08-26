@@ -19,13 +19,15 @@ const (
 )
 
 type Capabilities struct {
-	SupportsTemplate bool
-	SupportsContent  bool
-	SupportsWidgets  bool
-	SupportsFields   bool
-	MutableType      bool
-	OwnsLibraryItems bool
-	DefaultIcon      string
+	SupportsTemplate       bool
+	SupportsContent        bool
+	SupportsWidgets        bool
+	SupportsFields         bool
+	SupportsExternalURL    bool
+	SupportsTargetResource bool
+	MutableType            bool
+	OwnsLibraryItems       bool
+	DefaultIcon            string
 }
 
 type PathMode string
@@ -116,7 +118,7 @@ func (linkType) PathMode() PathMode {
 }
 
 func (linkType) Capabilities() Capabilities {
-	return Capabilities{MutableType: true, DefaultIcon: "Link"}
+	return Capabilities{SupportsExternalURL: true, MutableType: true, DefaultIcon: "Link"}
 }
 
 func (linkType) Normalize(payload Payload) (Payload, error) {
@@ -161,7 +163,7 @@ func (resourceLinkType) PathMode() PathMode {
 }
 
 func (resourceLinkType) Capabilities() Capabilities {
-	return Capabilities{MutableType: true, DefaultIcon: "Link"}
+	return Capabilities{SupportsTargetResource: true, MutableType: true, DefaultIcon: "Link"}
 }
 
 func (resourceLinkType) Normalize(

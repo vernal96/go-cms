@@ -250,13 +250,6 @@ func New(
 		"core:identity-commands",
 		corecommands.New(application),
 	)
-	if migrator, ok := coreAdapter.(kernel.ResourceFieldMigrator); ok {
-		application.addProvider(
-			"core:resource-field-migration",
-			resourceFieldCommandProvider{app: application, migrator: migrator},
-		)
-	}
-
 	runner, err := console.New(application)
 	if err != nil {
 		return nil, err

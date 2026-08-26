@@ -223,6 +223,21 @@ func (s *Schema) Definitions() []Definition {
 	return CloneDefinitions(s.definitions)
 }
 
+func (s *Schema) StorageKind(key string) (StorageKind, bool) {
+	if s == nil {
+		return "", false
+	}
+	compiled, exists := s.fields[key]
+	if !exists {
+		return "", false
+	}
+	storage, ok := compiled.valueType.(StorageValueType)
+	if !ok || !ValidStorageKind(storage.StorageKind()) {
+		return "", false
+	}
+	return storage.StorageKind(), true
+}
+
 type FileReference struct {
 	Key     string
 	ID      int64

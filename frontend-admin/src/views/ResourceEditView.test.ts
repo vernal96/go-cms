@@ -36,6 +36,7 @@ describe('ResourceEditView schema transitions', () => {
           annotation: '',
           content_type: 'html',
           content: '',
+          target_resource_id: null,
           external_url: null,
           is_public: true,
           is_searchable: true,
@@ -46,7 +47,7 @@ describe('ResourceEditView schema transitions', () => {
           unpublished_at: null,
           deleted: false,
           deleted_at: null,
-			fields: { page_title: 'Old title' }, type_settings: {},
+			fields: { page_title: 'Old title' }, type_settings: { custom_option: { nested: true } },
 					widgets: [],
         },
         permissions: { update: true, delete: true, restore: true },
@@ -138,6 +139,25 @@ describe('ResourceEditView schema transitions', () => {
     expect(model.template_code).toBeNull()
     expect(model.fields).toEqual({})
     expect(ElMessageBox.confirm).toHaveBeenCalledTimes(2)
+  })
+
+  it('round-trips unknown type settings for an extensible type', async () => {
+    requestMock.mockResolvedValueOnce({
+      resource: { version: 2, slug: '', sort: 0, fields: { page_title: 'Old title' } },
+    })
+    const wrapper = shallowMount(ResourceEditView, {
+      props: { accessToken: 'token', permissions: new Set<string>() },
+      global: { renderStubDefaultSlot: true },
+    })
+    await flushPromises()
+    const model = wrapper.findComponent({ name: 'ElForm' }).props('model') as Record<string, any>
+    expect(model.type_settings).toEqual({ custom_option: { nested: true } })
+    const save = wrapper.findAllComponents({ name: 'ElButton' }).find((button) => button.text() === 'Сохранить')
+    save?.vm.$emit('click')
+    await flushPromises()
+    const updateCall = requestMock.mock.calls.find((call) => call[0] === '/api/sites/7/resources/9' && call[2]?.method === 'PATCH')
+    const payload = JSON.parse(String((updateCall?.[2] as RequestInit).body))
+    expect(payload.type_settings).toEqual({ custom_option: { nested: true } })
   })
 
 	it('shows profile extensions only while they apply to the resource type', async () => {

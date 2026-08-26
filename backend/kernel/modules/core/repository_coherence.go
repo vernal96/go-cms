@@ -11,6 +11,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -701,6 +702,13 @@ func (r *invalidatingResourceRepository) QueryLibraryItems(ctx context.Context, 
 		return resource.LibraryItemPage{}, err
 	}
 	return withRepositoryCacheRead(r.policy, []cache.Tag{siteResourcesTag(query.SiteID), resourceTag(query.LibraryID)}, func() (resource.LibraryItemPage, error) { return repository.QueryLibraryItems(ctx, query) })
+}
+func (r *invalidatingResourceRepository) LibraryItemTemplateCodes(ctx context.Context, siteID site.ID, libraryID resource.ID) ([]template.Code, error) {
+	repository, err := r.libraryItems()
+	if err != nil {
+		return nil, err
+	}
+	return repository.LibraryItemTemplateCodes(ctx, siteID, libraryID)
 }
 func (r *invalidatingResourceRepository) ResolveLibraryItemRoute(ctx context.Context, siteID site.ID, path string) (resource.LibraryItem, resource.Resource, error) {
 	repository, err := r.libraryItems()

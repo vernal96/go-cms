@@ -233,19 +233,14 @@ export interface ResourceMetadata {
   extensions: ResourceExtensionMetadata[]
 }
 
-export type ResourceTypeCode = 'page' | 'link' | 'resource_link' | 'library'
+export type ResourceTypeCode = string
 export interface ResourceTypeCapabilities {
-  SupportsTemplate?: boolean
-  SupportsContent?: boolean
-  SupportsWidgets?: boolean
-  SupportsFields?: boolean
-  MutableType?: boolean
-  OwnsLibraryItems?: boolean
-  DefaultIcon?: string
   supports_template?: boolean
   supports_content?: boolean
   supports_widgets?: boolean
   supports_fields?: boolean
+  supports_external_url?: boolean
+  supports_target_resource?: boolean
   mutable_type?: boolean
   owns_library_items?: boolean
   default_icon?: string
@@ -330,6 +325,9 @@ export interface ResourceCreatePayload {
   parent_id: number | null
   type: ResourceTypeCode
   template_code?: string | null
+  content_type?: string | null
+  content?: string
+  target_resource_id?: number | null
   title: string
   menu_title: string
   slug: string
@@ -352,6 +350,7 @@ export interface Resource {
   annotation: string
   content_type: string | null
   content: string
+  target_resource_id: number | null
   external_url: string | null
   is_public: boolean
   is_searchable: boolean
@@ -398,8 +397,9 @@ export interface ResourceUpdatePayload {
   menu_title: string
   slug: string
   annotation: string
-  content_type: 'html' | null
+  content_type: string | null
   content: string
+  target_resource_id: number | null
   external_url: string | null
   is_public: boolean
   is_searchable: boolean

@@ -61,6 +61,9 @@ func TestPageTypeNormalizesDefaultsAndRejectsIncompatibleFields(
 
 func TestLinkTypeURLPolicy(t *testing.T) {
 	link := standardType(t, Link)
+	if capabilities := link.Capabilities(); !capabilities.SupportsExternalURL || capabilities.SupportsTargetResource {
+		t.Fatalf("link capabilities = %#v", capabilities)
+	}
 
 	for _, value := range []string{
 		"https://example.com/docs",
@@ -115,6 +118,9 @@ func TestLinkTypeURLPolicy(t *testing.T) {
 
 func TestResourceLinkTypeRequiresTarget(t *testing.T) {
 	resourceLink := standardType(t, ResourceLink)
+	if capabilities := resourceLink.Capabilities(); !capabilities.SupportsTargetResource || capabilities.SupportsExternalURL {
+		t.Fatalf("resource_link capabilities = %#v", capabilities)
+	}
 
 	if _, err := resourceLink.Normalize(Payload{}); err == nil {
 		t.Fatal("resource_link accepted missing target")

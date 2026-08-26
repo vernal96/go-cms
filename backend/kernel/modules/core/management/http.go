@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -300,15 +301,18 @@ func (h *contentHTTP) resourceMetadata(response http.ResponseWriter, request *ht
 }
 
 type createResourceRequest struct {
-	ParentID     *resource.ID      `json:"parent_id"`
-	Type         resourcetype.Code `json:"type"`
-	Template     *template.Code    `json:"template_code"`
-	Title        string            `json:"title"`
-	MenuTitle    string            `json:"menu_title"`
-	Slug         string            `json:"slug"`
-	ExternalURL  *string           `json:"external_url"`
-	Fields       map[string]any    `json:"fields"`
-	TypeSettings map[string]any    `json:"type_settings"`
+	ParentID         *resource.ID      `json:"parent_id"`
+	Type             resourcetype.Code `json:"type"`
+	Template         *template.Code    `json:"template_code"`
+	ContentType      *string           `json:"content_type"`
+	Content          string            `json:"content"`
+	TargetResourceID *resource.ID      `json:"target_resource_id"`
+	Title            string            `json:"title"`
+	MenuTitle        string            `json:"menu_title"`
+	Slug             string            `json:"slug"`
+	ExternalURL      *string           `json:"external_url"`
+	Fields           map[string]any    `json:"fields"`
+	TypeSettings     map[string]any    `json:"type_settings"`
 }
 
 func (h *contentHTTP) createResource(response http.ResponseWriter, request *http.Request) {
@@ -325,15 +329,18 @@ func (h *contentHTTP) createResource(response http.ResponseWriter, request *http
 		return
 	}
 	result, err := h.resources.CreateResource(request.Context(), actor(request), id, ResourceCreateInput{
-		ParentID:     payload.ParentID,
-		Type:         payload.Type,
-		Template:     payload.Template,
-		Title:        payload.Title,
-		MenuTitle:    payload.MenuTitle,
-		Slug:         payload.Slug,
-		ExternalURL:  payload.ExternalURL,
-		Fields:       payload.Fields,
-		TypeSettings: payload.TypeSettings,
+		ParentID:         payload.ParentID,
+		Type:             payload.Type,
+		Template:         payload.Template,
+		ContentType:      payload.ContentType,
+		Content:          payload.Content,
+		TargetResourceID: payload.TargetResourceID,
+		Title:            payload.Title,
+		MenuTitle:        payload.MenuTitle,
+		Slug:             payload.Slug,
+		ExternalURL:      payload.ExternalURL,
+		Fields:           payload.Fields,
+		TypeSettings:     payload.TypeSettings,
 	})
 	writeResult(response, http.StatusCreated, result, err)
 }
@@ -374,26 +381,27 @@ func (h *contentHTTP) getResource(response http.ResponseWriter, request *http.Re
 }
 
 type updateResourceRequest struct {
-	ExpectedVersion int64             `json:"expected_version"`
-	ParentID        *resource.ID      `json:"parent_id"`
-	Type            resourcetype.Code `json:"type"`
-	Template        *template.Code    `json:"template_code"`
-	Title           string            `json:"title"`
-	MenuTitle       string            `json:"menu_title"`
-	Slug            string            `json:"slug"`
-	Annotation      string            `json:"annotation"`
-	Content         string            `json:"content"`
-	ContentType     *string           `json:"content_type"`
-	ExternalURL     *string           `json:"external_url"`
-	IsPublic        *bool             `json:"is_public"`
-	IsSearchable    *bool             `json:"is_searchable"`
-	InMenu          *bool             `json:"in_menu"`
-	InSitemap       *bool             `json:"in_sitemap"`
-	Sort            *int              `json:"sort"`
-	PublishedAt     *time.Time        `json:"published_at"`
-	UnpublishedAt   *time.Time        `json:"unpublished_at"`
-	Fields          map[string]any    `json:"fields"`
-	TypeSettings    map[string]any    `json:"type_settings"`
+	ExpectedVersion  int64             `json:"expected_version"`
+	ParentID         *resource.ID      `json:"parent_id"`
+	Type             resourcetype.Code `json:"type"`
+	Template         *template.Code    `json:"template_code"`
+	Title            string            `json:"title"`
+	MenuTitle        string            `json:"menu_title"`
+	Slug             string            `json:"slug"`
+	Annotation       string            `json:"annotation"`
+	Content          string            `json:"content"`
+	ContentType      *string           `json:"content_type"`
+	TargetResourceID *resource.ID      `json:"target_resource_id"`
+	ExternalURL      *string           `json:"external_url"`
+	IsPublic         *bool             `json:"is_public"`
+	IsSearchable     *bool             `json:"is_searchable"`
+	InMenu           *bool             `json:"in_menu"`
+	InSitemap        *bool             `json:"in_sitemap"`
+	Sort             *int              `json:"sort"`
+	PublishedAt      *time.Time        `json:"published_at"`
+	UnpublishedAt    *time.Time        `json:"unpublished_at"`
+	Fields           map[string]any    `json:"fields"`
+	TypeSettings     map[string]any    `json:"type_settings"`
 }
 
 func (h *contentHTTP) updateResource(response http.ResponseWriter, request *http.Request) {
@@ -422,26 +430,27 @@ func (h *contentHTTP) updateResource(response http.ResponseWriter, request *http
 	result, err := h.resources.UpdateResource(
 		request.Context(), actor(request), siteID, resourceID,
 		ResourceUpdateInput{
-			ExpectedVersion: payload.ExpectedVersion,
-			ParentID:        payload.ParentID,
-			Type:            payload.Type,
-			Template:        payload.Template,
-			Title:           payload.Title,
-			MenuTitle:       payload.MenuTitle,
-			Slug:            payload.Slug,
-			Annotation:      payload.Annotation,
-			Content:         payload.Content,
-			ContentType:     payload.ContentType,
-			ExternalURL:     payload.ExternalURL,
-			IsPublic:        *payload.IsPublic,
-			IsSearchable:    *payload.IsSearchable,
-			InMenu:          *payload.InMenu,
-			InSitemap:       *payload.InSitemap,
-			Sort:            *payload.Sort,
-			PublishedAt:     payload.PublishedAt,
-			UnpublishedAt:   payload.UnpublishedAt,
-			Fields:          payload.Fields,
-			TypeSettings:    payload.TypeSettings,
+			ExpectedVersion:  payload.ExpectedVersion,
+			ParentID:         payload.ParentID,
+			Type:             payload.Type,
+			Template:         payload.Template,
+			Title:            payload.Title,
+			MenuTitle:        payload.MenuTitle,
+			Slug:             payload.Slug,
+			Annotation:       payload.Annotation,
+			Content:          payload.Content,
+			ContentType:      payload.ContentType,
+			TargetResourceID: payload.TargetResourceID,
+			ExternalURL:      payload.ExternalURL,
+			IsPublic:         *payload.IsPublic,
+			IsSearchable:     *payload.IsSearchable,
+			InMenu:           *payload.InMenu,
+			InSitemap:        *payload.InSitemap,
+			Sort:             *payload.Sort,
+			PublishedAt:      payload.PublishedAt,
+			UnpublishedAt:    payload.UnpublishedAt,
+			Fields:           payload.Fields,
+			TypeSettings:     payload.TypeSettings,
 		},
 	)
 	writeResult(response, http.StatusOK, result, err)
@@ -754,6 +763,17 @@ type libraryItemRequest struct {
 	Fields          map[string]any `json:"fields"`
 }
 
+type semanticFilterRequest struct {
+	Field    string                  `json:"field"`
+	Operator resource.FilterOperator `json:"operator"`
+	Value    any                     `json:"value"`
+}
+
+type semanticSortRequest struct {
+	Field     string                 `json:"field"`
+	Direction resource.SortDirection `json:"direction"`
+}
+
 func (h *contentHTTP) listLibraryItems(response http.ResponseWriter, request *http.Request) {
 	siteID, libraryID, ok := resourceWidgetResourceParams(response, request)
 	if !ok {
@@ -768,8 +788,75 @@ func (h *contentHTTP) listLibraryItems(response http.ResponseWriter, request *ht
 		}
 		limit = parsed
 	}
-	result, err := h.resources.LibraryItems(request.Context(), actor(request), siteID, libraryID, request.URL.Query().Get("cursor"), limit, request.URL.Query().Get("search"))
+	filters, sorts, err := parseLibraryItemSemanticQuery(request)
+	if err != nil {
+		writeBadRequest(response, err.Error())
+		return
+	}
+	result, err := h.resources.LibraryItems(request.Context(), actor(request), siteID, libraryID, LibraryItemsInput{
+		Cursor: request.URL.Query().Get("cursor"), Limit: limit, Search: request.URL.Query().Get("search"),
+		Filters: filters, Sort: sorts,
+	})
 	writeResult(response, http.StatusOK, result, err)
+}
+
+func parseLibraryItemSemanticQuery(request *http.Request) ([]resource.FilterCondition, []resource.Sort, error) {
+	var filterRequests []semanticFilterRequest
+	if raw := request.URL.Query().Get("filters"); raw != "" {
+		if err := decodeQueryJSON(raw, &filterRequests); err != nil {
+			return nil, nil, errors.New("filters are invalid")
+		}
+	}
+	filters := make([]resource.FilterCondition, len(filterRequests))
+	for index, item := range filterRequests {
+		path, ok := libraryItemHTTPField(item.Field)
+		if !ok {
+			return nil, nil, errors.New("filter field is invalid")
+		}
+		filters[index] = resource.FilterCondition{Field: path, Operator: item.Operator, Value: item.Value}
+	}
+	var sortRequests []semanticSortRequest
+	if raw := request.URL.Query().Get("sort"); raw != "" {
+		if err := decodeQueryJSON(raw, &sortRequests); err != nil {
+			return nil, nil, errors.New("sort is invalid")
+		}
+	}
+	sorts := make([]resource.Sort, len(sortRequests))
+	for index, item := range sortRequests {
+		path, ok := libraryItemHTTPField(item.Field)
+		if !ok {
+			return nil, nil, errors.New("sort field is invalid")
+		}
+		sorts[index] = resource.Sort{Field: path, Direction: item.Direction}
+	}
+	return filters, sorts, nil
+}
+
+func decodeQueryJSON(raw string, target any) error {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return errors.New("query JSON contains trailing data")
+	}
+	return nil
+}
+
+func libraryItemHTTPField(value string) (resource.FieldPath, bool) {
+	fields := map[string]resource.FieldPath{
+		"id": resource.FieldID, "title": resource.FieldTitle, "slug": resource.FieldSlug,
+		"template": resource.FieldTemplate, "is_public": resource.FieldIsPublic,
+		"is_searchable": resource.FieldIsSearchable, "published_at": resource.FieldPublishedAt,
+		"created_at": resource.FieldCreatedAt, "updated_at": resource.FieldUpdatedAt,
+	}
+	if path, exists := fields[value]; exists {
+		return path, true
+	}
+	path := resource.FieldPath(value)
+	return path, resource.IsCustomFieldPath(path) && resource.ValidFieldPath(path)
 }
 
 func (h *contentHTTP) createLibraryItem(response http.ResponseWriter, request *http.Request) {
@@ -959,6 +1046,8 @@ func writeManagementError(response http.ResponseWriter, err error) {
 		httptransport.WriteJSONError(response, http.StatusConflict, "conflict", "object conflicts with existing data")
 	case errors.Is(err, resource.ErrRouteConflict):
 		httptransport.WriteJSONError(response, http.StatusConflict, "route_conflict", "route conflicts with existing content")
+	case errors.Is(err, resource.ErrRouteMutationRequiresMaintenance):
+		httptransport.WriteJSONError(response, http.StatusConflict, "route_mutation_requires_maintenance", "route mutation requires offline validation")
 	case errors.Is(err, file.ErrInUse):
 		httptransport.WriteJSONError(response, http.StatusConflict, "file_in_use", "file is used by content")
 	case errors.Is(err, file.ErrStorageMismatch):

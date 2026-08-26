@@ -43,8 +43,6 @@ CREATE TABLE core.resources
     sort               INTEGER     NOT NULL DEFAULT 0,
     published_at       TIMESTAMPTZ NULL,
     unpublished_at     TIMESTAMPTZ NULL,
-    settings           JSONB       NOT NULL DEFAULT '{}'::jsonb
-        CHECK (jsonb_typeof(settings) = 'object'),
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
 
