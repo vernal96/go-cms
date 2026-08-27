@@ -59,7 +59,6 @@ onMounted(() => void load())
           <el-descriptions-item label="Принято транспортом">{{ date(detail.message.accepted_at) }}</el-descriptions-item>
           <el-descriptions-item label="Источник">{{ origin() }}</el-descriptions-item>
           <el-descriptions-item label="Шаблон">{{ detail.message.template_name }} ({{ detail.message.template_code }})</el-descriptions-item>
-          <el-descriptions-item label="Транспорт">{{ detail.message.transport }}</el-descriptions-item>
           <el-descriptions-item label="Message-ID">{{ detail.message.rfc_message_id }}</el-descriptions-item>
           <el-descriptions-item label="Попыток">{{ detail.message.attempt_count }}</el-descriptions-item>
         </el-descriptions>
@@ -85,7 +84,7 @@ onMounted(() => void load())
           <el-table-column prop="attempt_number" label="#" width="70" />
           <el-table-column label="Начало" width="180"><template #default="{ row }">{{ date(row.started_at) }}</template></el-table-column>
           <el-table-column label="Завершение" width="180"><template #default="{ row }">{{ date(row.finished_at) }}</template></el-table-column>
-          <el-table-column prop="status" label="Статус" width="130" /><el-table-column prop="driver" label="Драйвер" width="120" /><el-table-column prop="transport" label="Транспорт" width="130" /><el-table-column prop="response_code" label="Ответ" width="120" /><el-table-column prop="remote_message_id" label="Provider ID" min-width="180" /><el-table-column prop="safe_error" label="Безопасная ошибка" min-width="260" />
+          <el-table-column prop="status" label="Статус" width="130" /><el-table-column prop="driver" label="Драйвер" width="120" /><el-table-column prop="response_code" label="Ответ" width="120" /><el-table-column prop="remote_message_id" label="Provider ID" min-width="180" /><el-table-column prop="safe_error" label="Безопасная ошибка" min-width="260" />
         </el-table>
       </el-card>
     </template>

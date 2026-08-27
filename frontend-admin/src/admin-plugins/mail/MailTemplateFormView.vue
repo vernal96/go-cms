@@ -27,6 +27,13 @@ const uploadStorage = ref('')
 const uploadPath = ref('')
 const selectedPlaceholder = ref('')
 const form = reactive<MailTemplatePayload>(emptyTemplate())
+const addressErrors = reactive({
+  from: '',
+  to: {} as Record<number, string>,
+  cc: {} as Record<number, string>,
+  bcc: {} as Record<number, string>,
+  replyTo: '',
+})
 const templateID = computed(() => Number(route.params.templateId ?? 0))
 const editing = computed(() => Number.isInteger(templateID.value) && templateID.value > 0)
 const canSave = computed(() => props.permissions.has(editing.value ? 'mail.template.update' : 'mail.template.create'))
@@ -36,7 +43,7 @@ const dataPlaceholders = computed(() => form.variables.filter((item) => item.key
 
 function emptyTemplate(): MailTemplatePayload {
   return {
-    code: '', name: '', enabled: true, transport: 'default',
+    code: '', name: '', enabled: true,
     from: { name: '', email: '' }, to: [{ name: '', email: '' }], cc: [], bcc: [], reply_to: null,
     subject: '', content_type: 'text', text_body: '', html_body: '', attachments: [], variables: [],
   }
@@ -44,7 +51,7 @@ function emptyTemplate(): MailTemplatePayload {
 
 function assignTemplate(item: MailTemplate): void {
   Object.assign(form, {
-    code: item.code, name: item.name, enabled: item.enabled, transport: item.transport,
+    code: item.code, name: item.name, enabled: item.enabled,
     from: { ...item.from }, to: item.to.map((value) => ({ ...value })), cc: item.cc.map((value) => ({ ...value })),
     bcc: item.bcc.map((value) => ({ ...value })), reply_to: item.reply_to ? { ...item.reply_to } : null,
     subject: item.subject, content_type: item.content_type, text_body: item.text_body, html_body: item.html_body,
@@ -78,11 +85,28 @@ async function load(): Promise<void> {
 }
 
 function validate(): string | null {
+  clearAddressErrors()
   if (!/^[a-z][a-z0-9_]{1,63}$/.test(form.code)) return 'Код должен содержать 2–64 строчных латинских символа, цифры или подчёркивания.'
   if (!form.name.trim()) return 'Укажите название шаблона.'
-  if (!form.transport.trim()) return 'Укажите логический транспорт.'
-  if (!form.from.email.trim()) return 'Укажите адрес отправителя.'
-  if (![...form.to, ...form.cc, ...form.bcc].some((item) => item.email.trim())) return 'Добавьте хотя бы один шаблон адреса получателя.'
+  if (!form.from.email.trim()) {
+    addressErrors.from = 'Email отправителя обязателен.'
+    return addressErrors.from
+  }
+  let recipientCount = 0
+  for (const group of ['to', 'cc', 'bcc'] as const) {
+    form[group].forEach((address, index) => {
+      const used = Boolean(address.name.trim() || address.email.trim())
+      if (!used) return
+      if (!address.email.trim()) addressErrors[group][index] = 'Email обязателен для заполненной строки.'
+      else recipientCount += 1
+    })
+  }
+  if (Object.keys(addressErrors.to).length || Object.keys(addressErrors.cc).length || Object.keys(addressErrors.bcc).length) return 'Заполните email во всех используемых строках адресов.'
+  if (recipientCount === 0) return 'Добавьте хотя бы один адрес получателя.'
+  if (replyToEnabled.value && !form.reply_to?.email.trim()) {
+    addressErrors.replyTo = 'Email Reply-To обязателен.'
+    return addressErrors.replyTo
+  }
   const keys = new Set<string>()
   for (const variable of form.variables) {
     if (!/^[a-z][a-z0-9_]*$/.test(variable.key) || !variable.label.trim()) return 'У каждой переменной должны быть корректный ключ и название.'
@@ -95,6 +119,14 @@ function validate(): string | null {
     if (attachment.source === 'site' && !attachment.variable) return 'Выберите файловое поле сайта для каждого вложения из настроек сайта.'
   }
   return null
+}
+
+function clearAddressErrors(): void {
+  addressErrors.from = ''
+  addressErrors.replyTo = ''
+  addressErrors.to = {}
+  addressErrors.cc = {}
+  addressErrors.bcc = {}
 }
 
 async function save(): Promise<void> {
@@ -160,7 +192,6 @@ onMounted(() => void load())
         <div class="mail-form-grid">
           <el-form-item label="Код"><el-input v-model="form.code" placeholder="feedback_notification" /></el-form-item>
           <el-form-item label="Название"><el-input v-model="form.name" /></el-form-item>
-          <el-form-item label="Логический транспорт"><el-input v-model="form.transport" placeholder="default" /></el-form-item>
           <el-form-item label="Включён"><el-switch v-model="form.enabled" /></el-form-item>
         </div>
       </el-card>
@@ -184,12 +215,12 @@ onMounted(() => void load())
       </el-card>
 
       <el-card shadow="never" header="Адреса">
-        <el-form-item label="От"><mail-address-fields v-model="form.from" /></el-form-item>
-        <el-form-item label="Кому"><mail-address-list-editor v-model="form.to" /></el-form-item>
-        <el-form-item label="Копия (CC)"><mail-address-list-editor v-model="form.cc" /></el-form-item>
-        <el-form-item label="Скрытая копия (BCC)"><mail-address-list-editor v-model="form.bcc" /></el-form-item>
+        <el-form-item label="От"><mail-address-fields v-model="form.from" sender email-required :error="addressErrors.from" /></el-form-item>
+        <el-form-item label="Кому"><mail-address-list-editor v-model="form.to" :errors="addressErrors.to" /></el-form-item>
+        <el-form-item label="Копия (CC)"><mail-address-list-editor v-model="form.cc" :errors="addressErrors.cc" /></el-form-item>
+        <el-form-item label="Скрытая копия (BCC)"><mail-address-list-editor v-model="form.bcc" :errors="addressErrors.bcc" /></el-form-item>
         <el-checkbox :model-value="replyToEnabled" @update:model-value="toggleReplyTo(Boolean($event))">Добавить Reply-To</el-checkbox>
-        <el-form-item v-if="replyToEnabled && form.reply_to" label="Reply-To"><mail-address-fields v-model="form.reply_to" /></el-form-item>
+        <el-form-item v-if="replyToEnabled && form.reply_to" label="Reply-To"><mail-address-fields v-model="form.reply_to" email-required :error="addressErrors.replyTo" /></el-form-item>
       </el-card>
 
       <el-card shadow="never" header="Содержимое">

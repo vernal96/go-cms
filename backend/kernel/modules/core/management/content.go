@@ -500,6 +500,7 @@ type ResourceTreeItem struct {
 	Sort           int            `json:"sort"`
 	Deleted        bool           `json:"deleted"`
 	Published      bool           `json:"published"`
+	InMenu         bool           `json:"in_menu"`
 	DeletedAt      *time.Time     `json:"deleted_at"`
 	HasChildren    bool           `json:"has_children"`
 	CanCreateChild bool           `json:"can_create_child"`
@@ -1930,6 +1931,7 @@ func treeItem(runtime *site.Runtime, item resource.Child, canCreate bool) Resour
 		Sort:           item.Sort,
 		Deleted:        item.DeletedAt != nil,
 		Published:      isPublished(item),
+		InMenu:         item.InMenu,
 		DeletedAt:      item.DeletedAt,
 		HasChildren:    item.HasChildren,
 		CanCreateChild: canCreate && item.DeletedAt == nil,

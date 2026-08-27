@@ -43,14 +43,12 @@ type Service struct {
 	users      interface {
 		Current(context.Context, security.Actor) (coreuser.User, error)
 	}
-	transports       *TransportRegistry
-	spool            *AttachmentSpool
-	limits           Limits
-	defaultTransport TransportAlias
-	messageIDDomain  string
-	uploadStorage    filesystem.Code
-	uploadPath       string
-	logger           *slog.Logger
+	spool           *AttachmentSpool
+	limits          Limits
+	messageIDDomain string
+	uploadStorage   filesystem.Code
+	uploadPath      string
+	logger          *slog.Logger
 }
 
 type EditorConfig struct {
@@ -64,21 +62,15 @@ func (s *Service) EditorConfig() EditorConfig {
 
 func NewService(siteID site.ID, repository Repository, renderer *Renderer, authorizer security.Authorizer, users interface {
 	Current(context.Context, security.Actor) (coreuser.User, error)
-}, transports *TransportRegistry, spool *AttachmentSpool, limits Limits, defaultTransport TransportAlias, messageIDDomain string) (*Service, error) {
+}, spool *AttachmentSpool, limits Limits, messageIDDomain string) (*Service, error) {
 	if siteID <= 0 {
 		return nil, errors.New("mail service site ID is invalid")
 	}
-	if repository == nil || renderer == nil || authorizer == nil || users == nil || transports == nil {
+	if repository == nil || renderer == nil || authorizer == nil || users == nil {
 		return nil, errors.New("mail service dependencies are nil")
 	}
 	if limits.MaxRecipients < 1 || limits.MaxMessageSize < 1 || limits.MaxAttachmentSize < 1 {
 		return nil, errors.New("mail service limits are invalid")
-	}
-	if strings.TrimSpace(string(defaultTransport)) == "" {
-		defaultTransport = "default"
-	}
-	if _, exists := transports.Transport(defaultTransport); !exists {
-		return nil, fmt.Errorf("default mail transport %q is unavailable", defaultTransport)
 	}
 	messageIDDomain = strings.TrimSpace(messageIDDomain)
 	if messageIDDomain == "" {
@@ -87,7 +79,7 @@ func NewService(siteID site.ID, repository Repository, renderer *Renderer, autho
 	if !messageIDDomainPattern.MatchString(messageIDDomain) {
 		return nil, errors.New("mail Message-ID domain is invalid")
 	}
-	return &Service{siteID: siteID, repository: repository, renderer: renderer, lifecycle: &runtimeLifecycle{}, authorizer: authorizer, users: users, transports: transports, spool: spool, limits: limits, defaultTransport: defaultTransport, messageIDDomain: messageIDDomain}, nil
+	return &Service{siteID: siteID, repository: repository, renderer: renderer, lifecycle: &runtimeLifecycle{}, authorizer: authorizer, users: users, spool: spool, limits: limits, messageIDDomain: messageIDDomain}, nil
 }
 
 func (s *Service) ListTemplates(ctx context.Context, actor security.Actor, query PageQuery) (TemplatePage, error) {
@@ -124,9 +116,6 @@ func (s *Service) CreateTemplate(ctx context.Context, actor security.Actor, temp
 		return Template{}, err
 	}
 	template.ID, template.SiteID = 0, s.siteID
-	if template.Transport == "" {
-		template.Transport = s.defaultTransport
-	}
 	if err := s.validateTemplateRuntime(template); err != nil {
 		return Template{}, err
 	}
@@ -145,9 +134,6 @@ func (s *Service) UpdateTemplate(ctx context.Context, actor security.Actor, temp
 		return Template{}, fmt.Errorf("%w: template ID is invalid", ErrInvalid)
 	}
 	template.SiteID = s.siteID
-	if template.Transport == "" {
-		template.Transport = s.defaultTransport
-	}
 	if err := s.validateTemplateRuntime(template); err != nil {
 		return Template{}, err
 	}
@@ -329,8 +315,8 @@ func (s *Service) queueActive(ctx context.Context, template Template, values map
 	now := time.Now().UTC()
 	message := Message{
 		SiteID: s.siteID, TemplateID: &templateID, TemplateCode: template.Code, TemplateName: template.Name,
-		Transport: template.Transport, RFCMessageID: fmt.Sprintf("<%s@%s>", id, s.messageIDDomain),
-		From: rendered.From, To: rendered.To, CC: rendered.CC, BCC: rendered.BCC, ReplyTo: rendered.ReplyTo,
+		RFCMessageID: fmt.Sprintf("<%s@%s>", id, s.messageIDDomain),
+		From:         rendered.From, To: rendered.To, CC: rendered.CC, BCC: rendered.BCC, ReplyTo: rendered.ReplyTo,
 		Subject: rendered.Subject, ContentType: rendered.ContentType, TextBody: rendered.TextBody, HTMLBody: rendered.HTMLBody,
 		Attachments: rendered.Attachments, Status: StatusQueued, Origin: origin.Kind, OriginSource: strings.TrimSpace(origin.Source), OriginEvent: strings.TrimSpace(origin.Event), OriginReference: strings.TrimSpace(origin.Reference),
 		RequestedAt: now, RequestedBy: origin.RequestedBy, RequestedByName: strings.TrimSpace(origin.RequestedName),
@@ -361,13 +347,7 @@ func (s *Service) queueActive(ctx context.Context, template Template, values map
 }
 
 func (s *Service) validateTemplateRuntime(template Template) error {
-	if err := s.renderer.ValidateTemplate(template); err != nil {
-		return err
-	}
-	if _, exists := s.transports.Transport(template.Transport); !exists {
-		return fmt.Errorf("%w: transport alias %q is unavailable", ErrTransportNotFound, template.Transport)
-	}
-	return nil
+	return s.renderer.ValidateTemplate(template)
 }
 
 func (s *Service) validateMessageSize(rendered RenderedMessage) error {

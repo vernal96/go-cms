@@ -354,7 +354,11 @@ func (h *siteManagementHTTP) serve(response http.ResponseWriter, request *http.R
 		return
 	}
 	if handler := compiled.management[feature]; handler != nil {
-		next := request.Clone(request.Context())
+		// The optional contribution may itself be a chi.Router. It must not
+		// inherit the outer router's matched route stack, otherwise chi resolves
+		// the rewritten path against stale patterns and returns a false 404.
+		childContext := context.WithValue(request.Context(), chi.RouteCtxKey, chi.NewRouteContext())
+		next := request.Clone(childContext)
 		next.URL.Path = remainder
 		next.URL.RawPath = ""
 		handler.ServeHTTP(response, next)

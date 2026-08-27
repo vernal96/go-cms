@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   ElAlert,
   ElButton,
@@ -55,6 +55,10 @@ const seoFieldGroups = computed(() => [
   { name: 'general', label: 'Основные', fields: props.metadata.fields.filter((field) => !field.key.startsWith('og_')) },
   { name: 'opengraph', label: 'OpenGraph', fields: props.metadata.fields.filter((field) => field.key.startsWith('og_')) },
 ].filter((group) => group.fields.length > 0))
+
+watch(seoFieldGroups, (groups) => {
+  if (!groups.some((group) => group.name === activeSEOGroup.value)) activeSEOGroup.value = groups[0]?.name ?? ''
+}, { immediate: true })
 
 async function load(): Promise<void> {
   loading.value = true

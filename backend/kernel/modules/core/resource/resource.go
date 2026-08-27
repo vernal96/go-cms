@@ -171,6 +171,7 @@ type Child struct {
 	MenuTitle     string
 	Sort          int
 	IsPublic      bool
+	InMenu        bool
 	PublishedAt   *time.Time
 	UnpublishedAt *time.Time
 	DeletedAt     *time.Time

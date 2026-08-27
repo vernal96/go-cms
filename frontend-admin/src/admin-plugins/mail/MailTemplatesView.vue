@@ -87,7 +87,6 @@ onMounted(() => void load())
     <el-table v-else v-loading="loading" :data="items" stripe empty-text="Шаблонов пока нет">
       <el-table-column prop="name" label="Название" min-width="220" />
       <el-table-column prop="code" label="Код" min-width="190" />
-      <el-table-column prop="transport" label="Транспорт" min-width="130" />
       <el-table-column label="Состояние" width="180"><template #default="{ row }">
         <el-switch v-if="permissions.has('mail.template.update')" :model-value="row.enabled" :loading="changingEnabled.has(row.id)" inline-prompt active-text="Включён" inactive-text="Выключен" @update:model-value="setEnabled(row, Boolean($event))" />
         <el-tag v-else :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? 'Включён' : 'Выключен' }}</el-tag>

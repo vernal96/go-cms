@@ -1813,7 +1813,7 @@ WHERE library_id=$1
 	itemPage, err := libraryItems.QueryLibraryItems(ctx, resource.LibraryItemQuery{
 		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 10,
 	})
-	if err != nil || len(itemPage.Items) != 1 || itemPage.Items[0].ID != loadedLibraryItem.ID {
+	if err != nil || len(itemPage.Items) != 1 || itemPage.Items[0].ID != loadedLibraryItem.ID || itemPage.Items[0].Version != loadedLibraryItem.Version {
 		t.Fatalf("query moved library item = %#v, %v", itemPage, err)
 	}
 	firstRanked, err := libraryItems.CreateLibraryItem(ctx, nil, resource.LibraryItem{
@@ -2431,7 +2431,7 @@ LIMIT 101;`, siteIDs["localhost"], perfLibrary.ID)
 		SiteID: siteIDs["localhost"], LibraryID: archive.ID, Limit: 10,
 		Search: strconv.FormatInt(int64(loadedLibraryItem.ID), 10),
 	})
-	if err != nil || len(itemPage.Items) != 1 || itemPage.Items[0].ID != loadedLibraryItem.ID {
+	if err != nil || len(itemPage.Items) != 1 || itemPage.Items[0].ID != loadedLibraryItem.ID || itemPage.Items[0].Version != loadedLibraryItem.Version {
 		t.Fatalf("query library item by id = %#v, %v", itemPage, err)
 	}
 	lifecycleRepository, ok := resourceRepository.(resource.LifecycleRepository)

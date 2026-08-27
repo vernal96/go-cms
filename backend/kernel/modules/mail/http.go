@@ -46,7 +46,6 @@ type templatePayload struct {
 	Code        string               `json:"code"`
 	Name        string               `json:"name"`
 	Enabled     bool                 `json:"enabled"`
-	Transport   TransportAlias       `json:"transport"`
 	From        AddressTemplate      `json:"from"`
 	To          []AddressTemplate    `json:"to"`
 	CC          []AddressTemplate    `json:"cc"`
@@ -432,7 +431,7 @@ func (p templatePayload) template() (Template, error) {
 		}
 		variables[index] = definition
 	}
-	return Template{Code: p.Code, Name: p.Name, Enabled: p.Enabled, Transport: p.Transport, From: p.From, To: p.To, CC: p.CC, BCC: p.BCC, ReplyTo: p.ReplyTo, Subject: p.Subject, ContentType: p.ContentType, TextBody: p.TextBody, HTMLBody: p.HTMLBody, Attachments: p.Attachments, Variables: variables}, nil
+	return Template{Code: p.Code, Name: p.Name, Enabled: p.Enabled, From: p.From, To: p.To, CC: p.CC, BCC: p.BCC, ReplyTo: p.ReplyTo, Subject: p.Subject, ContentType: p.ContentType, TextBody: p.TextBody, HTMLBody: p.HTMLBody, Attachments: p.Attachments, Variables: variables}, nil
 }
 
 func (v variableDTO) definition() (field.Definition, error) {
@@ -633,7 +632,7 @@ func writeMailError(response http.ResponseWriter, err error) {
 		httptransport.WriteJSONError(response, http.StatusNotFound, "not_found", "mail item not found")
 	case errors.Is(err, ErrConflict), errors.Is(err, ErrRuntimeDraining):
 		httptransport.WriteJSONError(response, http.StatusConflict, "conflict", "mail item conflicts with its current state")
-	case errors.Is(err, ErrInvalid), errors.Is(err, ErrTemplateDisabled), errors.Is(err, ErrNoRecipients), errors.Is(err, ErrSenderNotAllowed), errors.Is(err, ErrTransportNotFound):
+	case errors.Is(err, ErrInvalid), errors.Is(err, ErrTemplateDisabled), errors.Is(err, ErrNoRecipients), errors.Is(err, ErrSenderNotAllowed):
 		httptransport.WriteJSONError(response, http.StatusUnprocessableEntity, "validation_failed", err.Error())
 	default:
 		httptransport.WriteJSONError(response, http.StatusInternalServerError, "internal_error", "mail operation failed")

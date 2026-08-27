@@ -4,7 +4,7 @@ import { ElButton } from 'element-plus'
 import MailAddressFields from './MailAddressFields.vue'
 import type { MailAddressTemplate } from './types'
 
-const props = defineProps<{ modelValue: MailAddressTemplate[]; addLabel?: string }>()
+const props = defineProps<{ modelValue: MailAddressTemplate[]; addLabel?: string; errors?: Record<number, string> }>()
 const emit = defineEmits<{ 'update:modelValue': [value: MailAddressTemplate[]] }>()
 
 function add(): void {
@@ -18,12 +18,15 @@ function update(index: number, value: MailAddressTemplate): void {
 function remove(index: number): void {
   emit('update:modelValue', props.modelValue.filter((_, current) => current !== index))
 }
+function used(address: MailAddressTemplate): boolean {
+  return Boolean(address.name.trim() || address.email.trim())
+}
 </script>
 
 <template>
   <div class="mail-address-list">
     <div v-for="(address, index) in modelValue" :key="index" class="mail-address-row">
-      <mail-address-fields :model-value="address" @update:model-value="update(index, $event)" />
+      <mail-address-fields :model-value="address" :email-required="used(address)" :error="errors?.[index]" @update:model-value="update(index, $event)" />
       <el-button :icon="Delete" circle plain aria-label="Удалить адрес" @click="remove(index)" />
     </div>
     <el-button plain :icon="Plus" @click="add">{{ addLabel ?? 'Добавить адрес' }}</el-button>

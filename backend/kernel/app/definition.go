@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/cache"
@@ -33,6 +34,20 @@ func validateDefinition(definition Definition) error {
 	}
 	if _, err := outbox.NormalizePublisherConfig(definition.OutboxPublisher); err != nil {
 		return err
+	}
+	moduleApplications := make(map[kernel.ModuleCode]struct{}, len(definition.ModuleApplications))
+	for index, application := range definition.ModuleApplications {
+		if application == nil || nilInterface(application) {
+			return fmt.Errorf("module application at index %d is nil", index)
+		}
+		moduleCode := application.ModuleCode()
+		if moduleCode == "" {
+			return fmt.Errorf("module application at index %d has empty module code", index)
+		}
+		if _, exists := moduleApplications[moduleCode]; exists {
+			return fmt.Errorf("module application %q is defined more than once", moduleCode)
+		}
+		moduleApplications[moduleCode] = struct{}{}
 	}
 
 	filesystemCodes := make(
@@ -174,6 +189,10 @@ func validateDefinition(definition Definition) error {
 }
 
 func cloneDefinition(definition Definition) Definition {
+	definition.ModuleApplications = append(
+		[]kernel.ModuleApplication(nil),
+		definition.ModuleApplications...,
+	)
 	definition.Filesystems = append(
 		[]filesystem.Factory(nil),
 		definition.Filesystems...,
@@ -222,4 +241,14 @@ func cloneDefinition(definition Definition) Definition {
 	}
 
 	return definition
+}
+
+func nilInterface(value any) bool {
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }

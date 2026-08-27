@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { adminRequest, adminRequestVoid } from '../api/admin-api'
 import { useSelectedSite } from '../composables/use-selected-site'
 import ResourceTree from './ResourceTree.vue'
+import { resourceTreeNodeClasses } from './resource-tree-state'
 
 vi.mock('../api/admin-api', () => ({ adminRequest: vi.fn(), adminRequestVoid: vi.fn() }))
 vi.mock('vue-router', () => ({
@@ -26,6 +27,19 @@ describe('ResourceTree', () => {
     requestVoidMock.mockReset()
     useSelectedSite().reset()
     useSelectedSite().setSelected({ id: 7, domain: 'example.com' })
+  })
+
+  it('combines hidden, unpublished, and deleted states without replacing one another', () => {
+    expect(resourceTreeNodeClasses({ in_menu: false, published: false, deleted: false })).toEqual({
+      'is-hidden-from-menu': true,
+      'is-deleted': false,
+      'is-unpublished': true,
+    })
+    expect(resourceTreeNodeClasses({ in_menu: false, published: false, deleted: true })).toEqual({
+      'is-hidden-from-menu': true,
+      'is-deleted': true,
+      'is-unpublished': false,
+    })
   })
 
   it('loads only one level and exposes an inline retry row for a failed child request', async () => {

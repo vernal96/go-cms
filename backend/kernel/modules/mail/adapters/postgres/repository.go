@@ -28,7 +28,7 @@ func NewRepository(connector *connectorpostgres.Connector) (*Repository, error) 
 }
 
 const templateColumns = `
-id,site_id,code,name,enabled,transport_alias,from_address,to_addresses,cc_addresses,bcc_addresses,
+id,site_id,code,name,enabled,from_address,to_addresses,cc_addresses,bcc_addresses,
 reply_to,subject,content_type,text_body,html_body,attachments,variables,created_at,updated_at,created_by,updated_by`
 
 func (r *Repository) ListTemplates(ctx context.Context, siteID site.ID, query mail.PageQuery) (mail.TemplatePage, error) {
@@ -77,9 +77,9 @@ func (r *Repository) CreateTemplate(ctx context.Context, item mail.Template) (ma
 		return mail.Template{}, err
 	}
 	created, err := scanTemplate(r.connector.Pool().QueryRow(ctx, `
-INSERT INTO mail.templates(site_id,code,name,enabled,transport_alias,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,content_type,text_body,html_body,attachments,variables,created_by,updated_by)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17)
-RETURNING `+templateColumns+`;`, item.SiteID, item.Code, item.Name, item.Enabled, item.Transport, values.from, values.to, values.cc, values.bcc, values.replyTo, item.Subject, item.ContentType, item.TextBody, item.HTMLBody, values.attachments, values.variables, item.CreatedBy))
+INSERT INTO mail.templates(site_id,code,name,enabled,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,content_type,text_body,html_body,attachments,variables,created_by,updated_by)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16)
+RETURNING `+templateColumns+`;`, item.SiteID, item.Code, item.Name, item.Enabled, values.from, values.to, values.cc, values.bcc, values.replyTo, item.Subject, item.ContentType, item.TextBody, item.HTMLBody, values.attachments, values.variables, item.CreatedBy))
 	return created, mapWriteError(err)
 }
 
@@ -89,8 +89,8 @@ func (r *Repository) UpdateTemplate(ctx context.Context, item mail.Template) (ma
 		return mail.Template{}, err
 	}
 	updated, err := scanTemplate(r.connector.Pool().QueryRow(ctx, `
-UPDATE mail.templates SET code=$3,name=$4,enabled=$5,transport_alias=$6,from_address=$7,to_addresses=$8,cc_addresses=$9,bcc_addresses=$10,reply_to=$11,subject=$12,content_type=$13,text_body=$14,html_body=$15,attachments=$16,variables=$17,updated_at=clock_timestamp(),updated_by=$18
-WHERE site_id=$1 AND id=$2 RETURNING `+templateColumns+`;`, item.SiteID, item.ID, item.Code, item.Name, item.Enabled, item.Transport, values.from, values.to, values.cc, values.bcc, values.replyTo, item.Subject, item.ContentType, item.TextBody, item.HTMLBody, values.attachments, values.variables, item.UpdatedBy))
+UPDATE mail.templates SET code=$3,name=$4,enabled=$5,from_address=$6,to_addresses=$7,cc_addresses=$8,bcc_addresses=$9,reply_to=$10,subject=$11,content_type=$12,text_body=$13,html_body=$14,attachments=$15,variables=$16,updated_at=clock_timestamp(),updated_by=$17
+WHERE site_id=$1 AND id=$2 RETURNING `+templateColumns+`;`, item.SiteID, item.ID, item.Code, item.Name, item.Enabled, values.from, values.to, values.cc, values.bcc, values.replyTo, item.Subject, item.ContentType, item.TextBody, item.HTMLBody, values.attachments, values.variables, item.UpdatedBy))
 	return updated, mapWriteError(err)
 }
 
@@ -144,7 +144,7 @@ type rowScanner interface{ Scan(...any) error }
 func scanTemplate(row rowScanner) (mail.Template, error) {
 	var item mail.Template
 	var from, to, cc, bcc, replyTo, attachments, variables []byte
-	err := row.Scan(&item.ID, &item.SiteID, &item.Code, &item.Name, &item.Enabled, &item.Transport, &from, &to, &cc, &bcc, &replyTo, &item.Subject, &item.ContentType, &item.TextBody, &item.HTMLBody, &attachments, &variables, &item.CreatedAt, &item.UpdatedAt, &item.CreatedBy, &item.UpdatedBy)
+	err := row.Scan(&item.ID, &item.SiteID, &item.Code, &item.Name, &item.Enabled, &from, &to, &cc, &bcc, &replyTo, &item.Subject, &item.ContentType, &item.TextBody, &item.HTMLBody, &attachments, &variables, &item.CreatedAt, &item.UpdatedAt, &item.CreatedBy, &item.UpdatedBy)
 	if err != nil {
 		return mail.Template{}, err
 	}
@@ -173,7 +173,7 @@ func scanTemplateWithTotal(row rowScanner) (mail.Template, int, error) {
 	var item mail.Template
 	var from, to, cc, bcc, replyTo, attachments, variables []byte
 	var total int
-	err := row.Scan(&item.ID, &item.SiteID, &item.Code, &item.Name, &item.Enabled, &item.Transport, &from, &to, &cc, &bcc, &replyTo, &item.Subject, &item.ContentType, &item.TextBody, &item.HTMLBody, &attachments, &variables, &item.CreatedAt, &item.UpdatedAt, &item.CreatedBy, &item.UpdatedBy, &total)
+	err := row.Scan(&item.ID, &item.SiteID, &item.Code, &item.Name, &item.Enabled, &from, &to, &cc, &bcc, &replyTo, &item.Subject, &item.ContentType, &item.TextBody, &item.HTMLBody, &attachments, &variables, &item.CreatedAt, &item.UpdatedAt, &item.CreatedBy, &item.UpdatedBy, &total)
 	if err != nil {
 		return mail.Template{}, 0, err
 	}
@@ -206,7 +206,7 @@ func decodeTemplateScanned(item mail.Template, from, to, cc, bcc, replyTo, attac
 }
 
 const messageColumns = `
-id,site_id,template_id,template_code,template_name,transport_alias,rfc_message_id,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,content_type,text_body,html_body,attachments,status,origin,origin_source,origin_event,origin_reference,requested_at,requested_by,requested_by_name,accepted_at,created_at,updated_at`
+id,site_id,template_id,template_code,template_name,rfc_message_id,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,content_type,text_body,html_body,attachments,status,origin,origin_source,origin_event,origin_reference,requested_at,requested_by,requested_by_name,accepted_at,created_at,updated_at`
 
 func (r *Repository) CreateMessageAndJob(ctx context.Context, item mail.Message, busMessage eventbus.Message) (_ mail.Message, resultErr error) {
 	values, err := messageJSON(item)
@@ -223,9 +223,9 @@ func (r *Repository) CreateMessageAndJob(ctx context.Context, item mail.Message,
 		}
 	}()
 	created, err := scanMessage(tx.QueryRow(ctx, `
-INSERT INTO mail.messages(site_id,template_id,template_code,template_name,transport_alias,rfc_message_id,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,content_type,text_body,html_body,attachments,status,origin,origin_source,origin_event,origin_reference,requested_at,requested_by,requested_by_name)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'queued',$17,$18,$19,$20,$21,$22,$23)
-RETURNING `+messageColumns+`;`, item.SiteID, item.TemplateID, item.TemplateCode, item.TemplateName, item.Transport, item.RFCMessageID, values.from, values.to, values.cc, values.bcc, values.replyTo, item.Subject, item.ContentType, item.TextBody, item.HTMLBody, values.attachments, item.Origin, item.OriginSource, item.OriginEvent, item.OriginReference, item.RequestedAt, item.RequestedBy, item.RequestedByName))
+INSERT INTO mail.messages(site_id,template_id,template_code,template_name,rfc_message_id,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,content_type,text_body,html_body,attachments,status,origin,origin_source,origin_event,origin_reference,requested_at,requested_by,requested_by_name)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'queued',$16,$17,$18,$19,$20,$21,$22)
+RETURNING `+messageColumns+`;`, item.SiteID, item.TemplateID, item.TemplateCode, item.TemplateName, item.RFCMessageID, values.from, values.to, values.cc, values.bcc, values.replyTo, item.Subject, item.ContentType, item.TextBody, item.HTMLBody, values.attachments, item.Origin, item.OriginSource, item.OriginEvent, item.OriginReference, item.RequestedAt, item.RequestedBy, item.RequestedByName))
 	if err != nil {
 		return mail.Message{}, mapWriteError(err)
 	}
@@ -290,7 +290,7 @@ func messageJSON(item mail.Message) (messageValues, error) {
 func (r *Repository) ListMessages(ctx context.Context, siteID site.ID, query mail.MessageQuery) (mail.MessageSummaryPage, error) {
 	rows, err := r.connector.Pool().Query(ctx, `SELECT id,template_code,template_name,subject,to_addresses,cc_addresses,bcc_addresses,status,origin,origin_source,origin_event,origin_reference,requested_at,requested_by,requested_by_name,accepted_at,count(*) OVER(),
 (SELECT count(*) FROM mail.delivery_attempts a WHERE a.message_id=mail.messages.id),
-(SELECT jsonb_build_object('id',a.id,'message_id',a.message_id,'attempt_number',a.attempt_number,'transport',a.transport_alias,'driver',a.driver,'started_at',a.started_at,'finished_at',a.finished_at,'status',a.status,'remote_message_id',a.remote_message_id,'response_code',a.response_code,'safe_error',a.safe_error,'created_at',a.created_at) FROM mail.delivery_attempts a WHERE a.message_id=mail.messages.id ORDER BY a.attempt_number DESC LIMIT 1)
+(SELECT jsonb_build_object('id',a.id,'message_id',a.message_id,'attempt_number',a.attempt_number,'driver',a.driver,'started_at',a.started_at,'finished_at',a.finished_at,'status',a.status,'remote_message_id',a.remote_message_id,'response_code',a.response_code,'safe_error',a.safe_error,'created_at',a.created_at) FROM mail.delivery_attempts a WHERE a.message_id=mail.messages.id ORDER BY a.attempt_number DESC LIMIT 1)
 FROM mail.messages WHERE site_id=$1
 AND ($2='' OR status=$2)
 AND ($3='' OR template_code=$3)
@@ -347,7 +347,7 @@ func (r *Repository) MessageDetail(ctx context.Context, siteID site.ID, id mail.
 	if err != nil {
 		return mail.MessageDetail{}, mapNotFound(err)
 	}
-	rows, err := r.connector.Pool().Query(ctx, `SELECT id,message_id,attempt_number,transport_alias,driver,started_at,finished_at,status,remote_message_id,response_code,safe_error,created_at FROM mail.delivery_attempts WHERE message_id=$1 ORDER BY attempt_number DESC;`, id)
+	rows, err := r.connector.Pool().Query(ctx, `SELECT id,message_id,attempt_number,driver,started_at,finished_at,status,remote_message_id,response_code,safe_error,created_at FROM mail.delivery_attempts WHERE message_id=$1 ORDER BY attempt_number DESC;`, id)
 	if err != nil {
 		return mail.MessageDetail{}, err
 	}
@@ -429,7 +429,7 @@ func (r *Repository) ClaimMessage(ctx context.Context, siteID site.ID, id mail.M
 		return mail.Message{}, mail.DeliveryAttempt{}, false, err
 	}
 	var attempt mail.DeliveryAttempt
-	err = tx.QueryRow(ctx, `INSERT INTO mail.delivery_attempts(message_id,attempt_number,transport_alias,status) SELECT $1,coalesce(max(attempt_number),0)+1,$2,'sending' FROM mail.delivery_attempts WHERE message_id=$1 RETURNING id,message_id,attempt_number,transport_alias,driver,started_at,finished_at,status,remote_message_id,response_code,safe_error,created_at;`, id, message.Transport).Scan(&attempt.ID, &attempt.MessageID, &attempt.AttemptNumber, &attempt.Transport, &attempt.Driver, &attempt.StartedAt, &attempt.FinishedAt, &attempt.Status, &attempt.RemoteMessageID, &attempt.ResponseCode, &attempt.SafeError, &attempt.CreatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO mail.delivery_attempts(message_id,attempt_number,status) SELECT $1,coalesce(max(attempt_number),0)+1,'sending' FROM mail.delivery_attempts WHERE message_id=$1 RETURNING id,message_id,attempt_number,driver,started_at,finished_at,status,remote_message_id,response_code,safe_error,created_at;`, id).Scan(&attempt.ID, &attempt.MessageID, &attempt.AttemptNumber, &attempt.Driver, &attempt.StartedAt, &attempt.FinishedAt, &attempt.Status, &attempt.RemoteMessageID, &attempt.ResponseCode, &attempt.SafeError, &attempt.CreatedAt)
 	if err != nil {
 		return mail.Message{}, mail.DeliveryAttempt{}, false, err
 	}
@@ -521,7 +521,7 @@ func (r *Repository) ActiveSpoolKeys(ctx context.Context, siteID site.ID, keys [
 func scanMessage(row rowScanner) (mail.Message, error) {
 	var item mail.Message
 	var from, to, cc, bcc, replyTo, attachments []byte
-	err := row.Scan(&item.ID, &item.SiteID, &item.TemplateID, &item.TemplateCode, &item.TemplateName, &item.Transport, &item.RFCMessageID, &from, &to, &cc, &bcc, &replyTo, &item.Subject, &item.ContentType, &item.TextBody, &item.HTMLBody, &attachments, &item.Status, &item.Origin, &item.OriginSource, &item.OriginEvent, &item.OriginReference, &item.RequestedAt, &item.RequestedBy, &item.RequestedByName, &item.AcceptedAt, &item.CreatedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.SiteID, &item.TemplateID, &item.TemplateCode, &item.TemplateName, &item.RFCMessageID, &from, &to, &cc, &bcc, &replyTo, &item.Subject, &item.ContentType, &item.TextBody, &item.HTMLBody, &attachments, &item.Status, &item.Origin, &item.OriginSource, &item.OriginEvent, &item.OriginReference, &item.RequestedAt, &item.RequestedBy, &item.RequestedByName, &item.AcceptedAt, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return mail.Message{}, err
 	}
@@ -556,7 +556,7 @@ func decodeMessageScanned(item mail.Message, from, to, cc, bcc, replyTo, attachm
 
 func scanAttempt(row rowScanner) (mail.DeliveryAttempt, error) {
 	var item mail.DeliveryAttempt
-	err := row.Scan(&item.ID, &item.MessageID, &item.AttemptNumber, &item.Transport, &item.Driver, &item.StartedAt, &item.FinishedAt, &item.Status, &item.RemoteMessageID, &item.ResponseCode, &item.SafeError, &item.CreatedAt)
+	err := row.Scan(&item.ID, &item.MessageID, &item.AttemptNumber, &item.Driver, &item.StartedAt, &item.FinishedAt, &item.Status, &item.RemoteMessageID, &item.ResponseCode, &item.SafeError, &item.CreatedAt)
 	return item, err
 }
 

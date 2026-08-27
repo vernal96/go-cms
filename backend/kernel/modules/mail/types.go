@@ -14,7 +14,6 @@ import (
 type TemplateID int64
 type MessageID int64
 type AttemptID int64
-type TransportAlias string
 type ContentType string
 type AttachmentSource string
 type MessageStatus string
@@ -45,15 +44,14 @@ const (
 )
 
 var (
-	ErrNotFound          = errors.New("mail item not found")
-	ErrConflict          = errors.New("mail item conflict")
-	ErrInvalid           = errors.New("mail item is invalid")
-	ErrTemplateDisabled  = errors.New("mail template is disabled")
-	ErrNoRecipients      = errors.New("mail message has no recipients")
-	ErrSenderNotAllowed  = errors.New("mail sender is not allowed")
-	ErrTransportNotFound = errors.New("mail transport not found")
-	ErrRuntimeDraining   = errors.New("mail runtime is draining")
-	ErrActiveMessages    = errors.New("mail has active deliveries")
+	ErrNotFound         = errors.New("mail item not found")
+	ErrConflict         = errors.New("mail item conflict")
+	ErrInvalid          = errors.New("mail item is invalid")
+	ErrTemplateDisabled = errors.New("mail template is disabled")
+	ErrNoRecipients     = errors.New("mail message has no recipients")
+	ErrSenderNotAllowed = errors.New("mail sender is not allowed")
+	ErrRuntimeDraining  = errors.New("mail runtime is draining")
+	ErrActiveMessages   = errors.New("mail has active deliveries")
 )
 
 type AddressTemplate struct {
@@ -74,7 +72,6 @@ type Template struct {
 	Code        string               `json:"code"`
 	Name        string               `json:"name"`
 	Enabled     bool                 `json:"enabled"`
-	Transport   TransportAlias       `json:"transport"`
 	From        AddressTemplate      `json:"from"`
 	To          []AddressTemplate    `json:"to"`
 	CC          []AddressTemplate    `json:"cc"`
@@ -146,7 +143,6 @@ type Message struct {
 	TemplateID      *TemplateID      `json:"template_id,omitempty"`
 	TemplateCode    string           `json:"template_code"`
 	TemplateName    string           `json:"template_name"`
-	Transport       TransportAlias   `json:"transport"`
 	RFCMessageID    string           `json:"rfc_message_id"`
 	From            Address          `json:"from"`
 	To              []Address        `json:"to"`
@@ -174,18 +170,17 @@ type Message struct {
 }
 
 type DeliveryAttempt struct {
-	ID              AttemptID      `json:"id"`
-	MessageID       MessageID      `json:"message_id"`
-	AttemptNumber   int            `json:"attempt_number"`
-	Transport       TransportAlias `json:"transport"`
-	Driver          string         `json:"driver"`
-	StartedAt       time.Time      `json:"started_at"`
-	FinishedAt      *time.Time     `json:"finished_at,omitempty"`
-	Status          AttemptStatus  `json:"status"`
-	RemoteMessageID string         `json:"remote_message_id"`
-	ResponseCode    string         `json:"response_code"`
-	SafeError       string         `json:"safe_error"`
-	CreatedAt       time.Time      `json:"created_at"`
+	ID              AttemptID     `json:"id"`
+	MessageID       MessageID     `json:"message_id"`
+	AttemptNumber   int           `json:"attempt_number"`
+	Driver          string        `json:"driver"`
+	StartedAt       time.Time     `json:"started_at"`
+	FinishedAt      *time.Time    `json:"finished_at,omitempty"`
+	Status          AttemptStatus `json:"status"`
+	RemoteMessageID string        `json:"remote_message_id"`
+	ResponseCode    string        `json:"response_code"`
+	SafeError       string        `json:"safe_error"`
+	CreatedAt       time.Time     `json:"created_at"`
 }
 
 type PageQuery struct {

@@ -214,6 +214,7 @@ export interface ResourceTreeItem {
   menu_title: string
   display_title: string
   sort: number
+  in_menu: boolean
   deleted: boolean
   published: boolean
   deleted_at: string | null

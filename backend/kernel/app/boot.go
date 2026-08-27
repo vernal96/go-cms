@@ -100,10 +100,11 @@ func (a *App) boot(ctx context.Context) error {
 	factory, err := kernel.NewProfileRuntimeFactory(
 		a,
 		kernel.RuntimeServices{
-			Caches:      a.caches,
-			Filesystems: a.filesystems,
-			EventBus:    a.eventBus,
-			Logger:      a.logger,
+			Caches:             a.caches,
+			Filesystems:        a.filesystems,
+			EventBus:           a.eventBus,
+			Logger:             a.logger,
+			ModuleApplications: a.definition.ModuleApplications,
 		},
 	)
 	if err != nil {

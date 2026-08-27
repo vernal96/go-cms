@@ -75,8 +75,32 @@ func (r *Renderer) ValidateTemplate(template Template) error {
 	if template.SiteID <= 0 || template.SiteID != r.siteID || !templateCodePattern.MatchString(template.Code) || strings.TrimSpace(template.Name) == "" {
 		return fmt.Errorf("%w: identity is invalid", ErrInvalid)
 	}
-	if strings.TrimSpace(string(template.Transport)) == "" || strings.TrimSpace(string(template.Transport)) != string(template.Transport) {
-		return fmt.Errorf("%w: transport alias is invalid", ErrInvalid)
+	if strings.TrimSpace(template.From.Email) == "" {
+		return fmt.Errorf("%w: from email is required", ErrInvalid)
+	}
+	recipients := 0
+	for fieldName, addresses := range map[string][]AddressTemplate{
+		"to":  template.To,
+		"cc":  template.CC,
+		"bcc": template.BCC,
+	} {
+		for index, address := range addresses {
+			name := strings.TrimSpace(address.Name)
+			email := strings.TrimSpace(address.Email)
+			if name == "" && email == "" {
+				continue
+			}
+			if email == "" {
+				return fmt.Errorf("%w: %s.%d email is required", ErrInvalid, fieldName, index)
+			}
+			recipients++
+		}
+	}
+	if recipients == 0 {
+		return ErrNoRecipients
+	}
+	if template.ReplyTo != nil && strings.TrimSpace(template.ReplyTo.Email) == "" {
+		return fmt.Errorf("%w: reply_to email is required", ErrInvalid)
 	}
 	if template.ContentType != ContentText && template.ContentType != ContentHTML {
 		return fmt.Errorf("%w: content type is invalid", ErrInvalid)

@@ -52,6 +52,7 @@ type Definition struct {
 	AdditionalDatabases []DatabaseDefinition
 	Filesystems         []filesystem.Factory
 	Caches              []cache.Factory
+	ModuleApplications  []kernel.ModuleApplication
 	Profiles            []kernel.Profile
 	PasswordHasher      coreuser.PasswordHasherFactory
 	SiteAccessPolicy    coremanagement.SiteAccessPolicy

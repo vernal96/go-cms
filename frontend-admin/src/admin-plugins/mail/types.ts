@@ -22,7 +22,6 @@ export interface MailTemplate {
   code: string
   name: string
   enabled: boolean
-  transport: string
   from: MailAddressTemplate
   to: MailAddressTemplate[]
   cc: MailAddressTemplate[]
@@ -99,7 +98,6 @@ export interface MailDeliveryAttempt {
   id: number
   message_id: number
   attempt_number: number
-  transport: string
   driver: string
   started_at: string
   finished_at?: string | null
@@ -116,7 +114,6 @@ export interface MailMessage {
   template_id?: number | null
   template_code: string
   template_name: string
-  transport: string
   rfc_message_id: string
   from: MailAddress
   to: MailAddress[]

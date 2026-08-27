@@ -27,6 +27,7 @@ describe('ResourceCreateDialog', () => {
       menu_title: '',
       display_title: 'Home',
 		sort: 0,
+		in_menu: true,
 		deleted: false,
 		published: true,
 		deleted_at: null,

@@ -60,6 +60,24 @@ describe('ResourceExtensionEditor', () => {
     ])
   })
 
+  it('selects the first SEO group when the general group is unavailable', async () => {
+    requestMock.mockReset()
+    requestMock.mockResolvedValueOnce({ og_title: '' })
+    const wrapper = shallowMount(ResourceExtensionEditor, {
+      props: {
+        metadata: { ...metadata, fields: [{ key: 'og_title', label: 'OpenGraph title', control: 'text' }] },
+        siteId: 7,
+        resourceId: 9,
+        accessToken: 'token',
+        canUpdate: true,
+      },
+      global: { renderStubDefaultSlot: true },
+    })
+    await flushPromises()
+
+    expect(wrapper.getComponent({ name: 'ElTabs' }).props('modelValue')).toBe('opengraph')
+  })
+
   it('loads, previews, and saves through separate extension requests', async () => {
     requestMock.mockReset()
     requestMock

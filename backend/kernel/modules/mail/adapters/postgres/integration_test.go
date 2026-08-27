@@ -77,7 +77,7 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 
 	repository := database.Mail()
 	template, err := repository.CreateTemplate(ctx, mail.Template{
-		SiteID: siteIDs[0], Code: "invoice", Name: "Invoice", Enabled: true, Transport: "default",
+		SiteID: siteIDs[0], Code: "invoice", Name: "Invoice", Enabled: true,
 		From: mail.AddressTemplate{Email: "noreply@example.test"}, To: []mail.AddressTemplate{{Email: "{{data.email}}"}},
 		Subject: "Invoice", ContentType: mail.ContentText, TextBody: "Ready",
 		Variables: []field.Definition{{Key: "email", Type: field.TypeEmail, Label: "Email"}},
@@ -86,7 +86,7 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	otherTemplate, err := repository.CreateTemplate(ctx, mail.Template{
-		SiteID: siteIDs[1], Code: "invoice", Name: "Other Invoice", Enabled: true, Transport: "default",
+		SiteID: siteIDs[1], Code: "invoice", Name: "Other Invoice", Enabled: true,
 		From: mail.AddressTemplate{Email: "noreply@example.test"}, To: []mail.AddressTemplate{{Email: "{{data.email}}"}},
 		Subject: "Other Invoice", ContentType: mail.ContentText, TextBody: "Other",
 		Variables: []field.Definition{{Key: "email", Type: field.TypeEmail, Label: "Email"}},
@@ -102,7 +102,7 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 	if err != nil || resolvedSecond.ID != otherTemplate.ID || resolvedSecond.ID == template.ID {
 		t.Fatalf("site B template by code = %#v, %v", resolvedSecond, err)
 	}
-	if _, err := repository.CreateTemplate(ctx, mail.Template{SiteID: siteIDs[0], Code: "invoice", Name: "Duplicate", Enabled: true, Transport: "default", From: mail.AddressTemplate{}, ContentType: mail.ContentText}); !errors.Is(err, mail.ErrConflict) {
+	if _, err := repository.CreateTemplate(ctx, mail.Template{SiteID: siteIDs[0], Code: "invoice", Name: "Duplicate", Enabled: true, From: mail.AddressTemplate{}, ContentType: mail.ContentText}); !errors.Is(err, mail.ErrConflict) {
 		t.Fatalf("duplicate template error = %v", err)
 	}
 	if _, err := repository.TemplateByID(ctx, siteIDs[1], template.ID); !errors.Is(err, mail.ErrNotFound) {
@@ -112,8 +112,8 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 	messageTemplateID := template.ID
 	message := mail.Message{
 		SiteID: siteIDs[0], TemplateID: &messageTemplateID, TemplateCode: template.Code, TemplateName: template.Name,
-		Transport: "default", RFCMessageID: fmt.Sprintf("<mail-%d@example.test>", suffix),
-		From: mail.Address{Email: "noreply@example.test"}, To: []mail.Address{{Email: "person@example.test"}},
+		RFCMessageID: fmt.Sprintf("<mail-%d@example.test>", suffix),
+		From:         mail.Address{Email: "noreply@example.test"}, To: []mail.Address{{Email: "person@example.test"}},
 		Subject: "Invoice", ContentType: mail.ContentText, TextBody: "Ready", Origin: mail.OriginManual, RequestedAt: time.Now().UTC(),
 	}
 	queuedJob, err := job.NewScoped(mail.SendJobName, 1, fmt.Sprint(siteIDs[0]), struct {
@@ -129,7 +129,10 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 		t.Fatalf("Site B active before queue = %t, %v", active, err)
 	}
 	body, _ := json.Marshal(queuedJob)
-	stored, err := repository.CreateMessageAndJob(ctx, message, eventbus.Message{Topic: job.Topic(mail.SendJobName), Key: []byte(queuedJob.ID), Body: body})
+	stored, err := repository.CreateMessageAndJob(ctx, message, eventbus.Message{
+		Topic: job.Topic(mail.SendJobName), Key: []byte(queuedJob.ID), Body: body,
+		Headers: map[string][]byte{"content-type": []byte("application/json")},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +183,10 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	otherBody, _ := json.Marshal(otherJob)
-	otherStored, err := repository.CreateMessageAndJob(ctx, otherMessage, eventbus.Message{Topic: job.Topic(mail.SendJobName), Key: []byte(otherJob.ID), Body: otherBody})
+	otherStored, err := repository.CreateMessageAndJob(ctx, otherMessage, eventbus.Message{
+		Topic: job.Topic(mail.SendJobName), Key: []byte(otherJob.ID), Body: otherBody,
+		Headers: map[string][]byte{"content-type": []byte("application/json")},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +234,7 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 		t.Fatalf("profile removal deleted Mail history: %v", err)
 	}
 	deleteTemplate, err := repository.CreateTemplate(ctx, mail.Template{
-		SiteID: siteIDs[0], Code: "delete_owned", Name: "Delete Owned", Enabled: false, Transport: "default",
+		SiteID: siteIDs[0], Code: "delete_owned", Name: "Delete Owned", Enabled: false,
 		From: mail.AddressTemplate{Email: "noreply@example.test"}, To: []mail.AddressTemplate{{Email: "person@example.test"}},
 		Subject: "Delete", ContentType: mail.ContentText, TextBody: "Delete",
 	})

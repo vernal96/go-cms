@@ -27,21 +27,24 @@ type Worker struct {
 	repository  Repository
 	files       AttachmentOpener
 	spool       *AttachmentSpool
-	transports  *TransportRegistry
+	transport   Transport
 	lifecycle   *runtimeLifecycle
 	maxAttempts int
 	logger      *slog.Logger
 }
 
-func NewWorker(siteID site.ID, repository Repository, files AttachmentOpener, spool *AttachmentSpool, transports *TransportRegistry, maxAttempts int, logger *slog.Logger) (*Worker, error) {
-	return newWorker(siteID, repository, files, spool, transports, &runtimeLifecycle{}, maxAttempts, logger)
+func NewWorker(siteID site.ID, repository Repository, files AttachmentOpener, spool *AttachmentSpool, transport Transport, maxAttempts int, logger *slog.Logger) (*Worker, error) {
+	return newWorker(siteID, repository, files, spool, transport, &runtimeLifecycle{}, maxAttempts, logger)
 }
 
-func newWorker(siteID site.ID, repository Repository, files AttachmentOpener, spool *AttachmentSpool, transports *TransportRegistry, lifecycle *runtimeLifecycle, maxAttempts int, logger *slog.Logger) (*Worker, error) {
-	if siteID <= 0 || repository == nil || files == nil || transports == nil || lifecycle == nil || maxAttempts < 1 {
+func newWorker(siteID site.ID, repository Repository, files AttachmentOpener, spool *AttachmentSpool, transport Transport, lifecycle *runtimeLifecycle, maxAttempts int, logger *slog.Logger) (*Worker, error) {
+	if siteID <= 0 || repository == nil || files == nil || transport == nil || lifecycle == nil || maxAttempts < 1 {
 		return nil, errors.New("mail worker dependencies are nil")
 	}
-	return &Worker{siteID: siteID, repository: repository, files: files, spool: spool, transports: transports, lifecycle: lifecycle, maxAttempts: maxAttempts, logger: logger}, nil
+	if err := validateTransport(transport); err != nil {
+		return nil, err
+	}
+	return &Worker{siteID: siteID, repository: repository, files: files, spool: spool, transport: transport, lifecycle: lifecycle, maxAttempts: maxAttempts, logger: logger}, nil
 }
 
 func (w *Worker) Handle(ctx context.Context, item job.Envelope) error {
@@ -72,13 +75,8 @@ func (w *Worker) Handle(ctx context.Context, item job.Envelope) error {
 		return err
 	}
 	w.logAttempt(ctx, message, attempt, "mail.attempt.started", nil)
-	transport, exists := w.transports.Transport(message.Transport)
-	if !exists {
-		err = fmt.Errorf("%w: %s", ErrTransportNotFound, message.Transport)
-		return w.finishTerminal(ctx, message, attempt.AttemptNumber, DeliveryResult{}, terminalDeliveryError("transport_not_found", err))
-	}
 	if err := validateImmutableMessage(message); err != nil {
-		return w.finishTerminal(ctx, message, attempt.AttemptNumber, DeliveryResult{Driver: transport.Driver()}, terminalDeliveryError("message_invalid", err))
+		return w.finishTerminal(ctx, message, attempt.AttemptNumber, DeliveryResult{Driver: w.transport.Driver()}, terminalDeliveryError("message_invalid", err))
 	}
 	attachments := make([]DeliveryAttachment, 0, len(message.Attachments))
 	closers := make([]io.Closer, 0, len(message.Attachments))
@@ -92,13 +90,13 @@ func (w *Worker) Handle(ctx context.Context, item job.Envelope) error {
 			if w.spool == nil {
 				err = errors.New("mail transient attachment spool is unavailable")
 				closeAll(closers)
-				return w.finishTerminal(ctx, message, attempt.AttemptNumber, DeliveryResult{Driver: transport.Driver()}, terminalDeliveryError("attachment_missing", err))
+				return w.finishTerminal(ctx, message, attempt.AttemptNumber, DeliveryResult{Driver: w.transport.Driver()}, terminalDeliveryError("attachment_missing", err))
 			}
 			body, openErr := w.spool.Open(ctx, attachment)
 			if openErr != nil {
 				err = fmt.Errorf("open transient mail attachment: %w", openErr)
 				closeAll(closers)
-				return w.finishTerminal(ctx, message, attempt.AttemptNumber, DeliveryResult{Driver: transport.Driver()}, terminalDeliveryError("attachment_missing", err))
+				return w.finishTerminal(ctx, message, attempt.AttemptNumber, DeliveryResult{Driver: w.transport.Driver()}, terminalDeliveryError("attachment_missing", err))
 			}
 			closers = append(closers, body)
 			attachments = append(attachments, DeliveryAttachment{Attachment: attachment, Body: body})
@@ -107,22 +105,22 @@ func (w *Worker) Handle(ctx context.Context, item job.Envelope) error {
 		if attachment.FileID == nil {
 			err = errors.New("mail attachment has no persistent file reference")
 			closeAll(closers)
-			return w.finishTerminal(ctx, message, attempt.AttemptNumber, DeliveryResult{Driver: transport.Driver()}, terminalDeliveryError("attachment_missing", err))
+			return w.finishTerminal(ctx, message, attempt.AttemptNumber, DeliveryResult{Driver: w.transport.Driver()}, terminalDeliveryError("attachment_missing", err))
 		}
 		opened, openErr := w.files.Open(ctx, security.System(), *attachment.FileID)
 		if openErr != nil {
 			err = fmt.Errorf("open mail attachment %d: %w", *attachment.FileID, openErr)
 			closeAll(closers)
-			return w.finishTerminal(ctx, message, attempt.AttemptNumber, DeliveryResult{Driver: transport.Driver()}, terminalDeliveryError("attachment_missing", err))
+			return w.finishTerminal(ctx, message, attempt.AttemptNumber, DeliveryResult{Driver: w.transport.Driver()}, terminalDeliveryError("attachment_missing", err))
 		}
 		closers = append(closers, opened.Body)
 		attachments = append(attachments, DeliveryAttachment{Attachment: attachment, Body: opened.Body})
 	}
-	result, sendErr := transport.Send(ctx, Delivery{Message: message, Attachments: attachments})
+	result, sendErr := w.transport.Send(ctx, Delivery{Message: message, Attachments: attachments})
 	closeAll(closers)
 	closers = nil
 	if result.Driver == "" {
-		result.Driver = transport.Driver()
+		result.Driver = w.transport.Driver()
 	}
 	failure := classifyDeliveryError(sendErr)
 	terminal := failure != nil && (!failure.Retryable || attempt.AttemptNumber >= w.maxAttempts)
@@ -219,7 +217,7 @@ func (w *Worker) logAttempt(ctx context.Context, message Message, attempt Delive
 	if w.logger == nil {
 		return
 	}
-	attributes := []any{slog.String("event", event), slog.Int64("message_id", int64(message.ID)), slog.Int64("site_id", int64(message.SiteID)), slog.Int("attempt", attempt.AttemptNumber), slog.String("transport_alias", string(message.Transport))}
+	attributes := []any{slog.String("event", event), slog.Int64("message_id", int64(message.ID)), slog.Int64("site_id", int64(message.SiteID)), slog.Int("attempt", attempt.AttemptNumber), slog.String("driver", w.transport.Driver())}
 	if failure != nil {
 		attributes = append(attributes, slog.String("error_code", failure.Code), slog.Bool("retryable", failure.Retryable))
 	}

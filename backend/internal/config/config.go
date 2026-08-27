@@ -36,36 +36,35 @@ type Config struct {
 }
 
 type MailConfig struct {
-	DefaultTransport       mailmodule.TransportAlias `envconfig:"DEFAULT_TRANSPORT" default:"default"`
-	DefaultDriver          string                    `envconfig:"TRANSPORT_DEFAULT_DRIVER" default:"log"`
-	SMTPHost               string                    `envconfig:"SMTP_HOST"`
-	SMTPPort               int                       `envconfig:"SMTP_PORT" default:"587"`
-	SMTPUsername           string                    `envconfig:"SMTP_USERNAME"`
-	SMTPPassword           string                    `envconfig:"SMTP_PASSWORD"`
-	SMTPTLSEnabled         bool                      `envconfig:"SMTP_TLS_ENABLED" default:"true"`
-	SMTPTLSServerName      string                    `envconfig:"SMTP_TLS_SERVER_NAME"`
-	SMTPTimeout            time.Duration             `envconfig:"SMTP_TIMEOUT" default:"10s"`
-	AllowedSenderAddresses []string                  `envconfig:"ALLOWED_SENDER_ADDRESSES"`
-	AllowedSenderDomains   []string                  `envconfig:"ALLOWED_SENDER_DOMAINS"`
-	MessageIDDomain        string                    `envconfig:"MESSAGE_ID_DOMAIN" default:"localhost"`
-	HistoryRetention       time.Duration             `envconfig:"HISTORY_RETENTION" default:"720h"`
-	HistoryCleanupInterval time.Duration             `envconfig:"HISTORY_CLEANUP_INTERVAL" default:"1h"`
-	HistoryCleanupBatch    int                       `envconfig:"HISTORY_CLEANUP_BATCH" default:"100"`
-	SendMaxAttempts        int                       `envconfig:"SEND_MAX_ATTEMPTS" default:"5"`
-	MaxRecipients          int                       `envconfig:"MAX_RECIPIENTS" default:"100"`
-	MaxMessageSize         int64                     `envconfig:"MAX_MESSAGE_SIZE" default:"26214400"`
-	MaxAttachmentSize      int64                     `envconfig:"MAX_ATTACHMENT_SIZE" default:"20971520"`
-	UploadStorage          filesystem.Code           `envconfig:"UPLOAD_STORAGE" default:"private"`
-	UploadPath             string                    `envconfig:"UPLOAD_PATH" default:"mail"`
-	SpoolEnabled           bool                      `envconfig:"SPOOL_ENABLED" default:"true"`
-	SpoolTTL               time.Duration             `envconfig:"SPOOL_TTL" default:"24h"`
-	SpoolCleanupInterval   time.Duration             `envconfig:"SPOOL_CLEANUP_INTERVAL" default:"1h"`
-	SpoolCleanupBatch      int                       `envconfig:"SPOOL_CLEANUP_BATCH" default:"100"`
+	Driver                 string          `envconfig:"TRANSPORT_DRIVER" default:"log"`
+	SMTPHost               string          `envconfig:"SMTP_HOST"`
+	SMTPPort               int             `envconfig:"SMTP_PORT" default:"587"`
+	SMTPUsername           string          `envconfig:"SMTP_USERNAME"`
+	SMTPPassword           string          `envconfig:"SMTP_PASSWORD"`
+	SMTPTLSEnabled         bool            `envconfig:"SMTP_TLS_ENABLED" default:"true"`
+	SMTPTLSServerName      string          `envconfig:"SMTP_TLS_SERVER_NAME"`
+	SMTPTimeout            time.Duration   `envconfig:"SMTP_TIMEOUT" default:"10s"`
+	AllowedSenderAddresses []string        `envconfig:"ALLOWED_SENDER_ADDRESSES"`
+	AllowedSenderDomains   []string        `envconfig:"ALLOWED_SENDER_DOMAINS"`
+	MessageIDDomain        string          `envconfig:"MESSAGE_ID_DOMAIN" default:"localhost"`
+	HistoryRetention       time.Duration   `envconfig:"HISTORY_RETENTION" default:"720h"`
+	HistoryCleanupInterval time.Duration   `envconfig:"HISTORY_CLEANUP_INTERVAL" default:"1h"`
+	HistoryCleanupBatch    int             `envconfig:"HISTORY_CLEANUP_BATCH" default:"100"`
+	SendMaxAttempts        int             `envconfig:"SEND_MAX_ATTEMPTS" default:"5"`
+	MaxRecipients          int             `envconfig:"MAX_RECIPIENTS" default:"100"`
+	MaxMessageSize         int64           `envconfig:"MAX_MESSAGE_SIZE" default:"26214400"`
+	MaxAttachmentSize      int64           `envconfig:"MAX_ATTACHMENT_SIZE" default:"20971520"`
+	UploadStorage          filesystem.Code `envconfig:"UPLOAD_STORAGE" default:"private"`
+	UploadPath             string          `envconfig:"UPLOAD_PATH" default:"mail"`
+	SpoolEnabled           bool            `envconfig:"SPOOL_ENABLED" default:"true"`
+	SpoolTTL               time.Duration   `envconfig:"SPOOL_TTL" default:"24h"`
+	SpoolCleanupInterval   time.Duration   `envconfig:"SPOOL_CLEANUP_INTERVAL" default:"1h"`
+	SpoolCleanupBatch      int             `envconfig:"SPOOL_CLEANUP_BATCH" default:"100"`
 }
 
-func (c MailConfig) ModuleConfig() mailmodule.Config {
+func (c MailConfig) Application() mailmodule.Application {
 	var transport mailmodule.Transport
-	switch c.DefaultDriver {
+	switch c.Driver {
 	case "smtp":
 		transport = mailmodule.ConfiguredSMTPTransport{Config: mailmodule.SMTPConfig{
 			Host: c.SMTPHost, Port: c.SMTPPort, Username: c.SMTPUsername, Password: c.SMTPPassword,
@@ -76,11 +75,13 @@ func (c MailConfig) ModuleConfig() mailmodule.Config {
 	case "log":
 		transport = mailmodule.LogTransport{}
 	default:
-		transport = mailmodule.InvalidTransport{Name: c.DefaultDriver}
+		transport = mailmodule.InvalidTransport{Name: c.Driver}
 	}
+	return mailmodule.Application{Transport: transport}
+}
+
+func (c MailConfig) ModuleConfig() mailmodule.Config {
 	return mailmodule.Config{
-		DefaultTransport: c.DefaultTransport,
-		Transports:       map[mailmodule.TransportAlias]mailmodule.Transport{c.DefaultTransport: transport},
 		Renderer: mailmodule.RendererConfig{SenderPolicy: mailmodule.SenderPolicy{
 			AllowedAddresses: append([]string(nil), c.AllowedSenderAddresses...),
 			AllowedDomains:   append([]string(nil), c.AllowedSenderDomains...),
@@ -154,7 +155,10 @@ func (c Config) Application() appkernel.Definition {
 			corefiles.PublicFactory(c.Files.Public),
 			corefiles.PrivateFactory(c.Files.Private),
 		},
-		Caches:          c.Caches.Factories(),
+		Caches: c.Caches.Factories(),
+		ModuleApplications: []kernel.ModuleApplication{
+			c.Mail.Application(),
+		},
 		Profiles:        []kernel.Profile{dev.ProfileWithMail(c.Mail.ModuleConfig())},
 		PasswordHasher:  argon2id.Factory{},
 		MaxUploadSize:   c.Files.MaxUploadSize,

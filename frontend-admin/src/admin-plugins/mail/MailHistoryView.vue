@@ -101,4 +101,14 @@ onMounted(() => void load())
   </section>
 </template>
 
-<style scoped>.mail-history-page{display:grid;gap:16px}.mail-history-page :deep(.el-table__row){cursor:pointer}.mail-history-filters{display:grid;grid-template-columns:180px 1fr 1fr 210px 210px auto;gap:10px}@media(max-width:1100px){.mail-history-filters{grid-template-columns:1fr 1fr}}</style>
+<style scoped>
+.mail-history-page { display: grid; gap: 16px; }
+.mail-history-page :deep(.el-table__row) { cursor: pointer; }
+.mail-history-filters { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); grid-auto-rows: min-content; align-items: start; gap: 12px; }
+.mail-history-filters > * { width: 100%; align-self: start; }
+.mail-history-filters :deep(.el-input__wrapper),
+.mail-history-filters :deep(.el-select__wrapper),
+.mail-history-filters :deep(.el-button) { min-height: 32px; }
+@media (max-width: 900px) { .mail-history-filters { grid-template-columns: repeat(2, minmax(180px, 1fr)); } }
+@media (max-width: 560px) { .mail-history-filters { grid-template-columns: 1fr; } }
+</style>

@@ -843,8 +843,9 @@ SELECT
     current.type,
     current.template,
     current.title,
-    current.menu_title,
+	current.menu_title,
 	current.is_public,
+	current.in_menu,
 	current.published_at,
 	current.unpublished_at,
 	current.deleted_at,
@@ -870,8 +871,9 @@ SELECT
     children.type,
     children.template,
     children.title,
-    children.menu_title,
+	children.menu_title,
 	children.is_public,
+	children.in_menu,
 	children.published_at,
 	children.unpublished_at,
 	children.deleted_at,
@@ -898,6 +900,7 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 			rawTitle         *string
 			rawMenuTitle     *string
 			rawIsPublic      *bool
+			rawInMenu        *bool
 			rawPublishedAt   *time.Time
 			rawUnpublishedAt *time.Time
 			rawDeletedAt     *time.Time
@@ -915,6 +918,7 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 			&rawTitle,
 			&rawMenuTitle,
 			&rawIsPublic,
+			&rawInMenu,
 			&rawPublishedAt,
 			&rawUnpublishedAt,
 			&rawDeletedAt,
@@ -938,6 +942,7 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 			MenuTitle:     *rawMenuTitle,
 			Sort:          *rawSort,
 			IsPublic:      rawIsPublic != nil && *rawIsPublic,
+			InMenu:        rawInMenu != nil && *rawInMenu,
 			PublishedAt:   rawPublishedAt,
 			UnpublishedAt: rawUnpublishedAt,
 			DeletedAt:     rawDeletedAt,

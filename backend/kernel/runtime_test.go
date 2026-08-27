@@ -235,6 +235,83 @@ type registryRuntime struct {
 	code kernel.ModuleCode
 }
 
+type testModuleApplication struct {
+	code   kernel.ModuleCode
+	marker string
+}
+
+func (a *testModuleApplication) ModuleCode() kernel.ModuleCode { return a.code }
+
+type applicationAwareModule struct {
+	code            kernel.ModuleCode
+	wantApplication bool
+	seen            *testModuleApplication
+}
+
+func (m *applicationAwareModule) Code() kernel.ModuleCode { return m.code }
+
+func (m *applicationAwareModule) Build(_ context.Context, ctx kernel.ModuleContext) (kernel.ModuleRuntime, error) {
+	application, err := kernel.ModuleApplicationFrom[*testModuleApplication](ctx)
+	if m.wantApplication {
+		if err != nil {
+			return nil, err
+		}
+		m.seen = application
+	} else if err == nil {
+		return nil, errors.New("unexpected module application dependency")
+	}
+	return registryRuntime{code: m.code}, nil
+}
+
+func TestModuleApplicationIsAppScopedAndVisibleOnlyToOwningModule(t *testing.T) {
+	t.Parallel()
+	application := &testModuleApplication{code: "mail_like", marker: "shared"}
+	services := testRuntimeServices()
+	services.ModuleApplications = []kernel.ModuleApplication{application}
+	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{}, services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := &applicationAwareModule{code: "mail_like", wantApplication: true}
+	other := &applicationAwareModule{code: "other"}
+	blueprint, err := factory.Compile(context.Background(), kernel.Profile{
+		Code: "application_dependencies",
+		Modules: []kernel.ProfileModule{
+			{Module: owner},
+			{Module: other},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, siteID := range []string{"1", "2"} {
+		if _, err := blueprint.Build(context.Background(), kernel.NewRuntimeScope(siteID, siteID+".example.test", "en-US", nil)); err != nil {
+			t.Fatal(err)
+		}
+		if owner.seen != application || owner.seen.marker != "shared" {
+			t.Fatalf("owner application = %#v", owner.seen)
+		}
+	}
+}
+
+func TestModuleApplicationDefinitionsRejectNilEmptyAndDuplicates(t *testing.T) {
+	t.Parallel()
+	var nilApplication *testModuleApplication
+	for name, applications := range map[string][]kernel.ModuleApplication{
+		"nil":       {nilApplication},
+		"empty":     {&testModuleApplication{}},
+		"duplicate": {&testModuleApplication{code: "mail_like"}, &testModuleApplication{code: "mail_like"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			services := testRuntimeServices()
+			services.ModuleApplications = applications
+			if _, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{}, services); err == nil {
+				t.Fatal("invalid module application definitions were accepted")
+			}
+		})
+	}
+}
+
 type widgetProviderModule struct {
 	code    kernel.ModuleCode
 	widgets []widget.Widget

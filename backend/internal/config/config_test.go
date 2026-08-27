@@ -51,7 +51,7 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	t.Setenv("JWT_CLOCK_SKEW", "5s")
 	t.Setenv("OUTBOX_BATCH_SIZE", "25")
 	t.Setenv("OUTBOX_CLEANUP_MAX_BATCHES", "40")
-	t.Setenv("MAIL_TRANSPORT_DEFAULT_DRIVER", "null")
+	t.Setenv("MAIL_TRANSPORT_DRIVER", "null")
 	t.Setenv("MAIL_HISTORY_RETENTION", "240h")
 	t.Setenv("MAIL_UPLOAD_STORAGE", "private-mail")
 	t.Setenv("MAIL_UPLOAD_PATH", "mail/uploads")
@@ -94,7 +94,7 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		config.Outbox.CleanupMaxBatches != 40 {
 		t.Fatalf("outbox configuration = %#v", config.Outbox)
 	}
-	if config.Mail.DefaultDriver != "null" || config.Mail.HistoryRetention != 240*time.Hour || config.Mail.UploadStorage != "private-mail" || config.Mail.UploadPath != "mail/uploads" {
+	if config.Mail.Driver != "null" || config.Mail.HistoryRetention != 240*time.Hour || config.Mail.UploadStorage != "private-mail" || config.Mail.UploadPath != "mail/uploads" {
 		t.Fatalf("mail configuration = %#v", config.Mail)
 	}
 
@@ -104,6 +104,9 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	}
 	if definition.EventBus == nil {
 		t.Fatal("event bus factory is nil")
+	}
+	if len(definition.ModuleApplications) != 1 || definition.ModuleApplications[0].ModuleCode() != mail.ModuleCode {
+		t.Fatalf("module applications = %#v", definition.ModuleApplications)
 	}
 	if definition.MainDatabase.Connector.Code() != mainpostgres.ConnectionCode {
 		t.Fatalf("connection code = %q", definition.MainDatabase.Connector.Code())

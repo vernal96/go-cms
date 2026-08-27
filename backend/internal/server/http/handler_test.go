@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/vernal96/go-cms/connectors/localstorage"
 	httpserver "github.com/vernal96/go-cms/internal/server/http"
 	"github.com/vernal96/go-cms/kernel"
@@ -469,8 +470,8 @@ func (siteManagementDuplicateModule) Build(context.Context, kernel.ModuleContext
 }
 func (r siteManagementTestRuntime) ModuleCode() kernel.ModuleCode { return r.moduleCode }
 func (r siteManagementTestRuntime) SiteManagementHTTP() httptransport.SiteManagementContribution {
-	router := http.NewServeMux()
-	router.HandleFunc("/ping", func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusNoContent) })
+	router := chi.NewRouter()
+	router.Get("/ping", func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusNoContent) })
 	return httptransport.SiteManagementContribution{Path: r.path, Handler: router}
 }
 

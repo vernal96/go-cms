@@ -632,6 +632,10 @@ input {
   opacity: .52;
 }
 
+.resource-node.is-hidden-from-menu .resource-node-title {
+  font-style: italic;
+}
+
 .resource-tree .el-tree__drop-indicator {
   height: 3px;
   background: var(--admin-primary);

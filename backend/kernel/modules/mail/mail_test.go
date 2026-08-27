@@ -91,7 +91,7 @@ func testRenderer(t *testing.T, policy SenderPolicy) (*Renderer, *testFiles) {
 
 func mailTemplate() Template {
 	return Template{
-		SiteID: 5, Code: "welcome", Name: "Welcome", Enabled: true, Transport: "default",
+		SiteID: 5, Code: "welcome", Name: "Welcome", Enabled: true,
 		From:    AddressTemplate{Name: "Site", Email: "noreply@example.com"},
 		To:      []AddressTemplate{{Name: "{{data.name}}", Email: "{{data.email}}"}},
 		Subject: "Hello {{data.name}}", ContentType: ContentHTML,
@@ -149,6 +149,39 @@ func TestRendererRejectsHeadersRecipientsAndSenderSpoofing(t *testing.T) {
 		if !errors.Is(err, test.target) {
 			t.Fatalf("%s error = %v", test.name, err)
 		}
+	}
+}
+
+func TestRendererValidatesUsedAddressRowsBeforeRendering(t *testing.T) {
+	t.Parallel()
+	renderer, _ := testRenderer(t, SenderPolicy{})
+	for _, test := range []struct {
+		name   string
+		mutate func(*Template)
+		target error
+	}{
+		{name: "from email", mutate: func(item *Template) { item.From = AddressTemplate{Name: "Sender"} }, target: ErrInvalid},
+		{name: "to name without email", mutate: func(item *Template) { item.To = []AddressTemplate{{Name: "Recipient"}} }, target: ErrInvalid},
+		{name: "cc name without email", mutate: func(item *Template) { item.CC = []AddressTemplate{{Name: "Copy"}} }, target: ErrInvalid},
+		{name: "bcc name without email", mutate: func(item *Template) { item.BCC = []AddressTemplate{{Name: "Hidden"}} }, target: ErrInvalid},
+		{name: "reply-to email", mutate: func(item *Template) { item.ReplyTo = &AddressTemplate{Name: "Replies"} }, target: ErrInvalid},
+		{name: "only blank recipient rows", mutate: func(item *Template) { item.To = []AddressTemplate{{}, {Name: "  ", Email: "  "}} }, target: ErrNoRecipients},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			template := mailTemplate()
+			test.mutate(&template)
+			if err := renderer.ValidateTemplate(template); !errors.Is(err, test.target) {
+				t.Fatalf("validation error = %v", err)
+			}
+		})
+	}
+
+	template := mailTemplate()
+	template.To = append(template.To, AddressTemplate{})
+	template.CC = []AddressTemplate{{}}
+	template.BCC = []AddressTemplate{{Name: "  ", Email: "  "}}
+	if err := renderer.ValidateTemplate(template); err != nil {
+		t.Fatalf("blank optional address rows were not ignored: %v", err)
 	}
 }
 
@@ -369,7 +402,7 @@ func (r *memoryRepository) ClaimMessage(_ context.Context, siteID site.ID, id Me
 	}
 	r.claimable = false
 	r.message.Status = StatusSending
-	attempt := DeliveryAttempt{MessageID: id, AttemptNumber: len(r.attempts) + 1, Status: AttemptSending, Transport: r.message.Transport}
+	attempt := DeliveryAttempt{MessageID: id, AttemptNumber: len(r.attempts) + 1, Status: AttemptSending}
 	r.attempts = append(r.attempts, attempt)
 	return r.message, attempt, true, nil
 }
@@ -410,8 +443,7 @@ func TestPreviewAndQueueShareRendererAndPersistImmutableSnapshot(t *testing.T) {
 	renderer, _ := testRenderer(t, SenderPolicy{})
 	repository := &memoryRepository{template: mailTemplate()}
 	repository.template.ID = 3
-	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
-	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,75 +496,6 @@ func TestRendererRejectsTemplateOwnedByAnotherSite(t *testing.T) {
 	}
 }
 
-func TestTemplateUsabilityUsesCurrentRuntimeTransport(t *testing.T) {
-	t.Parallel()
-	renderer, _ := testRenderer(t, SenderPolicy{})
-	template := mailTemplate()
-	template.ID = 3
-	template.Enabled = false
-	template.Transport = "transactional"
-	repository := &memoryRepository{template: template}
-	limits := Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}
-
-	oldTransports, _ := NewTransportRegistry(map[TransportAlias]Transport{"transactional": NullTransport{}})
-	oldService, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, oldTransports, nil, limits, "transactional", "example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if item, err := oldService.SetTemplateEnabled(context.Background(), security.User(9), 3, true); err != nil || !item.Enabled {
-		t.Fatalf("enable under old transport registry = %#v, %v", item, err)
-	}
-	if _, err := oldService.SetTemplateEnabled(context.Background(), security.User(9), 3, false); err != nil {
-		t.Fatalf("disable before runtime change = %v", err)
-	}
-
-	currentTransports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
-	currentService, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, currentTransports, nil, limits, "default", "example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := currentService.CreateTemplate(context.Background(), security.User(9), template); !errors.Is(err, ErrTransportNotFound) {
-		t.Fatalf("create with unavailable current transport = %v", err)
-	}
-	if _, err := currentService.UpdateTemplate(context.Background(), security.User(9), template); !errors.Is(err, ErrTransportNotFound) {
-		t.Fatalf("update with unavailable current transport = %v", err)
-	}
-	if _, err := currentService.SetTemplateEnabled(context.Background(), security.User(9), 3, true); !errors.Is(err, ErrTransportNotFound) || repository.template.Enabled {
-		t.Fatalf("enable with unavailable current transport = %v, enabled=%t", err, repository.template.Enabled)
-	}
-
-	values := map[string]any{"name": "Alice", "email": "a@example.net", "count": float64(2)}
-	repository.template.Enabled = true
-	if _, err := currentService.Preview(context.Background(), security.User(9), 3, values); !errors.Is(err, ErrTransportNotFound) {
-		t.Fatalf("preview with unavailable current transport = %v", err)
-	}
-	if _, err := currentService.QueueManual(context.Background(), security.User(9), ManualSendInput{TemplateID: 3, Values: values}); !errors.Is(err, ErrTransportNotFound) {
-		t.Fatalf("manual queue with unavailable current transport = %v", err)
-	}
-	if _, err := currentService.QueueByCode(context.Background(), QueueInput{TemplateCode: "welcome", Values: values}); !errors.Is(err, ErrTransportNotFound) {
-		t.Fatalf("automatic queue with unavailable current transport = %v", err)
-	}
-	if repository.message.ID != 0 {
-		t.Fatalf("message persisted with unavailable current transport: %#v", repository.message)
-	}
-
-	updated := repository.template
-	updated.Enabled = false
-	updated.Transport = "default"
-	if _, err := currentService.UpdateTemplate(context.Background(), security.User(9), updated); err != nil {
-		t.Fatalf("update to current transport = %v", err)
-	}
-	if item, err := currentService.SetTemplateEnabled(context.Background(), security.User(9), 3, true); err != nil || !item.Enabled {
-		t.Fatalf("enable with current transport = %#v, %v", item, err)
-	}
-	if _, err := currentService.Preview(context.Background(), security.User(9), 3, values); err != nil {
-		t.Fatalf("preview with current transport = %v", err)
-	}
-	if _, err := currentService.QueueManual(context.Background(), security.User(9), ManualSendInput{TemplateID: 3, Values: values}); err != nil {
-		t.Fatalf("manual queue with current transport = %v", err)
-	}
-}
-
 func TestTemplateEnableValidatesCurrentRuntimeWithoutReauthorizingStaticFile(t *testing.T) {
 	t.Parallel()
 	renderer, files := testRenderer(t, SenderPolicy{})
@@ -541,8 +504,7 @@ func TestTemplateEnableValidatesCurrentRuntimeWithoutReauthorizingStaticFile(t *
 	template.Enabled = false
 	template.Attachments = []AttachmentTemplate{{Source: AttachmentStatic, FileID: fileIDPointer(7)}}
 	repository := &memoryRepository{template: template}
-	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
-	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,8 +539,7 @@ func TestMailRuntimeTransitionBlocksActiveStatusesAndRestoresQueueAfterAbort(t *
 				t.Run(string(reason), func(t *testing.T) {
 					renderer, _ := testRenderer(t, SenderPolicy{})
 					repository := &memoryRepository{template: mailTemplate(), message: Message{SiteID: 5, Status: status}}
-					transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
-					service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+					service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "example.com")
 					runtime := &Runtime{service: service, spoolCleanupBatch: 1}
 					_, err := runtime.PrepareRuntimeTransition(context.Background(), kernel.RuntimeTransition{Reason: reason, ScopeID: "5", FromProfile: "mail", ToProfile: "other"})
 					if !errors.Is(err, kernel.ErrRuntimeTransitionBlocked) || !errors.Is(err, ErrActiveMessages) {
@@ -599,8 +560,8 @@ func TestMailRuntimeDrainRejectsNewQueueAndWorkerClaimUntilAbort(t *testing.T) {
 	active := false
 	repository := &memoryRepository{template: mailTemplate(), active: &active}
 	repository.template.ID = 3
-	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
-	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	transport := NullTransport{}
+	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "example.com")
 	runtime := &Runtime{service: service, spoolCleanupBatch: 1}
 	prepared, err := runtime.PrepareRuntimeTransition(context.Background(), kernel.RuntimeTransition{Reason: kernel.RuntimeTransitionSiteDelete, ScopeID: "5", FromProfile: "mail"})
 	if err != nil {
@@ -614,7 +575,7 @@ func TestMailRuntimeDrainRejectsNewQueueAndWorkerClaimUntilAbort(t *testing.T) {
 	}
 	repository.message = Message{ID: 12, SiteID: 5, Status: StatusQueued}
 	repository.claimable = true
-	worker, _ := newWorker(5, repository, files, nil, transports, service.lifecycle, 5, nil)
+	worker, _ := newWorker(5, repository, files, nil, transport, service.lifecycle, 5, nil)
 	envelope, _ := job.NewScoped(SendJobName, 1, "5", struct {
 		MessageID MessageID `json:"message_id"`
 	}{12})
@@ -634,8 +595,7 @@ func TestMailRuntimeTransitionAllowsTerminalOnlyMessages(t *testing.T) {
 		t.Run(string(status), func(t *testing.T) {
 			renderer, _ := testRenderer(t, SenderPolicy{})
 			repository := &memoryRepository{template: mailTemplate(), message: Message{SiteID: 5, Status: status}}
-			transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
-			service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+			service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "example.com")
 			runtime := &Runtime{service: service, spoolCleanupBatch: 1}
 			prepared, err := runtime.PrepareRuntimeTransition(context.Background(), kernel.RuntimeTransition{Reason: kernel.RuntimeTransitionProfileChange, ScopeID: "5", FromProfile: "mail", ToProfile: "other"})
 			if err != nil {
@@ -649,8 +609,7 @@ func TestMailRuntimeTransitionAllowsTerminalOnlyMessages(t *testing.T) {
 func TestMailTransitionWaitsForConcurrentQueueThenObservesItActive(t *testing.T) {
 	renderer, _ := testRenderer(t, SenderPolicy{})
 	repository := &memoryRepository{template: mailTemplate(), createAt: make(chan struct{}), createGo: make(chan struct{})}
-	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
-	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "example.com")
 	runtime := &Runtime{service: service, spoolCleanupBatch: 1}
 	queueResult := make(chan error, 1)
 	go func() {
@@ -702,8 +661,7 @@ func TestMailHTTPRequiresAuthentication(t *testing.T) {
 	renderer, _ := testRenderer(t, SenderPolicy{})
 	repository := &memoryRepository{template: mailTemplate()}
 	repository.template.ID = 3
-	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
-	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,6 +697,35 @@ func TestMailHTTPRequiresAuthentication(t *testing.T) {
 		t.Fatalf("manual API site ownership = %d, %s, template=%#v", response.Code, response.Body.String(), repository.template)
 	}
 
+	validTemplate := `{"code":"manual_api","name":"Manual API","enabled":true,"from":{"name":"Sender","email":"noreply@example.com"},"to":[{"name":"Recipient","email":"person@example.net"}],"cc":[],"bcc":[],"reply_to":null,"subject":"Subject","content_type":"text","text_body":"Body","html_body":"","attachments":[],"variables":[]}`
+	request = httptest.NewRequest(http.MethodPost, "/api/sites/5/mail/templates", strings.NewReader(validTemplate))
+	request = request.WithContext(httptransport.WithActor(request.Context(), security.User(9)))
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || strings.Contains(response.Body.String(), `"transport"`) {
+		t.Fatalf("template create = %d, %s", response.Code, response.Body.String())
+	}
+
+	for _, call := range []struct {
+		method string
+		path   string
+		body   string
+		status int
+	}{
+		{http.MethodPost, "/api/sites/5/mail/preview", `{"template_id":1,"values":{}}`, http.StatusOK},
+		{http.MethodPost, "/api/sites/5/mail/send", `{"template_id":1,"values":{}}`, http.StatusAccepted},
+		{http.MethodGet, "/api/sites/5/mail/messages", "", http.StatusOK},
+		{http.MethodGet, "/api/sites/5/mail/messages/11", "", http.StatusOK},
+	} {
+		request = httptest.NewRequest(call.method, call.path, strings.NewReader(call.body))
+		request = request.WithContext(httptransport.WithActor(request.Context(), security.User(9)))
+		response = httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != call.status || strings.Contains(response.Body.String(), `"transport"`) {
+			t.Fatalf("%s %s = %d, %s", call.method, call.path, response.Code, response.Body.String())
+		}
+	}
+
 	request = httptest.NewRequest(http.MethodGet, "/api/sites/5/mail/variables", nil)
 	request = request.WithContext(httptransport.WithActor(request.Context(), security.User(9)))
 	response = httptest.NewRecorder()
@@ -761,7 +748,7 @@ func TestTemplateResponseUsesStableLowercaseChoiceDTO(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"choices":[{"value":"a","label":"A"}]`) || strings.Contains(string(raw), `"Value"`) {
+	if !strings.Contains(string(raw), `"choices":[{"value":"a","label":"A"}]`) || strings.Contains(string(raw), `"Value"`) || strings.Contains(string(raw), `"transport"`) {
 		t.Fatalf("response JSON = %s", raw)
 	}
 }
@@ -790,7 +777,7 @@ func (t *countingTransport) Send(_ context.Context, delivery Delivery) (Delivery
 
 func queuedDeliveryMessage(id MessageID) Message {
 	return Message{
-		ID: id, SiteID: 5, Transport: "default", RFCMessageID: fmt.Sprintf("<message-%d@example.com>", id),
+		ID: id, SiteID: 5, RFCMessageID: fmt.Sprintf("<message-%d@example.com>", id),
 		From: Address{Email: "noreply@example.com"}, To: []Address{{Email: "person@example.net"}},
 		ContentType: ContentText, TextBody: "Body", Status: StatusQueued, RequestedAt: time.Now().UTC(),
 	}
@@ -804,8 +791,7 @@ func TestWorkerRecordsAttemptAndSkipsDuplicateTerminalDelivery(t *testing.T) {
 	message.Attachments = []Attachment{{Source: AttachmentStatic, FileID: &fileID, Filename: "invoice.pdf", MIMEType: "application/pdf", Size: 3}}
 	repository := &memoryRepository{message: message, claimable: true}
 	transport := &countingTransport{}
-	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": transport})
-	worker, _ := NewWorker(5, repository, files, nil, registry, 5, nil)
+	worker, _ := NewWorker(5, repository, files, nil, transport, 5, nil)
 	payload, _ := json.Marshal(struct {
 		MessageID MessageID `json:"message_id"`
 	}{11})
@@ -826,8 +812,7 @@ func TestWorkerRecordsFailureThenRetryAndRejectsWrongSiteScope(t *testing.T) {
 	_, files := testRenderer(t, SenderPolicy{})
 	repository := &memoryRepository{message: queuedDeliveryMessage(12), claimable: true}
 	transport := &countingTransport{failure: &DeliveryError{Retryable: true, Code: "temporary", Err: errors.New("temporary failure")}}
-	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": transport})
-	worker, _ := NewWorker(5, repository, files, nil, registry, 5, nil)
+	worker, _ := NewWorker(5, repository, files, nil, transport, 5, nil)
 	payload, _ := json.Marshal(struct {
 		MessageID MessageID `json:"message_id"`
 	}{12})
@@ -851,8 +836,7 @@ func TestWorkerMakesRetryableFailureTerminalAtMaximumAttempts(t *testing.T) {
 	_, files := testRenderer(t, SenderPolicy{})
 	repository := &memoryRepository{message: queuedDeliveryMessage(13), claimable: true}
 	transport := &countingTransport{failure: &DeliveryError{Retryable: true, Code: "421", Err: errors.New("temporary")}}
-	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": transport})
-	worker, _ := NewWorker(5, repository, files, nil, registry, 1, nil)
+	worker, _ := NewWorker(5, repository, files, nil, transport, 1, nil)
 	payload, _ := json.Marshal(struct {
 		MessageID MessageID `json:"message_id"`
 	}{13})
@@ -872,8 +856,7 @@ func TestWorkerTerminalizesMalformedImmutableMessageWithoutSending(t *testing.T)
 	message.Subject = "safe\r\nBcc: attacker@example.com"
 	repository := &memoryRepository{message: message, claimable: true}
 	transport := &countingTransport{}
-	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": transport})
-	worker, _ := NewWorker(5, repository, files, nil, registry, 5, nil)
+	worker, _ := NewWorker(5, repository, files, nil, transport, 5, nil)
 	payload, _ := json.Marshal(struct {
 		MessageID MessageID `json:"message_id"`
 	}{14})
@@ -982,8 +965,7 @@ func TestTransientSpoolSurvivesRetryAndIsDeletedOnTerminalSuccess(t *testing.T) 
 	repository := &memoryRepository{template: mailTemplate()}
 	repository.template.ID = 3
 	transport := &countingTransport{failure: &DeliveryError{Retryable: true, Code: "421", Err: errors.New("temporary")}, attachmentBody: "resume"}
-	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": transport})
-	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, registry, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -998,7 +980,7 @@ func TestTransientSpoolSurvivesRetryAndIsDeletedOnTerminalSuccess(t *testing.T) 
 	if strings.Contains(string(publicJSON), "mail-spool") {
 		t.Fatalf("spool key leaked: %s", publicJSON)
 	}
-	worker, err := NewWorker(5, repository, files, spool, registry, 5, nil)
+	worker, err := NewWorker(5, repository, files, spool, transport, 5, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1024,8 +1006,7 @@ func TestQueueFailureBestEffortDeletesNewTransientSpoolObjects(t *testing.T) {
 	}
 	renderer, _ := testRenderer(t, SenderPolicy{})
 	repository := &memoryRepository{template: mailTemplate(), createErr: errors.New("database unavailable")}
-	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
-	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, registry, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1048,8 +1029,7 @@ func TestTerminalDeliveryFailureDeletesTransientSpoolObjects(t *testing.T) {
 	renderer, files := testRenderer(t, SenderPolicy{})
 	repository := &memoryRepository{template: mailTemplate()}
 	transport := &countingTransport{failure: &DeliveryError{Code: "550", Err: errors.New("rejected")}}
-	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": transport})
-	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, registry, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "example.com")
 	_, err := service.QueueByCode(context.Background(), QueueInput{
 		TemplateCode: "welcome",
 		Values:       map[string]any{"email": "a@example.net"},
@@ -1064,7 +1044,7 @@ func TestTerminalDeliveryFailureDeletesTransientSpoolObjects(t *testing.T) {
 	if err := json.Unmarshal(repository.queued.Body, &envelope); err != nil {
 		t.Fatal(err)
 	}
-	worker, _ := NewWorker(5, repository, files, spool, registry, 5, nil)
+	worker, _ := NewWorker(5, repository, files, spool, transport, 5, nil)
 	if err := worker.Handle(context.Background(), envelope); err != nil || repository.message.Status != StatusFailed || len(disk.objects) != 0 {
 		t.Fatalf("terminal failure = %v, status=%s, spool objects=%d", err, repository.message.Status, len(disk.objects))
 	}
@@ -1175,8 +1155,7 @@ func TestMailRuntimeTransitionPurgesOnlyOwningSiteSpool(t *testing.T) {
 	renderer, _ := testRenderer(t, SenderPolicy{})
 	active := false
 	repository := &memoryRepository{template: mailTemplate(), active: &active}
-	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
-	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "example.com")
 	runtime := &Runtime{service: service, spool: spool, spoolCleanupBatch: 1}
 	prepared, err := runtime.PrepareRuntimeTransition(context.Background(), kernel.RuntimeTransition{Reason: kernel.RuntimeTransitionSiteDelete, ScopeID: "5", FromProfile: "mail"})
 	if err != nil {
@@ -1199,8 +1178,7 @@ func TestActiveMessageBlocksTransitionBeforeSpoolPurge(t *testing.T) {
 	renderer, _ := testRenderer(t, SenderPolicy{})
 	active := true
 	repository := &memoryRepository{template: mailTemplate(), active: &active}
-	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
-	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "example.com")
 	runtime := &Runtime{service: service, spool: spool, spoolCleanupBatch: 1}
 	if _, err := runtime.PrepareRuntimeTransition(context.Background(), kernel.RuntimeTransition{Reason: kernel.RuntimeTransitionSiteDelete, ScopeID: "5", FromProfile: "mail"}); !errors.Is(err, kernel.ErrRuntimeTransitionBlocked) {
 		t.Fatalf("active transition error = %v", err)
@@ -1263,8 +1241,7 @@ func TestServiceRejectsUnsafeMessageIDDomain(t *testing.T) {
 	t.Parallel()
 	renderer, _ := testRenderer(t, SenderPolicy{})
 	repository := &memoryRepository{template: mailTemplate()}
-	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
-	_, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, registry, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com\r\nBcc: attacker@example.com")
+	_, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "example.com\r\nBcc: attacker@example.com")
 	if err == nil {
 		t.Fatal("unsafe Message-ID domain accepted")
 	}
@@ -1272,6 +1249,10 @@ func TestServiceRejectsUnsafeMessageIDDomain(t *testing.T) {
 
 func TestNullLogAndSMTPConfiguration(t *testing.T) {
 	t.Parallel()
+	var nilCountingTransport *countingTransport
+	if err := validateTransport(nilCountingTransport); err == nil {
+		t.Fatal("typed nil transport was accepted")
+	}
 	result, err := (NullTransport{}).Send(context.Background(), Delivery{})
 	if err != nil || result.Driver != "null" {
 		t.Fatalf("null = %#v %v", result, err)

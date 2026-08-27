@@ -116,7 +116,7 @@ onBeforeUnmount(() => {
       <template #footer>
         <el-pagination
           v-model:current-page="page"
-          small
+          size="small"
           layout="prev, pager, next"
           :page-size="10"
           :total="total"

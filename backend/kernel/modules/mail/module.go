@@ -28,8 +28,6 @@ import (
 const ModuleCode kernel.ModuleCode = "mail"
 
 type Config struct {
-	DefaultTransport     TransportAlias
-	Transports           map[TransportAlias]Transport
 	Renderer             RendererConfig
 	MessageIDDomain      string
 	HistoryRetention     time.Duration
@@ -101,12 +99,12 @@ func (Module) Build(buildCtx context.Context, ctx kernel.ModuleContext) (kernel.
 	if err := validateUploadStorage(buildCtx, coreRuntime.Files(), config.UploadStorage); err != nil {
 		return nil, err
 	}
-	transports, err := NewTransportRegistry(config.Transports)
+	application, err := kernel.ModuleApplicationFrom[Application](ctx)
 	if err != nil {
 		return nil, err
 	}
-	if _, exists := transports.Transport(config.DefaultTransport); !exists {
-		return nil, fmt.Errorf("default mail transport %q is unavailable", config.DefaultTransport)
+	if err := validateTransport(application.Transport); err != nil {
+		return nil, err
 	}
 	siteIDValue, err := strconv.ParseInt(ctx.Scope().SiteID(), 10, 64)
 	if err != nil || siteIDValue <= 0 {
@@ -133,7 +131,7 @@ func (Module) Build(buildCtx context.Context, ctx kernel.ModuleContext) (kernel.
 	}
 	service, err := NewService(
 		site.ID(siteIDValue), database.Mail(), renderer, coreRuntime.Authorization(),
-		coreRuntime.Users(), transports, spool, Limits{MaxRecipients: config.MaxRecipients, MaxMessageSize: config.MaxMessageSize, MaxAttachmentSize: config.MaxAttachmentSize}, config.DefaultTransport, config.MessageIDDomain,
+		coreRuntime.Users(), spool, Limits{MaxRecipients: config.MaxRecipients, MaxMessageSize: config.MaxMessageSize, MaxAttachmentSize: config.MaxAttachmentSize}, config.MessageIDDomain,
 	)
 	if err != nil {
 		return nil, err
@@ -141,7 +139,7 @@ func (Module) Build(buildCtx context.Context, ctx kernel.ModuleContext) (kernel.
 	service.logger = ctx.Logger()
 	service.uploadStorage = config.UploadStorage
 	service.uploadPath = config.UploadPath
-	worker, err := newWorker(site.ID(siteIDValue), database.Mail(), coreRuntime.Files(), spool, transports, service.lifecycle, config.SendMaxAttempts, ctx.Logger())
+	worker, err := newWorker(site.ID(siteIDValue), database.Mail(), coreRuntime.Files(), spool, application.Transport, service.lifecycle, config.SendMaxAttempts, ctx.Logger())
 	if err != nil {
 		return nil, err
 	}
@@ -299,9 +297,6 @@ func (r *Runtime) AdminNavigation() []adminui.NavigationItem {
 }
 
 func normalizeConfig(config Config) (Config, error) {
-	if config.DefaultTransport == "" {
-		config.DefaultTransport = "default"
-	}
 	if config.HistoryRetention < 0 || config.CleanupInterval < 0 || config.CleanupBatchSize < 0 {
 		return Config{}, errors.New("mail history configuration is invalid")
 	}

@@ -467,6 +467,9 @@ func (r *Repository) QueryLibraryItems(ctx context.Context, query resource.Libra
 	if err := r.loadLibraryItemsFields(ctx, r.connector.Pool(), items); err != nil {
 		return resource.LibraryItemPage{}, err
 	}
+	if err := r.loadLibraryItemVersions(ctx, r.connector.Pool(), items); err != nil {
+		return resource.LibraryItemPage{}, err
+	}
 	if hasMore {
 		var err error
 		page.NextCursor, err = resource.EncodeLibraryCursor(query, items[len(items)-1])
@@ -938,6 +941,44 @@ func (r *Repository) loadLibraryItemsFields(ctx context.Context, queryer rowQuer
 		items[i].Fields = projected[i].Fields
 		items[i].FieldValues = projected[i].FieldValues
 		items[i].Widgets = projected[i].Widgets
+	}
+	return nil
+}
+
+func (r *Repository) loadLibraryItemVersions(ctx context.Context, queryer rowQueryer, items []resource.LibraryItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]int64, len(items))
+	byID := make(map[resource.ID]int, len(items))
+	for index := range items {
+		ids[index] = int64(items[index].ID)
+		byID[items[index].ID] = index
+	}
+	rows, err := queryer.Query(ctx, `SELECT id, version FROM core.resource_entities WHERE id = ANY($1::bigint[]);`, ids)
+	if err != nil {
+		return fmt.Errorf("query library item versions: %w", err)
+	}
+	defer rows.Close()
+	loaded := 0
+	for rows.Next() {
+		var id resource.ID
+		var version int64
+		if err := rows.Scan(&id, &version); err != nil {
+			return fmt.Errorf("scan library item version: %w", err)
+		}
+		index, exists := byID[id]
+		if !exists {
+			return fmt.Errorf("query library item versions returned unexpected resource %d", id)
+		}
+		items[index].Version = version
+		loaded++
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("query library item versions: %w", err)
+	}
+	if loaded != len(items) {
+		return fmt.Errorf("query library item versions returned %d of %d resources", loaded, len(items))
 	}
 	return nil
 }

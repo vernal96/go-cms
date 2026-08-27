@@ -49,6 +49,8 @@ describe('LibraryItemEditView', () => {
     })
     await flushPromises()
 
+    expect(wrapper.getComponent({ name: 'ElTabs' }).props('modelValue')).toBe('main')
+    expect(wrapper.findAllComponents({ name: 'ElTabPane' }).map((tab) => tab.props('label'))).toEqual(['Основное', 'Настройки'])
     const model = wrapper.findComponent({ name: 'ElForm' }).props('model') as Record<string, unknown>
     expect(model.template_code).toBe('article')
     expect(wrapper.text()).not.toContain('Родительский ресурс')
@@ -63,6 +65,36 @@ describe('LibraryItemEditView', () => {
       expect.objectContaining({ method: 'POST' }),
     )
     expect(replaceMock).toHaveBeenCalledWith('/admin/sites/7/resources/9/items/101/edit')
+  })
+
+  it('uses the same ordered conditional tabs as an ordinary resource editor', async () => {
+    routeParams.itemId = '101'
+    requestMock
+      .mockResolvedValueOnce({
+        types: [{ code: 'library', label: 'Библиотека', capabilities: { owns_library_items: true } }],
+        templates: [{
+          code: 'article', label: 'Article', supports_resource_widgets: true,
+          fields: [{ key: 'subtitle', type: 'string', label: 'Subtitle', required: false, rules: [] }],
+        }],
+        widgets: [],
+        extensions: [{ code: 'seo', title: 'SEO', applies_to: ['page'], fields: [], variables: [] }],
+      })
+      .mockResolvedValueOnce({ items: [{ id: 9, type: 'library', display_title: 'Catalog' }] })
+      .mockResolvedValueOnce({ resource: { id: 9, type_settings: {} } })
+      .mockResolvedValueOnce({
+        item: { id: 101, library_id: 9, version: 3, template_code: 'article', title: 'Item', slug: 'item', annotation: '', content: '', is_public: true, is_searchable: true, published_at: null, unpublished_at: null, fields: {}, widgets: [] },
+        permissions: { update: true, history_read: true, history_delete: true },
+      })
+    const wrapper = shallowMount(LibraryItemEditView, {
+      props: { accessToken: 'token' },
+      global: { renderStubDefaultSlot: true },
+    })
+    await flushPromises()
+
+    expect(wrapper.getComponent({ name: 'ElTabs' }).props('modelValue')).toBe('main')
+    expect(wrapper.findAllComponents({ name: 'ElTabPane' }).map((tab) => tab.props('label'))).toEqual([
+      'Основное', 'Виджеты', 'Настройки', 'Параметры полей', 'История', 'SEO',
+    ])
   })
 
   it('keeps Save and Move independent and updates ownership after Move', async () => {

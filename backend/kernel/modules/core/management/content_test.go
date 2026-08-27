@@ -203,8 +203,9 @@ func TestResourceTreeItemUsesSafeTitleAndIconFallbacks(t *testing.T) {
 		Type:      resourcetype.Page,
 		Title:     "Title",
 		MenuTitle: " Menu title ",
+		InMenu:    true,
 	}, false)
-	if page.DisplayTitle != "Menu title" || page.Icon != "document" || page.CanCreateChild {
+	if page.DisplayTitle != "Menu title" || page.Icon != "document" || page.CanCreateChild || !page.InMenu {
 		t.Fatalf("page item = %#v", page)
 	}
 	link := treeItem(nil, resource.Child{ID: 2, Type: resourcetype.Link, Title: "Link"}, true)

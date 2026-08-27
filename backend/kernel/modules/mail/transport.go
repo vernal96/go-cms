@@ -2,13 +2,21 @@ package mail
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"sort"
-	"strings"
+	"reflect"
+
+	"github.com/vernal96/go-cms/kernel"
 )
+
+// Application is Mail's application-scoped infrastructure. The same
+// Transport instance is shared by every site runtime in the App.
+type Application struct {
+	Transport Transport
+}
+
+func (Application) ModuleCode() kernel.ModuleCode { return ModuleCode }
 
 type DeliveryAttachment struct {
 	Attachment
@@ -27,27 +35,26 @@ type Transport interface {
 
 type transportValidator interface{ Validate() error }
 
-type TransportRegistry struct {
-	items map[TransportAlias]Transport
+func validateTransport(transport Transport) error {
+	if transport == nil || nilTransport(transport) {
+		return fmt.Errorf("mail transport is nil")
+	}
+	if validator, ok := transport.(transportValidator); ok {
+		if err := validator.Validate(); err != nil {
+			return fmt.Errorf("mail transport: %w", err)
+		}
+	}
+	return nil
 }
 
-func NewTransportRegistry(items map[TransportAlias]Transport) (*TransportRegistry, error) {
-	if len(items) == 0 {
-		return nil, errors.New("mail transport registry is empty")
+func nilTransport(transport Transport) bool {
+	value := reflect.ValueOf(transport)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
 	}
-	result := &TransportRegistry{items: make(map[TransportAlias]Transport, len(items))}
-	for alias, transport := range items {
-		if strings.TrimSpace(string(alias)) == "" || strings.TrimSpace(string(alias)) != string(alias) || transport == nil {
-			return nil, fmt.Errorf("mail transport alias %q is invalid", alias)
-		}
-		if validator, ok := transport.(transportValidator); ok {
-			if err := validator.Validate(); err != nil {
-				return nil, fmt.Errorf("mail transport %q: %w", alias, err)
-			}
-		}
-		result.items[alias] = transport
-	}
-	return result, nil
 }
 
 type InvalidTransport struct{ Name string }
@@ -58,23 +65,6 @@ func (t InvalidTransport) Validate() error {
 }
 func (t InvalidTransport) Send(context.Context, Delivery) (DeliveryResult, error) {
 	return DeliveryResult{}, t.Validate()
-}
-
-func (r *TransportRegistry) Transport(alias TransportAlias) (Transport, bool) {
-	if r == nil {
-		return nil, false
-	}
-	transport, exists := r.items[alias]
-	return transport, exists
-}
-
-func (r *TransportRegistry) Aliases() []TransportAlias {
-	result := make([]TransportAlias, 0, len(r.items))
-	for alias := range r.items {
-		result = append(result, alias)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
-	return result
 }
 
 type NullTransport struct{}
@@ -101,3 +91,5 @@ func (t LogTransport) Send(ctx context.Context, delivery Delivery) (DeliveryResu
 	)
 	return DeliveryResult{Driver: "log", ResponseCode: "logged"}, nil
 }
+
+var _ kernel.ModuleApplication = Application{}

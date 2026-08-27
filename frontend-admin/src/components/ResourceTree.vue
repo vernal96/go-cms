@@ -9,6 +9,7 @@ import { useRouter } from 'vue-router'
 import { adminRequest, adminRequestVoid } from '../api/admin-api'
 import { useSelectedSite } from '../composables/use-selected-site'
 import type { ResourceChildrenResponse, ResourceOption, ResourceOptionsResponse, ResourceTreeItem } from '../types/admin'
+import { resourceTreeNodeClasses } from './resource-tree-state'
 import ResourceCreateDialog from './ResourceCreateDialog.vue'
 
 const props = withDefaults(defineProps<{
@@ -67,7 +68,7 @@ function errorNode(parentId: number): TreeNodeData {
 		id: -parentId, version: 0, parent_id: parentId, template_code: null, icon: 'document',
     title: 'Не удалось загрузить дочерние ресурсы', menu_title: '',
     display_title: 'Не удалось загрузить дочерние ресурсы', sort: 0,
-    deleted: false, published: false, deleted_at: null, has_children: false, can_create_child: false,
+    in_menu: true, deleted: false, published: false, deleted_at: null, has_children: false, can_create_child: false,
     isLeaf: true, loadError: true, retryParentId: parentId,
   }
 }
@@ -371,7 +372,7 @@ watch(siteId, () => {
           <span class="resource-node-title">{{ data.display_title }}</span>
           <el-button size="small" text @click.stop="retryNode(data.retryParentId)">Повторить</el-button>
         </span>
-        <span v-else class="resource-node" :class="{ 'is-deleted': data.deleted, 'is-unpublished': !data.published && !data.deleted }">
+        <span v-else class="resource-node" :class="resourceTreeNodeClasses(data)">
           <el-icon class="resource-node-icon"><component :is="icon(data.icon)" /></el-icon>
           <span class="resource-node-title">{{ data.display_title }} ({{ data.id }})</span>
           <el-button

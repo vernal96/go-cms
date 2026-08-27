@@ -38,8 +38,14 @@ const form = reactive<WidgetSettingsValue>({
   enabled: true, params: {},
 })
 const errors = ref<DynamicFieldErrors>({})
+const activeTab = ref('')
 const unsupported = computed(() => unsupportedFieldTypes(props.definition?.fields ?? []))
 const tabs = computed(() => props.definition?.editor_tabs ?? [])
+
+function selectAvailableTab(): void {
+  const names = tabs.value.map((tab) => tab.code)
+  if (!names.includes(activeTab.value)) activeTab.value = names[0] ?? ''
+}
 
 watch(() => [props.modelValue, props.definition, props.widget] as const, ([open]) => {
   if (!open || !props.definition) return
@@ -53,7 +59,10 @@ watch(() => [props.modelValue, props.definition, props.widget] as const, ([open]
     params: createFieldValues(props.definition.fields, widget?.params ?? {}),
   })
   errors.value = {}
+  selectAvailableTab()
 })
+
+watch(() => tabs.value.map((tab) => tab.code), selectAvailableTab, { immediate: true })
 
 function fieldsForTab(codes: string[]) {
   const selected = new Set(codes)
@@ -107,7 +116,7 @@ function save(): void {
       </div>
       <el-form-item label="Включён"><el-switch v-model="form.enabled" /></el-form-item>
 
-      <el-tabs v-if="tabs.length">
+      <el-tabs v-if="tabs.length" v-model="activeTab">
         <el-tab-pane v-for="tab in tabs" :key="tab.code" :label="tab.label" :name="tab.code">
 				<dynamic-fields-form v-model="form.params" :fields="fieldsForTab(tab.fields)" :errors="errors" :site-id="siteId" :access-token="accessToken" />
         </el-tab-pane>

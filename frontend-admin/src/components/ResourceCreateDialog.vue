@@ -48,7 +48,7 @@ const localSettingsErrors = ref<DynamicFieldErrors>({})
 const metadata = ref<ResourceMetadata>({ types: [], templates: [], widgets: [], extensions: [] })
 const options = ref<ResourceOption[]>([])
 const parent = ref<ResourceTreeItem | null>(null)
-const noTemplateValue = null as unknown as string
+const noTemplateValue = '__no_template__'
 const form = reactive({
   type: 'page' as ResourceTypeCode,
   template_code: null as string | null,
@@ -67,6 +67,7 @@ const selectedTemplate = computed(
     metadata.value.templates.find((item) => item.code === form.template_code) ??
     null,
 )
+const templateSelection = computed(() => form.template_code ?? noTemplateValue)
 const selectedType = computed(() => metadata.value.types.find((item) => item.code === form.type) ?? null)
 const settingsFields = computed(() => selectedType.value?.settings_fields ?? [])
 const contentTypes = computed(() => selectedType.value?.content_types ?? [])
@@ -143,6 +144,10 @@ watch(
     localFieldErrors.value = {}
   },
 )
+
+function changeTemplate(value: string): void {
+	form.template_code = value === noTemplateValue ? null : value
+}
 
 watch(
   () => form.type,
@@ -252,7 +257,7 @@ defineExpose({ open })
         </el-select>
       </el-form-item>
       <el-form-item v-if="supportsTemplate" label="Шаблон">
-        <el-select v-model="form.template_code" class="full-width">
+        <el-select :model-value="templateSelection" class="full-width" @change="changeTemplate">
           <el-option label="(без шаблона)" :value="noTemplateValue" />
           <el-option
             v-for="item in metadata.templates"

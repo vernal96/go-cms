@@ -46,10 +46,16 @@ onMounted(() => void load())
 			<p>Всего ревизий: <strong>{{ count }}</strong></p>
 			<el-alert type="warning" :closable="false" show-icon title="История ресурсов будет удалена без возможности восстановления. Текущие ресурсы не удаляются и не изменяются." />
 			<p>Для удаления {{ count }} ревизий введите <code>DELETE</code>.</p>
-			<el-input v-model="confirmText" class="administration-confirm" placeholder="DELETE" :disabled="purging || count === 0" />
-			<el-button type="danger" :loading="purging" :disabled="confirmText !== 'DELETE' || count === 0" @click="purge">Очистить всю историю</el-button>
+			<div class="administration-purge-controls">
+				<el-input v-model="confirmText" class="administration-confirm" placeholder="DELETE" :disabled="purging || count === 0" />
+				<el-button type="danger" :loading="purging" :disabled="confirmText !== 'DELETE' || count === 0" @click="purge">Очистить всю историю</el-button>
+			</div>
 		</el-card>
 	</section>
 </template>
 
-<style scoped>.administration-confirm{max-width:20rem;margin:0 1rem 1rem 0}</style>
+<style scoped>
+.administration-purge-controls { display: grid; grid-template-columns: minmax(12rem, 20rem) max-content; align-items: center; gap: 12px; }
+.administration-confirm { width: 100%; }
+@media (max-width: 600px) { .administration-purge-controls { grid-template-columns: 1fr; } }
+</style>

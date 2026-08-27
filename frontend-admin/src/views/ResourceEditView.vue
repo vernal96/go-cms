@@ -76,7 +76,7 @@ const resourceVersion = ref(0)
 const canReadHistory = ref(false)
 const canDeleteHistory = ref(false)
 const siteDomain = ref('')
-const noTemplateValue = null as unknown as string
+const noTemplateValue = '__no_template__'
 
 const form = reactive({
   parent_id: null as number | null,
@@ -100,6 +100,7 @@ const form = reactive({
   fields: {} as Record<string, unknown>,
   type_settings: {} as Record<string, unknown>,
 })
+const templateSelection = computed(() => form.template_code ?? noTemplateValue)
 
 const resourceId = computed(() => Number(route.params.resourceId))
 const siteId = computed(() => Number(route.params.siteId))
@@ -242,7 +243,8 @@ async function changeType(value: ResourceTypeCode): Promise<void> {
 	if (activeTab.value.startsWith('extension:') || activeTab.value === 'fields') activeTab.value = 'main'
 }
 
-async function changeTemplate(value: string | null): Promise<void> {
+async function changeTemplate(selectedValue: string): Promise<void> {
+	const value = selectedValue === noTemplateValue ? null : selectedValue
   if (value === form.template_code) return
   const nextTemplate = metadata.value.templates.find((item) => item.code === value)
   if (resourceWidgets.value.length && !nextTemplate?.supports_resource_widgets) {
@@ -476,7 +478,7 @@ watch(() => [route.params.siteId, route.params.resourceId], () => void load())
             </div>
             <div class="resource-main-secondary">
               <el-form-item v-if="supportsTemplate" label="Шаблон">
-                <el-select :model-value="form.template_code" class="full-width" :disabled="!canUpdate" @change="changeTemplate">
+                <el-select :model-value="templateSelection" class="full-width" :disabled="!canUpdate" @change="changeTemplate">
                   <el-option label="(без шаблона)" :value="noTemplateValue" />
                   <el-option v-for="item in metadata.templates" :key="item.code" :label="item.label" :value="item.code" />
                 </el-select>

@@ -43,6 +43,14 @@ type Module interface {
 	Build(context.Context, ModuleContext) (ModuleRuntime, error)
 }
 
+// ModuleApplication is an application-scoped dependency owned by exactly one
+// module. A module runtime receives only the dependency registered for its own
+// module code, so this does not expose an unrestricted application service
+// locator.
+type ModuleApplication interface {
+	ModuleCode() ModuleCode
+}
+
 type ModuleDescriptor struct {
 	Label       string
 	Description string
@@ -428,6 +436,7 @@ func isNilValue(value any) bool {
 type ModuleContext struct {
 	resolver     DatabaseResolver
 	moduleCode   ModuleCode
+	application  ModuleApplication
 	profile      Profile
 	registry     DefinitionRegistry
 	config       any
@@ -442,6 +451,7 @@ type ModuleContext struct {
 func newModuleContext(
 	resolver DatabaseResolver,
 	moduleCode ModuleCode,
+	application ModuleApplication,
 	profile Profile,
 	registry DefinitionRegistry,
 	config any,
@@ -454,6 +464,7 @@ func newModuleContext(
 	return ModuleContext{
 		resolver:     resolver,
 		moduleCode:   moduleCode,
+		application:  application,
 		profile:      cloneProfile(profile),
 		registry:     registry,
 		config:       config,
@@ -468,6 +479,23 @@ func newModuleContext(
 
 func (c ModuleContext) ModuleCode() ModuleCode {
 	return c.moduleCode
+}
+
+func ModuleApplicationFrom[T ModuleApplication](ctx ModuleContext) (T, error) {
+	var zero T
+	if ctx.application == nil || isNilValue(ctx.application) {
+		return zero, fmt.Errorf("module %q application dependency is unavailable", ctx.ModuleCode())
+	}
+	application, ok := ctx.application.(T)
+	if !ok || isNilValue(application) {
+		return zero, fmt.Errorf(
+			"module %q application dependency has invalid type %T, expected %T",
+			ctx.ModuleCode(),
+			ctx.application,
+			zero,
+		)
+	}
+	return application, nil
 }
 
 func (c ModuleContext) Profile() Profile {
@@ -699,15 +727,17 @@ func (r *ProfileRuntime) Widgets() []widget.Definition {
 }
 
 type ProfileRuntimeFactory struct {
-	resolver DatabaseResolver
-	services RuntimeServices
+	resolver     DatabaseResolver
+	services     RuntimeServices
+	applications map[ModuleCode]ModuleApplication
 }
 
 type RuntimeServices struct {
-	Caches      cache.Resolver
-	Filesystems filesystem.Resolver
-	EventBus    eventbus.Bus
-	Logger      *slog.Logger
+	Caches             cache.Resolver
+	Filesystems        filesystem.Resolver
+	EventBus           eventbus.Bus
+	Logger             *slog.Logger
+	ModuleApplications []ModuleApplication
 }
 
 func ModuleDependencyFrom[T ModuleRuntime](
@@ -749,9 +779,25 @@ func NewProfileRuntimeFactory(
 	if services.EventBus == nil || isNilValue(services.EventBus) {
 		return nil, errors.New("runtime event bus is nil")
 	}
+	applications := make(map[ModuleCode]ModuleApplication, len(services.ModuleApplications))
+	for index, application := range services.ModuleApplications {
+		if application == nil || isNilValue(application) {
+			return nil, fmt.Errorf("module application at index %d is nil", index)
+		}
+		moduleCode := application.ModuleCode()
+		if moduleCode == "" {
+			return nil, fmt.Errorf("module application at index %d has empty module code", index)
+		}
+		if _, exists := applications[moduleCode]; exists {
+			return nil, fmt.Errorf("module application %q is defined more than once", moduleCode)
+		}
+		applications[moduleCode] = application
+	}
+	services.ModuleApplications = append([]ModuleApplication(nil), services.ModuleApplications...)
 	return &ProfileRuntimeFactory{
-		resolver: resolver,
-		services: services,
+		resolver:     resolver,
+		services:     services,
+		applications: applications,
 	}, nil
 }
 
@@ -965,15 +1011,17 @@ func (b *ProfileBlueprint) Build(
 		moduleContext := newModuleContext(
 			b.factory.resolver,
 			module.Code(),
+			b.factory.applications[module.Code()],
 			profile,
 			registry,
 			profileModule.Config,
 			scope,
 			RuntimeServices{
-				Caches:      b.factory.services.Caches,
-				Filesystems: b.factory.services.Filesystems,
-				EventBus:    b.factory.services.EventBus,
-				Logger:      logger,
+				Caches:             b.factory.services.Caches,
+				Filesystems:        b.factory.services.Filesystems,
+				EventBus:           b.factory.services.EventBus,
+				Logger:             logger,
+				ModuleApplications: b.factory.services.ModuleApplications,
 			},
 			dependencies,
 			moduleCaches,
