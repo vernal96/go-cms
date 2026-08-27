@@ -153,17 +153,28 @@ HTML preview in admin uses a sandboxed iframe or equivalent isolation, never unr
 
 ## Preview/send consistency
 
-A user must not preview one template version and silently send another.
+A user must not preview one rendered message and silently send a different one.
 
-Preview returns at least `template_version` with the rendered result.
+Template version is necessary but not sufficient because rendering can also depend on backend-authoritative `site.*` values and resolved static/site attachment metadata.
 
-Manual send submits `expected_template_version` together with template identity and raw typed values.
+Preview returns at least:
 
-Backend re-loads the authoritative template, checks expected version, re-validates and re-renders. A stale version returns the established conflict error / HTTP 409 and the UI requires a fresh preview.
+```text
+template_version
+preview_fingerprint
+```
 
-Do not trust rendered recipients/body posted back from the frontend.
+`preview_fingerprint` is a backend-generated deterministic hash/fingerprint of the semantically rendered preview state required to detect changes in final From/To/CC/BCC/Reply-To/Subject/body and attachment snapshot metadata/checksums. It must not be based on frontend-trusted rendered data.
 
-The immutable queued message stores historical template version along with ID/code/name.
+Manual Send submits template identity, raw typed values, `expected_template_version` and `expected_preview_fingerprint`.
+
+Backend re-loads current template/site/runtime/file dependencies, checks template version, re-validates and re-renders from authoritative inputs, computes the current fingerprint and compares it with the expected preview fingerprint. A mismatch returns the established conflict error / HTTP 409 and the UI requires a fresh Preview.
+
+This catches not only template edits, but also relevant site setting changes or resolved attachment metadata/content checksum changes between Preview and Send.
+
+Do not trust rendered recipients/body/fingerprint source material posted back from the frontend. The client may only return the opaque server-produced fingerprint.
+
+The immutable queued message stores historical template version and the final rendered snapshot. The preview fingerprint itself may be stored for diagnostics but is not a security credential.
 
 ## Immutable rendered message
 
@@ -415,7 +426,7 @@ The admin UI provides:
 - warnings for missing optional values;
 - validation errors for missing required values;
 - final Send enabled only for a current successful preview;
-- 409 stale-template handling requiring new preview;
+- 409 stale-template/site/dependency handling requiring new preview;
 - history/message list;
 - message detail/status/attempts.
 
@@ -490,6 +501,7 @@ Add focused tests for at least:
 - HTML escaping and header injection rejection;
 - final address/no-recipient validation;
 - template version increments and stale preview/send -> conflict;
+- site/attachment dependency change after Preview -> fingerprint conflict;
 - static attachment requires editor file permission at template save;
 - a send-only actor may send an already-approved static attachment without global file-read permission;
 - manual file variable cannot bypass current actor file permission by posting an arbitrary ID;
