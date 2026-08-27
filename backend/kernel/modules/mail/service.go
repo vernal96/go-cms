@@ -127,10 +127,7 @@ func (s *Service) CreateTemplate(ctx context.Context, actor security.Actor, temp
 	if template.Transport == "" {
 		template.Transport = s.defaultTransport
 	}
-	if _, exists := s.transports.Transport(template.Transport); !exists {
-		return Template{}, fmt.Errorf("%w: transport alias %q is unavailable", ErrInvalid, template.Transport)
-	}
-	if err := s.renderer.ValidateTemplate(template); err != nil {
+	if err := s.validateTemplateRuntime(template); err != nil {
 		return Template{}, err
 	}
 	if err := s.renderer.ValidateTemplateFiles(ctx, actor, template); err != nil {
@@ -151,10 +148,7 @@ func (s *Service) UpdateTemplate(ctx context.Context, actor security.Actor, temp
 	if template.Transport == "" {
 		template.Transport = s.defaultTransport
 	}
-	if _, exists := s.transports.Transport(template.Transport); !exists {
-		return Template{}, fmt.Errorf("%w: transport alias %q is unavailable", ErrInvalid, template.Transport)
-	}
-	if err := s.renderer.ValidateTemplate(template); err != nil {
+	if err := s.validateTemplateRuntime(template); err != nil {
 		return Template{}, err
 	}
 	if err := s.renderer.ValidateTemplateFiles(ctx, actor, template); err != nil {
@@ -183,7 +177,7 @@ func (s *Service) SetTemplateEnabled(ctx context.Context, actor security.Actor, 
 		if err != nil {
 			return Template{}, err
 		}
-		if err := s.renderer.ValidateTemplate(template); err != nil {
+		if err := s.validateTemplateRuntime(template); err != nil {
 			return Template{}, err
 		}
 	}
@@ -200,6 +194,9 @@ func (s *Service) Preview(ctx context.Context, actor security.Actor, templateID 
 	}
 	if !template.Enabled {
 		return RenderedMessage{}, ErrTemplateDisabled
+	}
+	if err := s.validateTemplateRuntime(template); err != nil {
+		return RenderedMessage{}, err
 	}
 	rendered, err := s.renderer.Render(ctx, template, values, actor)
 	if err != nil {
@@ -278,6 +275,9 @@ func (s *Service) queueActive(ctx context.Context, template Template, values map
 	if !template.Enabled {
 		return Message{}, ErrTemplateDisabled
 	}
+	if err := s.validateTemplateRuntime(template); err != nil {
+		return Message{}, err
+	}
 	rendered, err := s.renderer.Render(ctx, template, values, renderActor)
 	if err != nil {
 		return Message{}, err
@@ -326,17 +326,10 @@ func (s *Service) queueActive(ctx context.Context, template Template, values map
 		return Message{}, fmt.Errorf("create mail message identity: %w", err)
 	}
 	templateID := template.ID
-	transport := template.Transport
-	if transport == "" {
-		transport = s.defaultTransport
-	}
-	if _, exists := s.transports.Transport(transport); !exists {
-		return Message{}, fmt.Errorf("%w: %s", ErrTransportNotFound, transport)
-	}
 	now := time.Now().UTC()
 	message := Message{
 		SiteID: s.siteID, TemplateID: &templateID, TemplateCode: template.Code, TemplateName: template.Name,
-		Transport: transport, RFCMessageID: fmt.Sprintf("<%s@%s>", id, s.messageIDDomain),
+		Transport: template.Transport, RFCMessageID: fmt.Sprintf("<%s@%s>", id, s.messageIDDomain),
 		From: rendered.From, To: rendered.To, CC: rendered.CC, BCC: rendered.BCC, ReplyTo: rendered.ReplyTo,
 		Subject: rendered.Subject, ContentType: rendered.ContentType, TextBody: rendered.TextBody, HTMLBody: rendered.HTMLBody,
 		Attachments: rendered.Attachments, Status: StatusQueued, Origin: origin.Kind, OriginSource: strings.TrimSpace(origin.Source), OriginEvent: strings.TrimSpace(origin.Event), OriginReference: strings.TrimSpace(origin.Reference),
@@ -365,6 +358,16 @@ func (s *Service) queueActive(ctx context.Context, template Template, values map
 		s.logger.InfoContext(ctx, "mail message queued", slog.String("event", "mail.message.queued"), slog.Int64("message_id", int64(queued.ID)), slog.Int64("site_id", int64(queued.SiteID)), slog.String("template_code", queued.TemplateCode), slog.String("origin", string(queued.Origin)), slog.Int("recipient_count", len(queued.To)+len(queued.CC)+len(queued.BCC)), slog.Int("attachment_count", len(queued.Attachments)))
 	}
 	return queued, nil
+}
+
+func (s *Service) validateTemplateRuntime(template Template) error {
+	if err := s.renderer.ValidateTemplate(template); err != nil {
+		return err
+	}
+	if _, exists := s.transports.Transport(template.Transport); !exists {
+		return fmt.Errorf("%w: transport alias %q is unavailable", ErrTransportNotFound, template.Transport)
+	}
+	return nil
 }
 
 func (s *Service) validateMessageSize(rendered RenderedMessage) error {

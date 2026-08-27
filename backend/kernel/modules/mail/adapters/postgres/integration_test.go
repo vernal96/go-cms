@@ -122,16 +122,22 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if active, err := repository.HasActiveMessages(ctx, siteIDs[0]); err != nil || !active {
-		t.Fatalf("queued message active = %t, %v", active, err)
+	if active, err := repository.HasActiveMessages(ctx, siteIDs[0]); err != nil || active {
+		t.Fatalf("Site A active before queue = %t, %v", active, err)
 	}
 	if active, err := repository.HasActiveMessages(ctx, siteIDs[1]); err != nil || active {
-		t.Fatalf("site-scoped active query leaked = %t, %v", active, err)
+		t.Fatalf("Site B active before queue = %t, %v", active, err)
 	}
 	body, _ := json.Marshal(queuedJob)
 	stored, err := repository.CreateMessageAndJob(ctx, message, eventbus.Message{Topic: job.Topic(mail.SendJobName), Key: []byte(queuedJob.ID), Body: body})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if active, err := repository.HasActiveMessages(ctx, siteIDs[0]); err != nil || !active {
+		t.Fatalf("Site A active after queued message = %t, %v", active, err)
+	}
+	if active, err := repository.HasActiveMessages(ctx, siteIDs[1]); err != nil || active {
+		t.Fatalf("Site B active after Site A queued message = %t, %v", active, err)
 	}
 	var outboxCount int
 	if err := connector.Pool().QueryRow(ctx, `SELECT count(*) FROM core.outbox_messages WHERE message_id=$1;`, queuedJob.ID).Scan(&outboxCount); err != nil || outboxCount != 1 {
@@ -145,8 +151,14 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 	if err != nil || !ok || claimed.ID != stored.ID {
 		t.Fatalf("first claim = %#v %#v %t %v", claimed, firstAttempt, ok, err)
 	}
+	if active, err := repository.HasActiveMessages(ctx, siteIDs[0]); err != nil || !active {
+		t.Fatalf("sending message active = %t, %v", active, err)
+	}
 	if err := repository.FinishAttempt(ctx, stored.ID, firstAttempt.AttemptNumber, mail.DeliveryResult{Driver: "smtp"}, &mail.DeliveryError{Retryable: true, Code: "temporary", Err: errors.New("temporary")}, false); err != nil {
 		t.Fatal(err)
+	}
+	if active, err := repository.HasActiveMessages(ctx, siteIDs[0]); err != nil || !active {
+		t.Fatalf("retryable message active = %t, %v", active, err)
 	}
 	_, secondAttempt, ok, err := repository.ClaimMessage(ctx, siteIDs[0], stored.ID, 5)
 	if err != nil || !ok || secondAttempt.AttemptNumber != 2 {
@@ -176,8 +188,11 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("other-site claim = %#v %t %v", otherAttempt, ok, err)
 	}
-	if err := repository.FinishAttempt(ctx, otherStored.ID, otherAttempt.AttemptNumber, mail.DeliveryResult{Driver: "smtp"}, nil, true); err != nil {
+	if err := repository.FinishAttempt(ctx, otherStored.ID, otherAttempt.AttemptNumber, mail.DeliveryResult{Driver: "smtp"}, &mail.DeliveryError{Code: "550", Err: errors.New("rejected")}, true); err != nil {
 		t.Fatal(err)
+	}
+	if active, err := repository.HasActiveMessages(ctx, siteIDs[1]); err != nil || active {
+		t.Fatalf("terminal failed message active = %t, %v", active, err)
 	}
 	page, err := repository.ListMessages(ctx, siteIDs[0], mail.MessageQuery{PageQuery: mail.PageQuery{Page: 1, PerPage: 20}})
 	if err != nil || len(page.Items) != 1 || page.Items[0].AttemptCount != 2 || page.Items[0].LatestAttempt == nil || page.Items[0].LatestAttempt.Status != mail.AttemptAccepted {

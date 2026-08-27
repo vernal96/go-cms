@@ -464,6 +464,75 @@ func TestRendererRejectsTemplateOwnedByAnotherSite(t *testing.T) {
 	}
 }
 
+func TestTemplateUsabilityUsesCurrentRuntimeTransport(t *testing.T) {
+	t.Parallel()
+	renderer, _ := testRenderer(t, SenderPolicy{})
+	template := mailTemplate()
+	template.ID = 3
+	template.Enabled = false
+	template.Transport = "transactional"
+	repository := &memoryRepository{template: template}
+	limits := Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}
+
+	oldTransports, _ := NewTransportRegistry(map[TransportAlias]Transport{"transactional": NullTransport{}})
+	oldService, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, oldTransports, nil, limits, "transactional", "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item, err := oldService.SetTemplateEnabled(context.Background(), security.User(9), 3, true); err != nil || !item.Enabled {
+		t.Fatalf("enable under old transport registry = %#v, %v", item, err)
+	}
+	if _, err := oldService.SetTemplateEnabled(context.Background(), security.User(9), 3, false); err != nil {
+		t.Fatalf("disable before runtime change = %v", err)
+	}
+
+	currentTransports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
+	currentService, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, currentTransports, nil, limits, "default", "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := currentService.CreateTemplate(context.Background(), security.User(9), template); !errors.Is(err, ErrTransportNotFound) {
+		t.Fatalf("create with unavailable current transport = %v", err)
+	}
+	if _, err := currentService.UpdateTemplate(context.Background(), security.User(9), template); !errors.Is(err, ErrTransportNotFound) {
+		t.Fatalf("update with unavailable current transport = %v", err)
+	}
+	if _, err := currentService.SetTemplateEnabled(context.Background(), security.User(9), 3, true); !errors.Is(err, ErrTransportNotFound) || repository.template.Enabled {
+		t.Fatalf("enable with unavailable current transport = %v, enabled=%t", err, repository.template.Enabled)
+	}
+
+	values := map[string]any{"name": "Alice", "email": "a@example.net", "count": float64(2)}
+	repository.template.Enabled = true
+	if _, err := currentService.Preview(context.Background(), security.User(9), 3, values); !errors.Is(err, ErrTransportNotFound) {
+		t.Fatalf("preview with unavailable current transport = %v", err)
+	}
+	if _, err := currentService.QueueManual(context.Background(), security.User(9), ManualSendInput{TemplateID: 3, Values: values}); !errors.Is(err, ErrTransportNotFound) {
+		t.Fatalf("manual queue with unavailable current transport = %v", err)
+	}
+	if _, err := currentService.QueueByCode(context.Background(), QueueInput{TemplateCode: "welcome", Values: values}); !errors.Is(err, ErrTransportNotFound) {
+		t.Fatalf("automatic queue with unavailable current transport = %v", err)
+	}
+	if repository.message.ID != 0 {
+		t.Fatalf("message persisted with unavailable current transport: %#v", repository.message)
+	}
+
+	updated := repository.template
+	updated.Enabled = false
+	updated.Transport = "default"
+	if _, err := currentService.UpdateTemplate(context.Background(), security.User(9), updated); err != nil {
+		t.Fatalf("update to current transport = %v", err)
+	}
+	if item, err := currentService.SetTemplateEnabled(context.Background(), security.User(9), 3, true); err != nil || !item.Enabled {
+		t.Fatalf("enable with current transport = %#v, %v", item, err)
+	}
+	if _, err := currentService.Preview(context.Background(), security.User(9), 3, values); err != nil {
+		t.Fatalf("preview with current transport = %v", err)
+	}
+	if _, err := currentService.QueueManual(context.Background(), security.User(9), ManualSendInput{TemplateID: 3, Values: values}); err != nil {
+		t.Fatalf("manual queue with current transport = %v", err)
+	}
+}
+
 func TestTemplateEnableValidatesCurrentRuntimeWithoutReauthorizingStaticFile(t *testing.T) {
 	t.Parallel()
 	renderer, files := testRenderer(t, SenderPolicy{})

@@ -435,6 +435,8 @@ Reuse current file picker/upload UI for persistent manual/static files; backend 
 
 Prefer enabled/disabled for integration templates. Avoid casually deleting stable codes referenced by other modules. Historical Message snapshots remain independent of template existence.
 
+A persisted Site-owned MailTemplate is reusable across Profile changes, but Enable, Preview and Send must validate it against the current Mail SiteRuntime, including the currently available transport aliases and Site variable catalog.
+
 ## Permissions
 
 Use current module/entity/action conventions plus site-scoped checks.
