@@ -31,6 +31,16 @@ admin write       -> uncached repository
 
 Centralize invalidation/update near the persistence/cache boundary or a domain cache policy. Site namespaces must remain invalidatable by global/admin mutations. Prefer a regression test that performs `cached read -> real write -> cached read` and observes fresh data.
 
+## Events, outbox and background work
+
+- Keep primary business writes synchronous. Domain events describe facts that already committed; jobs describe asynchronous work to perform.
+- When a committed DB mutation must reliably produce an external event, persist its outbox message in the **same physical database transaction** as that mutation. Never rely on `commit -> EventBus.Publish` as a reliable boundary and never publish externally before the DB transaction commits.
+- Treat EventBus delivery as at-least-once. Consumers and job handlers that cause side effects must be idempotent or deduplicate by stable message/job identity; do not claim cross-system exactly-once semantics.
+- Background publishers/workers are application-scoped lifecycle components. Start them only after their dependencies are ready and stop/cancel them before closing the EventBus/databases. Never retain request contexts in worker state.
+- Keep broker technology at the connector edge. Domain/module code may define semantic events/jobs but must not import Kafka/RabbitMQ/PostgreSQL transport types for convenience.
+
+For event/job/outbox work, load `go-cms-events-jobs` and follow its transactional, retry, retention and scope rules.
+
 ## Cross-cutting tests
 
 For runtime/cache architecture changes, prefer focused behavioral tests for the invariant being changed, such as:
