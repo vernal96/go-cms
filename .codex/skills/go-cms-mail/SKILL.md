@@ -5,11 +5,11 @@ description: Use for GO CMS mail templates, rendered messages, SMTP/null/log tra
 
 # GO CMS Mail
 
-Follow root `AGENTS.md`, `backend/AGENTS.md`, `go-cms-templating` for interpolation and `go-cms-events-jobs` for asynchronous delivery semantics.
+Follow root `AGENTS.md`, `backend/AGENTS.md`, `go-cms-templating` for interpolation, `go-cms-events-jobs` for asynchronous delivery semantics, `go-cms-authorization` for protected operations and `go-cms-api` for management HTTP integration.
 
 ## Module boundary
 
-Mail is a feature module, not core infrastructure and not an SMTP wrapper embedded in `App`.
+Mail is an optional feature module, not core infrastructure and not an SMTP wrapper embedded in `kernel/app`.
 
 Mail owns:
 
@@ -24,41 +24,59 @@ Mail owns:
 
 Mail must not own the generic templating language. Use `kernel/templating`.
 
-SMTP/provider-specific code stays in adapters/connectors at the infrastructure edge.
+Generic `kernel/app` must not import `modules/mail`, keep `*mail.Management`, expose `MailManagement()` or acquire one feature-specific field/method per optional module. Wire management HTTP through the generic optional-feature contribution/composition mechanism described by `go-cms-api`.
+
+SMTP/provider-specific code stays at the infrastructure edge.
 
 ## Site scope
 
-Mail templates and normal mail history are site-scoped unless the current architecture establishes an explicit global use case.
+Mail templates and normal mail history are site-scoped unless an explicit global use case is introduced.
 
 Use the existing SiteRuntime/module wiring and site-scoped authorization patterns. Do not create a mutable global active mail site/config.
 
-## Template identity
+## Template identity and version
 
-Mail templates need both persistence identity and stable semantic code.
+Mail templates need persistence identity, stable semantic code and a monotonic version.
 
 Conceptually:
 
 ```text
-ID   -> database/admin identity
-Code -> integration identity, e.g. feedback_notification
-Name -> human label
+ID      -> database/admin identity
+Code    -> integration identity, e.g. feedback_notification
+Name    -> human label
+Version -> optimistic consistency identity
 ```
 
-Other modules should reference stable template codes rather than database IDs.
+Other modules reference stable template codes rather than database IDs.
 
-Template codes are unique in their intended scope and validated using the project's normal code conventions.
+Template codes are unique in their intended scope and validated using project conventions.
+
+Increment `Template.Version` for every successful semantic template update. Do not reset or silently reuse versions.
 
 ## Template variable schema
 
-Reuse the existing core field-definition system for declared user/input variables where possible instead of inventing a second form-schema/type system.
+Reuse the existing core `field.Definition`/field type system instead of inventing another dynamic-form schema.
 
-Mail template variables normally become `data.<key>` placeholders.
+Mail variables become `data.<key>` placeholders.
 
-For manual sending, declared variables are optional by Mail product semantics even if a generic field definition normally has required semantics. Missing values render as empty strings / empty references and produce preview warnings rather than blocking solely because they were omitted.
+A variable may be either required or optional. Preserve the template author's `Required` choice.
+
+Required variable:
+
+- missing or empty at preview/send -> validation error;
+- do not render it as an empty string.
+
+Optional variable:
+
+- missing/empty -> empty scalar output or absent semantic reference;
+- preview returns a structured missing-value warning;
+- omission alone does not block send.
 
 If a non-empty value is provided, normalize/validate it through the established field type/rules.
 
-Keep semantic types intact long enough to resolve attachments/files correctly; do not eagerly convert every input into a string before the Mail renderer uses it.
+Keep semantic types intact long enough to resolve files/attachments correctly; do not eagerly stringify all inputs.
+
+Do not globally alter core field semantics to implement Mail behavior.
 
 ## Template fields
 
@@ -71,15 +89,19 @@ A mail template should support at least:
 - Reply-To;
 - Subject;
 - content mode (`text` or `html`);
-- text or HTML body according to the selected mode;
+- text or HTML body according to mode;
 - static/variable attachments;
 - declared variables;
 - enabled/disabled state;
-- stable code/name.
+- stable code/name/version.
 
 Every string-capable field may use generic placeholders where appropriate.
 
-Do not store all recipients as one unparsed comma-separated string. Keep address templates structurally separable into name/address entries so rendered addresses can be validated safely.
+Do not store recipients as one opaque comma-separated string. Keep address templates structurally separated into name/address entries.
+
+Do not introduce default From name/address fallback configuration. The template/configured scenario must render a valid non-empty From address; otherwise preview/send fails validation. Required variable placeholders used by From obey the normal required-variable rule.
+
+The rendered From may be used as the SMTP envelope sender under the configured sender allowlist/policy. Do not invent a second default envelope sender merely to make an incomplete template sendable.
 
 ## Rendering and preview
 
@@ -89,234 +111,309 @@ Use context-aware templating:
 
 - body text -> plain text;
 - HTML body -> HTML context with dynamic values escaped by default;
-- Subject/address display names/address fields/Reply-To -> header-safe context with CR/LF injection protection.
+- Subject/address display names/address fields/Reply-To -> header-safe context with CR/LF/control injection protection.
 
-After rendering, validate final email addresses with the appropriate standard parser/validation. Empty rendered recipient entries may be skipped; at least one final recipient must remain.
+After rendering, validate final email addresses. Empty optional recipient entries may be skipped; at least one final recipient must remain.
 
-Preview must use the exact same rendering pipeline used to build the queued rendered message.
+Preview and queue must use the same authoritative backend renderer.
 
-HTML preview in the admin frontend should use a sandboxed iframe or equivalently isolated rendering rather than injecting arbitrary message HTML into the CMS application's own DOM.
+HTML preview in admin uses a sandboxed iframe or equivalent isolation, never unrestricted template HTML injected into the CMS DOM.
+
+## Preview/send consistency
+
+A user must not preview one template version and silently send another.
+
+Preview returns at least `template_version` with the rendered result.
+
+Manual send submits `expected_template_version` together with template identity and raw typed values.
+
+Backend re-loads the authoritative template, checks expected version, re-validates and re-renders. A stale version returns the established conflict error / HTTP 409 and the UI requires a fresh preview.
+
+Do not trust rendered recipients/body posted back from the frontend.
+
+The immutable queued message stores historical template version along with ID/code/name.
 
 ## Immutable rendered message
 
 Do not enqueue `template_id + variables` and re-render later in the worker.
 
-When a send is requested:
-
 ```text
-template + typed input values
+template + typed values
         -> validate/render/resolve
-        -> immutable RenderedMessage snapshot
-        -> persist message status=queued
-        -> enqueue mail.send(message_id)
+        -> immutable rendered Message snapshot
+        -> persist status=queued
+        -> durable mail.send(message_id)
 ```
 
-This guarantees that the worker sends exactly what the user previewed / what the business operation prepared, even if the template changes afterwards.
+Template edits after queueing never modify an already queued message.
 
-Persist historical template identity metadata (at least template ID if applicable, code and human name) on the message snapshot so history remains understandable after template edits/disablement.
+Persist enough historical template/origin metadata to understand old messages after template changes/deletion.
 
 ## Jobs and outbox
 
-Mail delivery is background work.
+Mail delivery is background work and uses the existing job/outbox implementation.
 
-Use the existing job abstraction. The concrete job payload should be small and stable, normally only the persisted `message_id` plus schema metadata already supplied by the job envelope.
+The job payload is small and stable, normally only persisted `message_id` plus generic envelope metadata.
 
-Creation of a queued rendered message and durable enqueue/outbox state must obey the current Jobs/Outbox reliability architecture. Do not use an HTTP request context as worker lifetime context.
+Persisting the queued rendered Message and durable outbox job must be atomic.
 
-A mail send job handler:
+The mail job handler:
 
-1. loads the immutable queued message;
-2. safely claims it / rejects terminal duplicates;
+1. loads the immutable message;
+2. atomically claims it / rejects terminal duplicates;
 3. records a delivery attempt;
-4. resolves/open attachments required for this attempt;
-5. sends through the selected logical transport alias;
-6. records provider/SMTP result;
-7. updates terminal/non-terminal message state according to retry policy;
+4. resolves/opens already-authorized attachments;
+5. sends through the selected logical transport;
+6. records transport result;
+7. applies retry/terminal policy;
 8. remains safe under at-least-once job delivery.
 
-Do not claim cross-system exactly-once SMTP semantics. A crash after remote SMTP acceptance but before local success persistence can cause a retry. Use a stable RFC Message-ID and local claim/idempotency controls to minimize duplicate side effects and document the residual boundary.
+Do not hold a database transaction open across SMTP network I/O.
+
+Do not claim cross-system exactly-once SMTP semantics. A crash after remote SMTP acceptance but before local persistence can cause retry. Use stable RFC Message-ID plus local claim/lease/idempotency controls and document the residual boundary.
+
+## Retry and terminal failure
+
+Retry behavior is explicit and bounded.
+
+Configure a positive maximum attempts value such as `MAIL_SEND_MAX_ATTEMPTS`.
+
+Classify transport failures where practical:
+
+- network/timeout/transient transport failures -> retryable;
+- SMTP 4xx -> retryable;
+- clear SMTP 5xx permanent rejection -> terminal;
+- missing/deleted immutable attachment reference -> terminal unless the concrete error is demonstrably transient;
+- unknown transport alias/configuration error -> terminal;
+- reaching max attempts -> terminal.
+
+For retryable failure below max attempts:
+
+- persist failed attempt and retryable message state/metadata;
+- return the correct error so existing job/event-bus redelivery handles retry.
+
+For terminal failure:
+
+- persist terminal failed state/metadata;
+- acknowledge/return success according to current runner semantics so the broker does not retry forever.
+
+Do not make every `failed` Message automatically claimable forever.
 
 ## Message status vs delivery attempts
 
-Separate business message state from technical attempts.
+Separate message lifecycle from technical attempts.
 
-Message states should represent the useful lifecycle, e.g.:
+Useful message states/metadata represent:
 
 ```text
 queued
 sending
-sent/accepted
-failed
+accepted
+failed (retryable or terminal explicitly distinguishable)
 ```
 
-Name/display the SMTP terminal success accurately: SMTP acceptance means the remote server accepted the message; it does not prove final recipient delivery/read.
+SMTP acceptance means remote SMTP accepted the message; it does not prove mailbox delivery/read.
 
-Store delivery attempts separately with useful diagnostics such as:
+Delivery attempts store useful safe diagnostics:
 
 - attempt number;
-- transport alias/driver metadata safe to expose;
+- logical transport/driver;
 - started/finished timestamps;
 - result/status;
-- SMTP/provider response code/message ID when available;
+- SMTP/provider response code/message ID where available;
 - safe error text;
-- next retry / terminal information when the current job system exposes it.
+- retryable/terminal information where useful.
 
-Never persist SMTP passwords/tokens in history.
+Never persist SMTP credentials/tokens in history.
 
 ## Transport abstraction
 
 Mail feature code depends on a transport contract, not SMTP directly.
 
-Use logical transport aliases/purpose names so templates can select a logical route (e.g. `default`, `transactional`) while project configuration maps those aliases to concrete adapters/drivers.
+Use logical transport aliases so templates select a route such as `default` while project config maps it to concrete drivers.
 
-Initial useful drivers:
+Initial drivers may include SMTP, null and log.
 
-- SMTP for real delivery;
-- null for discard/testing;
-- log for development diagnostics if it can be implemented without leaking sensitive content by default.
+Credentials/host/TLS/auth belong to env/config/secrets, never database templates.
 
-Credentials and physical SMTP host/TLS/auth settings belong to project env/config/secrets, not database templates.
-
-Support explicit timeouts and secure TLS behavior. Do not silently fall back to insecure SMTP.
+Support explicit timeout and secure TLS behavior. Do not silently downgrade required TLS.
 
 ## Sender policy
 
-Template From headers may be templated, but the transport/project policy remains authoritative over allowed envelope sender/from domains.
+Rendered From is controlled by project/transport sender policy.
 
-Prevent templates/user data from turning the CMS into an unrestricted sender/spoofing relay.
+Prevent templates/user data from turning the CMS into an unrestricted spoofing relay.
 
-Header values must reject CR/LF injection.
+Header values reject CR/LF/control injection.
 
-## Attachments
+No default From fallback is required: an invalid/empty required sender is a validation error.
 
-Reuse the existing filesystem/file picker and upload machinery instead of creating a second upload subsystem.
+## Attachment authorization: static vs variable
 
-Attachment template source modes should support at least:
+This distinction is a security invariant.
 
-```text
-static   -> a selected file reference
-variable -> a declared compatible file variable
-```
+### Static template attachment
 
-Only variables with a compatible semantic field type may be selectable for file attachments.
+A static attachment is trusted template configuration.
 
-Keep file references typed until send-time resolution. Generic templating must not open files.
+When a user creates/updates a template and selects a static file, validate that file using the editing actor's normal file authorization and file constraints at template-write time.
 
-Snapshot enough attachment metadata onto the rendered message/history to explain what was sent (filename, MIME, size, source/reference metadata as appropriate), but do not duplicate large binary bodies into PostgreSQL merely for mail history.
+After the template is validly saved, a different user who has Mail send permission but not generic `core.file.read` may send that template. They are using already-approved template configuration; they are not choosing an arbitrary file.
 
-The send worker may resolve/read the current referenced file when sending. If product requirements later demand immutable binary preservation after source-file deletion, solve that explicitly with a retention/copy policy rather than accidentally storing MIME blobs in the message table.
+The send worker may later open that persisted static attachment with trusted/system delivery access because authorization was established when the template configuration was saved and the immutable Message was queued.
 
-Inline/CID attachments are out of first scope unless explicitly requested.
+Do not require every send-only operator to inherit global file-read permission merely because the template has a static attachment.
+
+### Manual file variable
+
+A file variable supplied during manual preview/send is untrusted actor input.
+
+Validate the selected file ID using the current manual actor's file authorization and declared field constraints. A user with `mail.message.create` but without permission to read the referenced file must not be able to exfiltrate it by posting its numeric ID directly to Mail API.
+
+Never resolve manual file-variable values with `security.System()` before authorization.
+
+### Automatic/system file variable
+
+A trusted backend module calling the automatic Mail API may resolve file variables under trusted/system semantics when that module intentionally supplies the file reference. Preserve automatic origin metadata.
+
+### Worker
+
+After queueing, the immutable Message contains only already-authorized attachment references/snapshots. The asynchronous worker has no browser actor and may use the trusted delivery/file-open path.
+
+Add negative tests proving arbitrary manual `file_id` cannot bypass file permissions.
+
+## File scalar interpolation
+
+A file variable used as `{{data.file}}` in text/HTML is different from an attachment.
+
+Feature-specific Mail resolution may convert an authorized file to a safe public URL only when it is actually suitable for external recipients.
+
+Private/admin-only URLs must not be emitted into outbound email. Private files may still be real attachments after proper authorization.
+
+Generic templating never decides how file IDs become URLs.
 
 ## File/media distinction
 
-Attachments use Files.
+Attachments use Files. Reuse existing file field, file picker and upload machinery.
 
-Do not create a new Media field solely for Mail if the existing `file` type/picker satisfies attachment needs.
+Do not create a parallel Mail binary upload subsystem or a Media field solely for Mail.
 
-A future Media field may be appropriate for semantic image/media use cases such as SEO OpenGraph images, but it is independent of this Mail feature.
+A future Media field for semantic image use cases (e.g. SEO OG image) is separate.
+
+## Manual sender actor snapshot
+
+Manual message history must record immutable requester identity metadata.
+
+Persist at least user ID and historical display name.
+
+Do not trust `requested_by_name` / actor display name from the frontend. Resolve it on the backend from the authenticated actor/current user service before creating the immutable Message.
+
+Automatic/system sends use explicit origin metadata instead.
+
+## Limits and abuse protection
+
+Validate configurable limits before queueing, including at least:
+
+- maximum final recipient count across To/CC/BCC;
+- maximum outgoing message/attachment size;
+- maximum delivery attempts.
+
+Do not rely on HTTP request body limits as the mail-message-size policy.
+
+Return clear validation errors.
 
 ## Manual send admin workflow
 
-The admin UI should provide:
+The admin UI provides:
 
 - template list/CRUD;
 - manual send screen;
 - choose template;
-- dynamically render the declared input fields;
-- optional input values;
-- preview using backend authoritative render endpoint;
-- clear warnings for empty/missing variables;
-- final Send action that queues the exact rendered snapshot;
+- dynamically render declared fields including required markers;
+- preview through backend authoritative renderer;
+- warnings for missing optional values;
+- validation errors for missing required values;
+- final Send enabled only for a current successful preview;
+- 409 stale-template handling requiring new preview;
 - history/message list;
-- message detail with recipients/content metadata/status/attempts.
+- message detail/status/attempts.
 
-For `html` templates use the existing rich HTML editor; for `text` use a textarea.
+For HTML templates use existing rich HTML editor; for text use textarea.
 
-Reuse current filesystem picker/upload UI for static file attachments and manual file-variable values.
+Reuse current file picker/upload UI for static attachments and manual file variables, but backend remains authoritative for file access.
 
 ## Template lifecycle
 
-Prefer enabled/disabled/archived behavior for templates already used by integrations. Do not casually hard-delete a stable template code referenced by Forms or another module.
+Prefer enabled/disabled/archived behavior for integration templates.
 
-If physical deletion is supported, protect referenced templates according to explicit repository/domain rules and keep message-history snapshots independent of template existence.
+Do not casually hard-delete a stable template code referenced by Forms or another module. If physical deletion remains supported, protect references by explicit rules and keep historical Message snapshots independent of template existence.
 
 ## Permissions
 
-Use the existing module/entity/action permission conventions and site-scoped checks.
+Use existing module/entity/action permission conventions plus site-scoped checks.
 
-Expected capabilities include the equivalent of:
+Expected capabilities include template read/create/update/delete-or-disable, message/history read, manual message create/send, and history delete only when intentionally exposed.
 
-- template read/create/update/delete or disable;
-- message/history read;
-- manual message create/send;
-- message/history delete only if product requirements expose it.
+Backend authorization is authoritative. UI visibility is UX only.
 
-Backend authorization is authoritative. Hiding buttons/routes is UX only.
+Mail history can contain sensitive personal/form data and needs its own permission.
 
-Mail history may contain sensitive personal/form data, so do not expose it merely because an actor can view normal site content.
+Automatic trusted sends do not impersonate arbitrary browser permissions; preserve origin metadata.
 
-Automatic/system sends initiated by trusted module jobs/events do not impersonate a browser user's arbitrary permissions; preserve actor/origin metadata separately where useful.
+## History reads and retention
 
-## Manual vs automatic origin
+Message history list endpoints must be bounded and lightweight.
 
-Persist enough origin metadata on the rendered message to distinguish at least:
+Use a summary projection for lists. Do not load full rendered text/HTML bodies and full attachment snapshots for every row when the UI only shows metadata.
 
-- manual admin send with requesting user ID/name where appropriate;
-- automatic/system/module-triggered send.
+Load the full immutable body on message detail only.
 
-This is mail history metadata, not a substitute for the future global Audit module.
+Support practical server-side history filters when implemented, including status, template, date range and recipient search.
 
-## History retention
-
-Mail history can grow and can contain personal data.
-
-Provide an explicit configurable retention policy, including a way to retain indefinitely when intentionally configured.
-
-Cleanup is operational/background work and must be bounded/safe. Do not delete active queued/sending messages as ordinary retention cleanup.
-
-Keep cleanup rules separate from outbox retention and resource revisions.
+Mail history can contain personal data and grow indefinitely. Provide configurable retention including an explicit retain-indefinitely mode. Cleanup is application/background work, bounded in batches, and never deletes active queued/sending/retryable messages.
 
 ## SMTP result semantics
 
-Do not label an SMTP `250`/accepted result as guaranteed "delivered" or "read".
+Do not label SMTP `250` as guaranteed `delivered` or `read`. Use accepted/"Передано SMTP" semantics.
 
-Future provider webhooks may add richer states such as delivered/bounced/opened/clicked, but those are not part of the initial SMTP implementation.
+Provider delivery/bounce/open/click webhooks are future scope.
 
 ## Testing invariants
 
 Add focused tests for at least:
 
-- template variable schema and rendering across subject/from/to/cc/bcc/reply-to/body;
-- omitted declared variables become empty + preview warning;
-- malformed/unknown variables fail validation;
-- HTML values are escaped;
-- header CR/LF injection is rejected;
-- final recipient validation and no-recipient failure;
-- text vs HTML editor/API contract;
-- static and variable attachments;
-- immutable rendered message is unaffected by later template edits;
-- queued message + durable job/outbox path is reliable;
-- duplicate job delivery does not resend a locally terminal message;
-- attempt history records failure and eventual acceptance;
-- SMTP/null/log adapter behavior as applicable;
-- stable Message-ID;
-- manual sender actor metadata;
-- permission and cross-site isolation;
-- history retention excludes active messages;
-- frontend template/manual-send/preview/history critical paths.
+- required variable missing -> validation error;
+- optional variable missing -> empty/absent + warning;
+- unknown/malformed placeholders fail;
+- HTML escaping and header injection rejection;
+- final address/no-recipient validation;
+- template version increments and stale preview/send -> conflict;
+- static attachment requires editor file permission at template save;
+- a send-only actor may send an already-approved static attachment without global file-read permission;
+- manual file variable cannot bypass current actor file permission by posting an arbitrary ID;
+- automatic trusted file variable follows explicit system semantics;
+- immutable Message unaffected by later template edits;
+- queued Message + outbox atomicity;
+- stable RFC Message-ID;
+- duplicate terminal job does not resend locally;
+- SMTP transient retry, SMTP permanent failure and max-attempt terminal behavior;
+- manual requester ID/name resolved on backend;
+- recipient/message-size limits;
+- site and Mail permission isolation;
+- lightweight history list vs full detail;
+- retention excludes active messages;
+- frontend preview/stale conflict/history critical paths.
 
 ## Scope control
 
-Do not add in the initial implementation unless explicitly requested:
+Do not add unless explicitly requested:
 
-- newsletter/bulk marketing campaign engine;
-- subscriber lists;
-- SMS/Telegram/WhatsApp transports;
+- newsletters/bulk campaigns/subscriber lists;
+- SMS/Telegram/WhatsApp;
 - conditional/loop template language;
 - open/click tracking;
-- provider webhooks for bounce/delivery;
+- provider bounce/delivery webhooks;
 - inline CID images;
 - generic notification workflow engine.
 
-Build Mail as a clean first consumer of templating + jobs/outbox so later channels can reuse the generic pieces without depending on the Mail module.
+Build Mail as a clean consumer of generic templating + jobs/outbox so future Forms and other channels can reuse generic infrastructure without depending on Mail internals.
