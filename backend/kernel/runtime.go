@@ -67,10 +67,23 @@ type ModuleRuntime interface {
 // their final site-scoped runtime state. Request-specific values do not belong
 // here.
 type RuntimeScope struct {
-	siteID   string
-	domain   string
-	locale   string
-	settings map[string]any
+	siteID      string
+	profileCode ProfileCode
+	domain      string
+	locale      string
+	isPublic    bool
+	settings    map[string]any
+}
+
+func NewSiteRuntimeScope(
+	siteID string,
+	profileCode ProfileCode,
+	domain string,
+	locale string,
+	isPublic bool,
+	settings map[string]any,
+) RuntimeScope {
+	return RuntimeScope{siteID: siteID, profileCode: profileCode, domain: domain, locale: locale, isPublic: isPublic, settings: cloneRuntimeSettings(settings)}
 }
 
 func NewRuntimeScope(
@@ -89,16 +102,20 @@ func NewRuntimeScope(
 
 func (s RuntimeScope) SiteID() string { return s.siteID }
 
+func (s RuntimeScope) ProfileCode() ProfileCode { return s.profileCode }
+
 func (s RuntimeScope) Domain() string { return s.domain }
 
 func (s RuntimeScope) Locale() string { return s.locale }
+
+func (s RuntimeScope) IsPublic() bool { return s.isPublic }
 
 func (s RuntimeScope) Settings() map[string]any {
 	return cloneRuntimeSettings(s.settings)
 }
 
 func (s RuntimeScope) clone() RuntimeScope {
-	return NewRuntimeScope(s.siteID, s.domain, s.locale, s.settings)
+	return NewSiteRuntimeScope(s.siteID, s.profileCode, s.domain, s.locale, s.isPublic, s.settings)
 }
 
 func cloneRuntimeSettings(source map[string]any) map[string]any {

@@ -6,12 +6,12 @@ import RichTextEditor from '../../components/RichTextEditor.vue'
 import AccessDeniedView from '../../components/AccessDeniedView.vue'
 import { useSelectedSite } from '../../composables/use-selected-site'
 import type { FieldDefinition } from '../../types/admin'
-import { createMailTemplate, getMailTemplate, updateMailTemplate } from './api'
+import { createMailTemplate, getMailTemplate, listMailSiteVariables, updateMailTemplate } from './api'
 import MailAddressFields from './MailAddressFields.vue'
 import MailAddressListEditor from './MailAddressListEditor.vue'
 import MailAttachmentsEditor from './MailAttachmentsEditor.vue'
 import MailVariablesEditor from './MailVariablesEditor.vue'
-import type { MailTemplate, MailTemplatePayload } from './types'
+import type { MailSiteVariable, MailTemplate, MailTemplatePayload } from './types'
 
 const props = defineProps<{ accessToken: string; permissions: ReadonlySet<string> }>()
 const emit = defineEmits<{ unauthorized: [] }>()
@@ -22,15 +22,15 @@ const loading = ref(false)
 const saving = ref(false)
 const error = ref<string | null>(null)
 const replyToEnabled = ref(false)
+const siteVariables = ref<MailSiteVariable[]>([])
+const selectedPlaceholder = ref('')
 const form = reactive<MailTemplatePayload>(emptyTemplate())
 const templateID = computed(() => Number(route.params.templateId ?? 0))
 const editing = computed(() => Number.isInteger(templateID.value) && templateID.value > 0)
 const canSave = computed(() => props.permissions.has(editing.value ? 'mail.template.update' : 'mail.template.create'))
 const canAccess = computed(() => editing.value ? props.permissions.has('mail.template.read') : props.permissions.has('mail.template.create'))
-const placeholders = computed(() => [
-  '{{site.domain}}', '{{site.locale}}',
-  ...form.variables.filter((item) => item.key).map((item) => `{{data.${item.key}}}`),
-])
+const sitePlaceholders = computed(() => siteVariables.value.map((item) => `{{${item.variable}}}`))
+const dataPlaceholders = computed(() => form.variables.filter((item) => item.key).map((item) => `{{data.${item.key}}}`))
 
 function emptyTemplate(): MailTemplatePayload {
   return {
@@ -52,18 +52,21 @@ function assignTemplate(item: MailTemplate): void {
 }
 
 function cloneField(value: FieldDefinition): FieldDefinition {
-  return { ...value, required: false, rules: [...value.rules], options: value.options ? { ...value.options, choices: value.options.choices?.map((item) => ({ ...item })), storages: [...(value.options.storages ?? [])], mime_types: [...(value.options.mime_types ?? [])] } : undefined }
+  return { ...value, required: value.required, rules: [...value.rules], options: value.options ? { ...value.options, choices: value.options.choices?.map((item) => ({ ...item })), storages: [...(value.options.storages ?? [])], mime_types: [...(value.options.mime_types ?? [])] } : undefined }
 }
 
 async function load(): Promise<void> {
   error.value = null
+  siteVariables.value = []
+  selectedPlaceholder.value = ''
   if (!canAccess.value) return
-  if (!editing.value) { assignTemplate({ ...emptyTemplate(), id: 0, site_id: 0, created_at: '', updated_at: '' }); return }
   const siteID = selected.selectedSite.value?.id
   if (!siteID) return
   loading.value = true
   try {
-    assignTemplate(await getMailTemplate(props.accessToken, siteID, templateID.value))
+    siteVariables.value = (await listMailSiteVariables(props.accessToken, siteID)).items
+    if (editing.value) assignTemplate(await getMailTemplate(props.accessToken, siteID, templateID.value))
+    else assignTemplate({ ...emptyTemplate(), id: 0, site_id: siteID, created_at: '', updated_at: '' })
   } catch (caught) {
     handleError(caught)
   } finally { loading.value = false }
@@ -84,6 +87,7 @@ function validate(): string | null {
   for (const attachment of form.attachments) {
     if (attachment.source === 'static' && !attachment.file_id) return 'Выберите файл для каждого статического вложения.'
     if (attachment.source === 'variable' && !attachment.variable) return 'Выберите файловую переменную для каждого переменного вложения.'
+    if (attachment.source === 'site' && !attachment.variable) return 'Выберите файловое поле сайта для каждого вложения из настроек сайта.'
   }
   return null
 }
@@ -111,8 +115,17 @@ function toggleReplyTo(value: boolean): void {
 }
 
 async function copyPlaceholder(value: string): Promise<void> {
+  selectedPlaceholder.value = value
   try { await navigator.clipboard.writeText(value); ElMessage.success(`Скопировано: ${value}`) }
   catch { ElMessage.warning('Не удалось скопировать переменную.') }
+}
+
+function insertPlaceholder(target: 'subject' | 'body'): void {
+  const value = selectedPlaceholder.value
+  if (!value) return
+  if (target === 'subject') form.subject += value
+  else if (form.content_type === 'html') form.html_body += value
+  else form.text_body += value
 }
 
 function handleError(caught: unknown): void {
@@ -148,11 +161,20 @@ onMounted(() => void load())
       </el-card>
 
       <el-card shadow="never" header="Переменные">
-        <p class="mail-help">Значения при отправке необязательны. Непустые значения проверяются по выбранному типу.</p>
+        <p class="mail-help">Для каждого значения выберите обязательность. Типы, правила и обязательные значения проверяются при предпросмотре и отправке.</p>
         <mail-variables-editor v-model="form.variables" />
-        <div v-if="placeholders.length" class="mail-placeholder-list">
-          <span>Доступные плейсхолдеры:</span>
-          <el-tag v-for="placeholder in placeholders" :key="placeholder" class="mail-placeholder" @click="copyPlaceholder(placeholder)">{{ placeholder }}</el-tag>
+        <div v-if="sitePlaceholders.length" class="mail-placeholder-list">
+          <strong>Сайт</strong>
+          <el-tag v-for="placeholder in sitePlaceholders" :key="placeholder" class="mail-placeholder" @click="copyPlaceholder(placeholder)">{{ placeholder }}</el-tag>
+        </div>
+        <div v-if="dataPlaceholders.length" class="mail-placeholder-list">
+          <strong>Данные шаблона</strong>
+          <el-tag v-for="placeholder in dataPlaceholders" :key="placeholder" class="mail-placeholder" @click="copyPlaceholder(placeholder)">{{ placeholder }}</el-tag>
+        </div>
+        <div v-if="selectedPlaceholder" class="mail-placeholder-actions">
+          <span>Выбрано: <code>{{ selectedPlaceholder }}</code></span>
+          <el-button size="small" @click="insertPlaceholder('subject')">Вставить в тему</el-button>
+          <el-button size="small" @click="insertPlaceholder('body')">Вставить в тело</el-button>
         </div>
       </el-card>
 
@@ -175,7 +197,7 @@ onMounted(() => void load())
       </el-card>
 
       <el-card shadow="never" header="Вложения">
-        <mail-attachments-editor v-model="form.attachments" :variables="form.variables" :access-token="accessToken" :permissions="permissions" />
+        <mail-attachments-editor v-model="form.attachments" :variables="form.variables" :site-variables="siteVariables" :access-token="accessToken" :permissions="permissions" />
       </el-card>
     </el-form>
   </section>
@@ -187,6 +209,7 @@ onMounted(() => void load())
 .mail-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 .mail-help { margin: 0 0 12px; color: var(--el-text-color-secondary); }
 .mail-placeholder-list { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+.mail-placeholder-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
 .mail-placeholder { cursor: pointer; font-family: ui-monospace, monospace; }
 .page-actions { display: flex; gap: 8px; }
 @media (max-width: 760px) { .mail-form-grid { grid-template-columns: 1fr; } }

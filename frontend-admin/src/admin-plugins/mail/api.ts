@@ -6,6 +6,8 @@ import type {
   MailTemplate,
   MailTemplateListResponse,
   MailTemplatePayload,
+  MailSiteVariablesResponse,
+  MailMessageFilters,
   RenderedMailMessage,
 } from './types'
 
@@ -27,6 +29,10 @@ export function listSendTemplates(
   siteID: number,
 ): Promise<MailTemplateListResponse> {
   return adminRequest(`${root(siteID)}/send/templates?page=1&per_page=100`, accessToken)
+}
+
+export function listMailSiteVariables(accessToken: string, siteID: number): Promise<MailSiteVariablesResponse> {
+  return adminRequest(`${root(siteID)}/variables`, accessToken)
 }
 
 export function getMailTemplate(
@@ -97,8 +103,11 @@ export function listMailMessages(
   siteID: number,
   page = 1,
   perPage = 20,
+  filters: MailMessageFilters = {},
 ): Promise<MailMessageListResponse> {
-  return adminRequest(`${root(siteID)}/messages?page=${page}&per_page=${perPage}`, accessToken)
+  const query = new URLSearchParams({ page: String(page), per_page: String(perPage) })
+  for (const [key, value] of Object.entries(filters)) if (value) query.set(key, value)
+  return adminRequest(`${root(siteID)}/messages?${query.toString()}`, accessToken)
 }
 
 export function getMailMessage(

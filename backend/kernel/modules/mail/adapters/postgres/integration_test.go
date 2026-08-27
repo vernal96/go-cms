@@ -118,21 +118,21 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 		t.Fatalf("cross-site message read error = %v", err)
 	}
 
-	claimed, firstAttempt, ok, err := repository.ClaimMessage(ctx, siteIDs[0], stored.ID)
+	claimed, firstAttempt, ok, err := repository.ClaimMessage(ctx, siteIDs[0], stored.ID, 5)
 	if err != nil || !ok || claimed.ID != stored.ID {
 		t.Fatalf("first claim = %#v %#v %t %v", claimed, firstAttempt, ok, err)
 	}
-	if err := repository.FinishAttempt(ctx, stored.ID, firstAttempt.AttemptNumber, mail.DeliveryResult{Driver: "smtp"}, errors.New("temporary")); err != nil {
+	if err := repository.FinishAttempt(ctx, stored.ID, firstAttempt.AttemptNumber, mail.DeliveryResult{Driver: "smtp"}, &mail.DeliveryError{Retryable: true, Code: "temporary", Err: errors.New("temporary")}, false); err != nil {
 		t.Fatal(err)
 	}
-	_, secondAttempt, ok, err := repository.ClaimMessage(ctx, siteIDs[0], stored.ID)
+	_, secondAttempt, ok, err := repository.ClaimMessage(ctx, siteIDs[0], stored.ID, 5)
 	if err != nil || !ok || secondAttempt.AttemptNumber != 2 {
 		t.Fatalf("retry claim = %#v %t %v", secondAttempt, ok, err)
 	}
-	if err := repository.FinishAttempt(ctx, stored.ID, secondAttempt.AttemptNumber, mail.DeliveryResult{Driver: "smtp", ResponseCode: "250", RemoteMessageID: "provider-1"}, nil); err != nil {
+	if err := repository.FinishAttempt(ctx, stored.ID, secondAttempt.AttemptNumber, mail.DeliveryResult{Driver: "smtp", ResponseCode: "250", RemoteMessageID: "provider-1"}, nil, true); err != nil {
 		t.Fatal(err)
 	}
-	page, err := repository.ListMessages(ctx, siteIDs[0], mail.PageQuery{Page: 1, PerPage: 20})
+	page, err := repository.ListMessages(ctx, siteIDs[0], mail.MessageQuery{PageQuery: mail.PageQuery{Page: 1, PerPage: 20}})
 	if err != nil || len(page.Items) != 1 || page.Items[0].AttemptCount != 2 || page.Items[0].LatestAttempt == nil || page.Items[0].LatestAttempt.Status != mail.AttemptAccepted {
 		t.Fatalf("message list = %#v, %v", page, err)
 	}

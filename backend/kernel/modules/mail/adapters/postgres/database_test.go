@@ -19,7 +19,7 @@ func TestMigrationSourceDefinesSiteScopedMailHistoryAndOutboxDependencies(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 {
+	if len(entries) != 4 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	raw, err := fs.ReadFile(sources[0].FS, sources[0].Path+"/000001_mail.up.sql")

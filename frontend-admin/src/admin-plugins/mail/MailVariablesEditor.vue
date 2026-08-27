@@ -20,7 +20,7 @@ function remove(index: number): void {
 }
 function update(index: number, patch: Partial<FieldDefinition>): void {
   const result = [...props.modelValue]
-  const current = { ...result[index], ...patch, required: false }
+  const current = { ...result[index], ...patch }
   if (patch.type !== undefined) current.options = defaultOptions(String(patch.type))
   result[index] = current
   emit('update:modelValue', result)
@@ -64,6 +64,10 @@ function csv(value: string): string[] {
         </el-select>
         <el-button :icon="Delete" circle plain aria-label="Удалить переменную" @click="remove(index)" />
       </div>
+      <el-checkbox
+        :model-value="variable.required"
+        @update:model-value="update(index, { required: Boolean($event) })"
+      >Обязательное значение</el-checkbox>
       <el-input
         :model-value="variable.rules.join(', ')"
         placeholder="Правила через запятую, например min=2, max=100"

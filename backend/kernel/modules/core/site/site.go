@@ -165,10 +165,12 @@ func NewRuntimeFromBlueprint(
 	}
 	profileRuntime, err := blueprint.Build(
 		ctx,
-		kernel.NewRuntimeScope(
+		kernel.NewSiteRuntimeScope(
 			fmt.Sprint(item.ID),
+			item.ProfileCode,
 			item.Domain,
 			item.Locale,
+			item.IsPublic,
 			item.Settings,
 		),
 	)

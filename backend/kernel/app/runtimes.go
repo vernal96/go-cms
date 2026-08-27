@@ -9,9 +9,9 @@ import (
 	"github.com/vernal96/go-cms/kernel/console"
 	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
+	"github.com/vernal96/go-cms/kernel/modules/core/group"
 	coremanagement "github.com/vernal96/go-cms/kernel/modules/core/management"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
-	mailmodule "github.com/vernal96/go-cms/kernel/modules/mail"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
@@ -84,19 +84,6 @@ func (a *App) CMSManagement() (*coremanagement.Sites, *coremanagement.Resources,
 	return a.cmsSites, a.cmsResources, a.cmsFiles, nil
 }
 
-func (a *App) MailManagement() (*mailmodule.Management, error) {
-	if a == nil {
-		return nil, errors.New("app is nil")
-	}
-	if a.closed.Load() {
-		return nil, ErrClosed
-	}
-	if !a.booted.Load() || a.mailManagement == nil {
-		return nil, ErrNotBooted
-	}
-	return a.mailManagement, nil
-}
-
 func (a *App) RuntimeByDomain(
 	ctx context.Context,
 	actor security.Actor,
@@ -128,6 +115,41 @@ func (a *App) RuntimeBySiteID(
 		return nil, site.ErrNotFound
 	}
 	return a.sites.ResolveByDomain(ctx, actor, runtime.Site().Domain)
+}
+
+// ManagementSiteRuntime resolves the current immutable runtime for an
+// authenticated site-management request after applying the shared site access
+// policy. Optional module transports use this instead of feature-specific App
+// state.
+func (a *App) ManagementSiteRuntime(
+	ctx context.Context,
+	actor security.Actor,
+	id site.ID,
+	action group.SiteAccessAction,
+) (*site.Runtime, error) {
+	if a == nil {
+		return nil, errors.New("app is nil")
+	}
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+	if !a.booted.Load() || a.sites == nil || a.siteAccessPolicy == nil {
+		return nil, ErrNotBooted
+	}
+	if ctx == nil {
+		return nil, errors.New("site management context is nil")
+	}
+	if id <= 0 {
+		return nil, site.ErrNotFound
+	}
+	if err := a.siteAccessPolicy.Check(ctx, actor, id, action); err != nil {
+		return nil, err
+	}
+	runtime, exists := a.sites.RuntimeByID(id)
+	if !exists || runtime == nil {
+		return nil, site.ErrNotFound
+	}
+	return runtime, nil
 }
 
 func (a *App) ReloadSites(ctx context.Context) error {

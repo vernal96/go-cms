@@ -10,9 +10,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
+	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/security"
 	"github.com/vernal96/go-cms/kernel/templating"
 )
@@ -41,13 +41,13 @@ type RendererConfig struct {
 }
 
 type Renderer struct {
-	fields field.TypeResolver
-	files  FileService
-	scope  kernel.RuntimeScope
-	config RendererConfig
+	fields        field.TypeResolver
+	files         FileService
+	siteVariables site.TemplateVariables
+	config        RendererConfig
 }
 
-func NewRenderer(fields field.TypeResolver, files FileService, scope kernel.RuntimeScope, config RendererConfig) (*Renderer, error) {
+func NewRenderer(fields field.TypeResolver, files FileService, item site.Site, params []field.Definition, config RendererConfig) (*Renderer, error) {
 	if fields == nil {
 		return nil, errors.New("mail field type resolver is nil")
 	}
@@ -63,11 +63,11 @@ func NewRenderer(fields field.TypeResolver, files FileService, scope kernel.Runt
 	if config.MaxTemplateLength < 1 || config.MaxResultLength < 1 {
 		return nil, errors.New("mail rendering limits are invalid")
 	}
-	if len(config.SenderPolicy.AllowedAddresses) == 0 && len(config.SenderPolicy.AllowedDomains) == 0 && scope.Domain() != "" {
-		config.SenderPolicy.AllowedDomains = []string{scope.Domain()}
+	if len(config.SenderPolicy.AllowedAddresses) == 0 && len(config.SenderPolicy.AllowedDomains) == 0 && item.Domain != "" {
+		config.SenderPolicy.AllowedDomains = []string{item.Domain}
 	}
 	config.SenderPolicy = normalizeSenderPolicy(config.SenderPolicy)
-	return &Renderer{fields: fields, files: files, scope: scope, config: config}, nil
+	return &Renderer{fields: fields, files: files, siteVariables: site.NewTemplateVariables(item, params), config: config}, nil
 }
 
 func (r *Renderer) ValidateTemplate(template Template) error {
@@ -80,11 +80,11 @@ func (r *Renderer) ValidateTemplate(template Template) error {
 	if template.ContentType != ContentText && template.ContentType != ContentHTML {
 		return fmt.Errorf("%w: content type is invalid", ErrInvalid)
 	}
-	definitions := optionalDefinitions(template.Variables)
+	definitions := field.CloneDefinitions(template.Variables)
 	if _, err := field.Compile(definitions, r.fields); err != nil {
 		return fmt.Errorf("%w: variable schema: %v", ErrInvalid, err)
 	}
-	allowed := allowedVariables(definitions)
+	allowed := allowedVariables(definitions, r.siteVariables)
 	sources := templateSources(template)
 	for name, source := range sources {
 		if _, err := templating.Compile(source, allowed, r.limits()); err != nil {
@@ -114,6 +114,15 @@ func (r *Renderer) ValidateTemplate(template Template) error {
 			if _, exists := fileVariables[variable]; !exists {
 				return fmt.Errorf("%w: attachment %d references non-file variable %q", ErrInvalid, index, attachment.Variable)
 			}
+		case AttachmentSite:
+			if attachment.FileID != nil {
+				return fmt.Errorf("%w: attachment %d site source is invalid", ErrInvalid, index)
+			}
+			variable := strings.TrimSpace(attachment.Variable)
+			definition, exists := r.siteVariables.Definition(variable)
+			if !exists || definition.Type != field.TypeFile {
+				return fmt.Errorf("%w: attachment %d references non-file site variable %q", ErrInvalid, index, attachment.Variable)
+			}
 		default:
 			return fmt.Errorf("%w: attachment %d source is invalid", ErrInvalid, index)
 		}
@@ -121,18 +130,18 @@ func (r *Renderer) ValidateTemplate(template Template) error {
 	return nil
 }
 
-func (r *Renderer) Render(ctx context.Context, template Template, values map[string]any) (RenderedMessage, error) {
+func (r *Renderer) Render(ctx context.Context, template Template, values map[string]any, actor security.Actor) (RenderedMessage, error) {
 	if ctx == nil {
 		return RenderedMessage{}, errors.New("mail render context is nil")
 	}
 	if err := r.ValidateTemplate(template); err != nil {
 		return RenderedMessage{}, err
 	}
-	schema, err := field.Compile(optionalDefinitions(template.Variables), r.fields)
+	schema, err := field.Compile(template.Variables, r.fields)
 	if err != nil {
 		return RenderedMessage{}, err
 	}
-	normalized, err := schema.ValidatePartial(values)
+	normalized, err := schema.Validate(values)
 	if err != nil {
 		return RenderedMessage{}, fmt.Errorf("%w: variable values: %v", ErrInvalid, err)
 	}
@@ -141,7 +150,7 @@ func (r *Renderer) Render(ctx context.Context, template Template, values map[str
 		return RenderedMessage{}, fmt.Errorf("%w: file variables: %v", ErrInvalid, err)
 	}
 	for _, reference := range fileReferences {
-		item, loadErr := r.files.GetFile(ctx, security.System(), file.ID(reference.ID))
+		item, loadErr := r.files.GetFile(ctx, actor, file.ID(reference.ID))
 		if loadErr != nil {
 			return RenderedMessage{}, fmt.Errorf("%w: file variable %q: %v", ErrInvalid, reference.Key, loadErr)
 		}
@@ -149,14 +158,12 @@ func (r *Renderer) Render(ctx context.Context, template Template, values map[str
 			return RenderedMessage{}, fmt.Errorf("%w: file variable %q violates its file constraints", ErrInvalid, reference.Key)
 		}
 	}
-	allowed := allowedVariables(template.Variables)
+	allowed := allowedVariables(template.Variables, r.siteVariables)
 	warnings := make([]Warning, 0)
 	resolve := func(variable string) (any, bool, error) {
-		switch variable {
-		case "site.domain":
-			return r.scope.Domain(), r.scope.Domain() != "", nil
-		case "site.locale":
-			return r.scope.Locale(), r.scope.Locale() != "", nil
+		if value, exists := r.siteVariables.Value(variable); exists {
+			definition, _ := r.siteVariables.Definition(variable)
+			return r.scalarValue(ctx, definition, value)
 		}
 		key, found := strings.CutPrefix(variable, "data.")
 		if !found {
@@ -232,7 +239,7 @@ func (r *Renderer) Render(ctx context.Context, template Template, values map[str
 	if err != nil {
 		return RenderedMessage{}, fmt.Errorf("%w: body: %v", ErrInvalid, err)
 	}
-	result.Attachments, err = r.renderAttachments(ctx, template, normalized, render, &warnings)
+	result.Attachments, err = r.renderAttachments(ctx, template, normalized, actor, render, &warnings)
 	if err != nil {
 		return RenderedMessage{}, err
 	}
@@ -279,14 +286,16 @@ func (r *Renderer) renderAddresses(fieldName string, source []AddressTemplate, r
 	return result, nil
 }
 
-func (r *Renderer) renderAttachments(ctx context.Context, template Template, values map[string]any, render renderString, warnings *[]Warning) ([]Attachment, error) {
+func (r *Renderer) renderAttachments(ctx context.Context, template Template, values map[string]any, actor security.Actor, render renderString, warnings *[]Warning) ([]Attachment, error) {
 	result := make([]Attachment, 0, len(template.Attachments))
 	for index, source := range template.Attachments {
 		var id file.ID
+		accessActor := security.System()
 		switch source.Source {
 		case AttachmentStatic:
 			id = *source.FileID
 		case AttachmentVariable:
+			accessActor = actor
 			key := strings.TrimPrefix(normalizeDataVariable(source.Variable), "data.")
 			value, exists := values[key]
 			if !exists {
@@ -298,8 +307,19 @@ func (r *Renderer) renderAttachments(ctx context.Context, template Template, val
 				return nil, fmt.Errorf("%w: attachment variable %q is invalid", ErrInvalid, key)
 			}
 			id = file.ID(integer)
+		case AttachmentSite:
+			value, exists := r.siteVariables.Value(source.Variable)
+			if !exists {
+				*warnings = append(*warnings, Warning{Field: fmt.Sprintf("attachments.%d", index), Variable: source.Variable, Message: "site attachment has no current value"})
+				continue
+			}
+			integer, ok := value.(int64)
+			if !ok || integer <= 0 {
+				return nil, fmt.Errorf("%w: site attachment variable %q is invalid", ErrInvalid, source.Variable)
+			}
+			id = file.ID(integer)
 		}
-		item, err := r.files.GetFile(ctx, security.System(), id)
+		item, err := r.files.GetFile(ctx, accessActor, id)
 		if err != nil {
 			return nil, fmt.Errorf("resolve mail attachment %d: %w", id, err)
 		}
@@ -314,9 +334,22 @@ func (r *Renderer) renderAttachments(ctx context.Context, template Template, val
 		if filename == "" || filepath.Base(filename) != filename || filename == "." {
 			return nil, fmt.Errorf("%w: attachment filename is invalid", ErrInvalid)
 		}
-		result = append(result, Attachment{FileID: item.ID, Filename: filename, MIMEType: item.MIMEType, Size: item.Size, Checksum: item.ChecksumSHA256})
+		fileID := item.ID
+		result = append(result, Attachment{Source: source.Source, FileID: &fileID, Filename: filename, MIMEType: item.MIMEType, Size: item.Size, Checksum: item.ChecksumSHA256})
 	}
 	return result, nil
+}
+
+func (r *Renderer) ValidateTemplateFiles(ctx context.Context, actor security.Actor, template Template) error {
+	for index, attachment := range template.Attachments {
+		if attachment.Source != AttachmentStatic || attachment.FileID == nil {
+			continue
+		}
+		if _, err := r.files.GetFile(ctx, actor, *attachment.FileID); err != nil {
+			return fmt.Errorf("%w: static attachment %d: %v", ErrInvalid, index, err)
+		}
+	}
+	return nil
 }
 
 func (r *Renderer) scalarValue(ctx context.Context, definition field.Definition, value any) (any, bool, error) {
@@ -386,21 +419,16 @@ func normalizeSenderPolicy(policy SenderPolicy) SenderPolicy {
 	return policy
 }
 
-func optionalDefinitions(source []field.Definition) []field.Definition {
-	result := field.CloneDefinitions(source)
-	for index := range result {
-		optional := false
-		result[index].Required = &optional
-	}
-	return result
-}
-
-func allowedVariables(definitions []field.Definition) map[string]struct{} {
-	result := map[string]struct{}{"site.domain": {}, "site.locale": {}}
+func allowedVariables(definitions []field.Definition, siteVariables site.TemplateVariables) map[string]struct{} {
+	result := siteVariables.Allowed()
 	for _, definition := range definitions {
 		result["data."+definition.Key] = struct{}{}
 	}
 	return result
+}
+
+func (r *Renderer) SiteVariables() []site.TemplateVariable {
+	return r.siteVariables.Metadata()
 }
 
 func definitionByKey(definitions []field.Definition, key string) (field.Definition, bool) {

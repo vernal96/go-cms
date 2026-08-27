@@ -3,11 +3,13 @@ package dev
 import (
 	"time"
 
+	"github.com/vernal96/go-cms/internal/connectors/corefiles"
 	"github.com/vernal96/go-cms/internal/connectors/projectcache"
 	devtemplates "github.com/vernal96/go-cms/internal/profiles/dev/templates"
 	"github.com/vernal96/go-cms/internal/profiles/dev/widgetviews"
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/cache"
+	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
@@ -55,7 +57,7 @@ var Profile = kernel.Profile{
 func ProfileWithMail(config mail.Config) kernel.Profile {
 	result := Profile
 	result.Modules = append([]kernel.ProfileModule(nil), Profile.Modules...)
-	mailModule := kernel.ProfileModule{Module: mail.Module{}, Config: config}
+	mailModule := kernel.ProfileModule{Module: mail.Module{}, Config: config, Filesystems: []filesystem.Binding{{Alias: mail.SpoolFilesystemAlias, Code: corefiles.PrivateCode}}}
 	adminIndex := len(result.Modules) - 1
 	result.Modules = append(result.Modules, kernel.ProfileModule{})
 	copy(result.Modules[adminIndex+1:], result.Modules[adminIndex:])

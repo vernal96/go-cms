@@ -8,6 +8,7 @@ import (
 
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	"github.com/vernal96/go-cms/kernel/modules/mail"
 )
 
 type variableJSON struct {
@@ -205,3 +206,11 @@ func decodeChoices(items []choiceJSON) []field.Choice {
 func encodeJSON(value any) ([]byte, error) { return json.Marshal(value) }
 
 func decodeJSON(raw []byte, target any) error { return json.Unmarshal(raw, target) }
+
+func encodeMessageAttachments(items []mail.Attachment) ([]byte, error) {
+	return mail.EncodeAttachmentsForStorage(items)
+}
+
+func decodeMessageAttachments(raw []byte) ([]mail.Attachment, error) {
+	return mail.DecodeAttachmentsFromStorage(raw)
+}

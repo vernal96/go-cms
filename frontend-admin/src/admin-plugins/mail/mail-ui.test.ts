@@ -54,6 +54,10 @@ describe('Mail admin UI', () => {
   })
 
   it('switches the template body editor and exposes compatible variable types', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ items: [
+      { variable: 'site.id', label: 'ID сайта', type: 'int', source: 'site' },
+      { variable: 'site.field.contract', label: 'Договор', type: 'file', source: 'site' },
+    ] })))
     const instanceRouter = router()
     await instanceRouter.push({ name: 'mail.templates.create' })
     await instanceRouter.isReady()
@@ -90,17 +94,19 @@ describe('Mail admin UI', () => {
   it('reuses the file picker and offers only file variables for variable attachments', () => {
     const wrapper = shallowMount(MailAttachmentsEditor, {
       props: {
-        modelValue: [{ source: 'variable', variable: '', filename_template: '' }],
+        modelValue: [{ source: 'variable', variable: '', filename_template: '' }, { source: 'site', variable: '', filename_template: '' }],
         variables: [
           { key: 'document', type: 'file', label: 'Документ', required: false, rules: [] },
           { key: 'name', type: 'string', label: 'Имя', required: false, rules: [] },
         ],
+        siteVariables: [{ variable: 'site.field.contract', label: 'Договор', type: 'file', source: 'site' }],
         accessToken: 'token', permissions,
       },
     })
     expect(wrapper.findComponent({ name: 'FilePickerDialog' }).exists()).toBe(true)
     const options = wrapper.findAllComponents({ name: 'ElOption' }).map((item) => item.props('value'))
     expect(options).toContain('data.document')
+    expect(options).toContain('site.field.contract')
     expect(options).not.toContain('data.name')
   })
 
@@ -145,7 +151,7 @@ describe('Mail admin UI', () => {
     const message = {
       id: 91, site_id: 5, template_id: null, template_code: 'welcome', template_name: 'Welcome', transport: 'default', rfc_message_id: '<91@example.test>',
       from: { name: '', email: 'noreply@example.test' }, to: [{ name: '', email: 'person@example.test' }], cc: [], bcc: [], reply_to: null,
-      subject: 'Hello', content_type: 'text', text_body: 'Body', html_body: '', attachments: [], status: 'accepted', origin: 'manual', origin_source: '',
+      subject: 'Hello', content_type: 'text', text_body: 'Body', html_body: '', attachments: [], status: 'accepted', origin: 'manual', origin_source: '', origin_event: '', origin_reference: '', recipients: ['person@example.test'],
       requested_at: '2026-08-27T10:00:00Z', requested_by: 7, requested_by_name: 'Editor', accepted_at: '2026-08-27T10:00:01Z',
       created_at: '2026-08-27T10:00:00Z', updated_at: '2026-08-27T10:00:01Z', attempt_count: 1,
       latest_attempt: { id: 1, message_id: 91, attempt_number: 1, transport: 'default', driver: 'smtp', started_at: '2026-08-27T10:00:00Z', finished_at: '2026-08-27T10:00:01Z', status: 'accepted', remote_message_id: 'remote', response_code: '250', safe_error: '', created_at: '2026-08-27T10:00:00Z' },

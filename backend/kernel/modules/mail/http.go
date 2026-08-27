@@ -8,11 +8,12 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
-	"github.com/vernal96/go-cms/kernel/modules/core/group"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
@@ -70,13 +71,14 @@ type paginationDTO struct {
 	Total   int `json:"total"`
 }
 
-func NewHTTPHandler(management *Management) (http.Handler, error) {
-	if management == nil {
-		return nil, errors.New("mail management is nil")
+func NewHTTPHandler(service *Service) (http.Handler, error) {
+	if service == nil {
+		return nil, errors.New("mail service is nil")
 	}
-	handler := &mailHTTP{management: management}
+	handler := &mailHTTP{service: service}
 	router := chi.NewRouter()
 	router.Get("/templates", handler.listTemplates)
+	router.Get("/variables", handler.siteVariables)
 	router.Post("/templates", handler.createTemplate)
 	router.Get("/templates/{templateID}", handler.getTemplate)
 	router.Patch("/templates/{templateID}", handler.updateTemplate)
@@ -90,10 +92,10 @@ func NewHTTPHandler(management *Management) (http.Handler, error) {
 	return httptransport.RequireAuthenticated(router), nil
 }
 
-type mailHTTP struct{ management *Management }
+type mailHTTP struct{ service *Service }
 
 func (h *mailHTTP) listTemplates(response http.ResponseWriter, request *http.Request) {
-	actor, service, ok := h.request(response, request, group.SiteAccessView)
+	actor, service, ok := h.request(response, request)
 	if !ok {
 		return
 	}
@@ -122,7 +124,7 @@ func (h *mailHTTP) listTemplates(response http.ResponseWriter, request *http.Req
 }
 
 func (h *mailHTTP) getTemplate(response http.ResponseWriter, request *http.Request) {
-	actor, service, ok := h.request(response, request, group.SiteAccessView)
+	actor, service, ok := h.request(response, request)
 	if !ok {
 		return
 	}
@@ -145,7 +147,7 @@ func (h *mailHTTP) getTemplate(response http.ResponseWriter, request *http.Reque
 }
 
 func (h *mailHTTP) createTemplate(response http.ResponseWriter, request *http.Request) {
-	actor, service, ok := h.request(response, request, group.SiteAccessEdit)
+	actor, service, ok := h.request(response, request)
 	if !ok {
 		return
 	}
@@ -173,7 +175,7 @@ func (h *mailHTTP) createTemplate(response http.ResponseWriter, request *http.Re
 }
 
 func (h *mailHTTP) updateTemplate(response http.ResponseWriter, request *http.Request) {
-	actor, service, ok := h.request(response, request, group.SiteAccessEdit)
+	actor, service, ok := h.request(response, request)
 	if !ok {
 		return
 	}
@@ -207,7 +209,7 @@ func (h *mailHTTP) updateTemplate(response http.ResponseWriter, request *http.Re
 }
 
 func (h *mailHTTP) deleteTemplate(response http.ResponseWriter, request *http.Request) {
-	actor, service, ok := h.request(response, request, group.SiteAccessEdit)
+	actor, service, ok := h.request(response, request)
 	if !ok {
 		return
 	}
@@ -228,7 +230,7 @@ type renderRequest struct {
 }
 
 func (h *mailHTTP) preview(response http.ResponseWriter, request *http.Request) {
-	actor, service, ok := h.request(response, request, group.SiteAccessEdit)
+	actor, service, ok := h.request(response, request)
 	if !ok {
 		return
 	}
@@ -246,7 +248,7 @@ func (h *mailHTTP) preview(response http.ResponseWriter, request *http.Request) 
 }
 
 func (h *mailHTTP) send(response http.ResponseWriter, request *http.Request) {
-	actor, service, ok := h.request(response, request, group.SiteAccessEdit)
+	actor, service, ok := h.request(response, request)
 	if !ok {
 		return
 	}
@@ -264,7 +266,7 @@ func (h *mailHTTP) send(response http.ResponseWriter, request *http.Request) {
 }
 
 func (h *mailHTTP) sendTemplates(response http.ResponseWriter, request *http.Request) {
-	actor, service, ok := h.request(response, request, group.SiteAccessEdit)
+	actor, service, ok := h.request(response, request)
 	if !ok {
 		return
 	}
@@ -293,11 +295,11 @@ func (h *mailHTTP) sendTemplates(response http.ResponseWriter, request *http.Req
 }
 
 func (h *mailHTTP) listMessages(response http.ResponseWriter, request *http.Request) {
-	actor, service, ok := h.request(response, request, group.SiteAccessView)
+	actor, service, ok := h.request(response, request)
 	if !ok {
 		return
 	}
-	query, err := pageQuery(request)
+	query, err := messageQuery(request)
 	if err != nil {
 		writeMailError(response, err)
 		return
@@ -308,13 +310,28 @@ func (h *mailHTTP) listMessages(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	writeJSON(response, http.StatusOK, struct {
-		Items      []Message     `json:"items"`
-		Pagination paginationDTO `json:"pagination"`
+		Items      []MessageSummary `json:"items"`
+		Pagination paginationDTO    `json:"pagination"`
 	}{page.Items, paginationDTO{query.Page, query.PerPage, page.Total}})
 }
 
+func (h *mailHTTP) siteVariables(response http.ResponseWriter, request *http.Request) {
+	actor, service, ok := h.request(response, request)
+	if !ok {
+		return
+	}
+	items, err := service.SiteVariables(request.Context(), actor)
+	if err != nil {
+		writeMailError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, struct {
+		Items []site.TemplateVariable `json:"items"`
+	}{Items: items})
+}
+
 func (h *mailHTTP) getMessage(response http.ResponseWriter, request *http.Request) {
-	actor, service, ok := h.request(response, request, group.SiteAccessView)
+	actor, service, ok := h.request(response, request)
 	if !ok {
 		return
 	}
@@ -332,7 +349,7 @@ func (h *mailHTTP) getMessage(response http.ResponseWriter, request *http.Reques
 }
 
 func (h *mailHTTP) deleteMessage(response http.ResponseWriter, request *http.Request) {
-	actor, service, ok := h.request(response, request, group.SiteAccessEdit)
+	actor, service, ok := h.request(response, request)
 	if !ok {
 		return
 	}
@@ -347,23 +364,13 @@ func (h *mailHTTP) deleteMessage(response http.ResponseWriter, request *http.Req
 	response.WriteHeader(http.StatusNoContent)
 }
 
-func (h *mailHTTP) request(response http.ResponseWriter, request *http.Request, action group.SiteAccessAction) (security.Actor, *Service, bool) {
+func (h *mailHTTP) request(response http.ResponseWriter, request *http.Request) (security.Actor, *Service, bool) {
 	actor, exists := httptransport.ActorFromContext(request.Context())
 	if !exists {
 		httptransport.WriteJSONError(response, http.StatusInternalServerError, "internal_error", "request actor is unavailable")
 		return security.Actor{}, nil, false
 	}
-	siteID, err := strconv.ParseInt(chi.URLParam(request, "siteID"), 10, 64)
-	if err != nil || siteID <= 0 {
-		writeMailError(response, ErrNotFound)
-		return security.Actor{}, nil, false
-	}
-	service, err := h.management.Service(request.Context(), actor, site.ID(siteID), action)
-	if err != nil {
-		writeMailError(response, err)
-		return security.Actor{}, nil, false
-	}
-	return actor, service, true
+	return actor, h.service, true
 }
 
 func decodeTemplatePayload(request *http.Request) (templatePayload, error) {
@@ -397,7 +404,7 @@ func (p templatePayload) template() (Template, error) {
 }
 
 func (v variableDTO) definition() (field.Definition, error) {
-	required := false
+	required := v.Required
 	definition := field.Definition{Key: v.Key, Type: v.Type, Label: v.Label, Required: &required, Rules: append([]string(nil), v.Rules...)}
 	options := v.Options
 	switch v.Type {
@@ -463,7 +470,8 @@ func toTemplateResponse(item Template) (templateResponse, error) {
 }
 
 func toVariableDTO(definition field.Definition) (variableDTO, error) {
-	result := variableDTO{Key: definition.Key, Type: definition.Type, Label: definition.Label, Required: false, Rules: append([]string(nil), definition.Rules...)}
+	required := definition.Required != nil && *definition.Required
+	result := variableDTO{Key: definition.Key, Type: definition.Type, Label: definition.Label, Required: required, Rules: append([]string(nil), definition.Rules...)}
 	switch definition.Type {
 	case field.TypeString, field.TypeTextarea, field.TypeEmail, field.TypeCheckbox:
 	case field.TypeInteger:
@@ -545,6 +553,27 @@ func pageQuery(request *http.Request) (PageQuery, error) {
 		}
 	}
 	return normalizePage(query)
+}
+
+func messageQuery(request *http.Request) (MessageQuery, error) {
+	page, err := pageQuery(request)
+	if err != nil {
+		return MessageQuery{}, err
+	}
+	query := MessageQuery{PageQuery: page, Status: MessageStatus(strings.TrimSpace(request.URL.Query().Get("status"))), TemplateCode: request.URL.Query().Get("template_code"), Recipient: request.URL.Query().Get("recipient")}
+	for key, target := range map[string]**time.Time{"date_from": &query.DateFrom, "date_to": &query.DateTo} {
+		raw := strings.TrimSpace(request.URL.Query().Get(key))
+		if raw == "" {
+			continue
+		}
+		value, parseErr := time.Parse(time.RFC3339, raw)
+		if parseErr != nil {
+			return MessageQuery{}, fmt.Errorf("%w: %s is invalid", ErrInvalid, key)
+		}
+		value = value.UTC()
+		*target = &value
+	}
+	return query, nil
 }
 
 func pathID[T ~int64](request *http.Request, key string) (T, error) {

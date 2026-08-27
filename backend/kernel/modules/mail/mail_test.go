@@ -5,22 +5,25 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/eventbus"
+	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/job"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
-	"github.com/vernal96/go-cms/kernel/modules/core/group"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
@@ -42,12 +45,16 @@ func standardFields() testFields {
 }
 
 type testFiles struct {
-	items map[file.ID]file.File
-	body  map[file.ID]string
-	urls  map[file.ID]string
+	items     map[file.ID]file.File
+	body      map[file.ID]string
+	urls      map[file.ID]string
+	denyUsers bool
 }
 
-func (f *testFiles) GetFile(_ context.Context, _ security.Actor, id file.ID) (file.File, error) {
+func (f *testFiles) GetFile(_ context.Context, actor security.Actor, id file.ID) (file.File, error) {
+	if f.denyUsers && actor.IsUser() {
+		return file.File{}, security.ErrForbidden
+	}
 	item, ok := f.items[id]
 	if !ok {
 		return file.File{}, file.ErrNotFound
@@ -72,7 +79,7 @@ func (f *testFiles) Open(_ context.Context, _ security.Actor, id file.ID) (file.
 func testRenderer(t *testing.T, policy SenderPolicy) (*Renderer, *testFiles) {
 	t.Helper()
 	files := &testFiles{items: map[file.ID]file.File{7: {ID: 7, Name: "invoice.pdf", MIMEType: "application/pdf", Size: 3, ChecksumSHA256: "abc"}}, body: map[file.ID]string{7: "pdf"}, urls: map[file.ID]string{7: "https://example.com/files/7"}}
-	renderer, err := NewRenderer(standardFields(), files, kernel.NewRuntimeScope("5", "example.com", "ru-RU", nil), RendererConfig{SenderPolicy: policy})
+	renderer, err := NewRenderer(standardFields(), files, site.Site{ID: 5, ProfileCode: "test", Domain: "example.com", Locale: "ru-RU"}, nil, RendererConfig{SenderPolicy: policy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +105,7 @@ func mailTemplate() Template {
 func TestRendererUsesTypedOptionalValuesAndEscapesHTML(t *testing.T) {
 	t.Parallel()
 	renderer, _ := testRenderer(t, SenderPolicy{AllowedDomains: []string{"example.com"}})
-	result, err := renderer.Render(context.Background(), mailTemplate(), map[string]any{"name": `<script>alert(1)</script>`, "email": "person@example.net", "count": float64(2)})
+	result, err := renderer.Render(context.Background(), mailTemplate(), map[string]any{"name": `<script>alert(1)</script>`, "email": "person@example.net", "count": float64(2)}, security.User(9))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +116,7 @@ func TestRendererUsesTypedOptionalValuesAndEscapesHTML(t *testing.T) {
 		t.Fatalf("warnings = %#v", result.Warnings)
 	}
 
-	missing, err := renderer.Render(context.Background(), mailTemplate(), map[string]any{"email": "person@example.net"})
+	missing, err := renderer.Render(context.Background(), mailTemplate(), map[string]any{"email": "person@example.net"}, security.User(9))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +142,7 @@ func TestRendererRejectsHeadersRecipientsAndSenderSpoofing(t *testing.T) {
 	} {
 		item := template
 		test.mutate(&item)
-		_, err := renderer.Render(context.Background(), item, test.values)
+		_, err := renderer.Render(context.Background(), item, test.values, security.User(9))
 		if !errors.Is(err, test.target) {
 			t.Fatalf("%s error = %v", test.name, err)
 		}
@@ -147,7 +154,7 @@ func TestRendererDefaultsSenderPolicyToCurrentSiteDomain(t *testing.T) {
 	renderer, _ := testRenderer(t, SenderPolicy{})
 	template := mailTemplate()
 	template.From.Email = "sender@other.test"
-	_, err := renderer.Render(context.Background(), template, map[string]any{"email": "person@example.net"})
+	_, err := renderer.Render(context.Background(), template, map[string]any{"email": "person@example.net"}, security.User(9))
 	if !errors.Is(err, ErrSenderNotAllowed) {
 		t.Fatalf("sender outside current site domain error = %v", err)
 	}
@@ -163,14 +170,14 @@ func TestRendererResolvesStaticAndVariableAttachments(t *testing.T) {
 		{Source: AttachmentStatic, FileID: &staticID, FilenameTemplate: "static-{{data.name}}.pdf"},
 		{Source: AttachmentVariable, Variable: "data.invoice"},
 	}
-	result, err := renderer.Render(context.Background(), template, map[string]any{"name": "Alice", "email": "a@example.net", "invoice": float64(7)})
+	result, err := renderer.Render(context.Background(), template, map[string]any{"name": "Alice", "email": "a@example.net", "invoice": float64(7)}, security.User(9))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.TextBody != "Invoice https://example.com/files/7" || len(result.Attachments) != 2 || result.Attachments[0].Filename != "static-Alice.pdf" || result.Attachments[1].FileID != 7 {
+	if result.TextBody != "Invoice https://example.com/files/7" || len(result.Attachments) != 2 || result.Attachments[0].Filename != "static-Alice.pdf" || result.Attachments[1].FileID == nil || *result.Attachments[1].FileID != 7 {
 		t.Fatalf("rendered attachments = %#v", result)
 	}
-	missing, err := renderer.Render(context.Background(), template, map[string]any{"email": "a@example.net"})
+	missing, err := renderer.Render(context.Background(), template, map[string]any{"email": "a@example.net"}, security.User(9))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,9 +186,98 @@ func TestRendererResolvesStaticAndVariableAttachments(t *testing.T) {
 	}
 }
 
+func TestRendererPreservesRequiredFieldsAndUsesBackendSiteVariables(t *testing.T) {
+	t.Parallel()
+	required := true
+	params := []field.Definition{{Key: "company", Type: field.TypeString, Label: "Company"}}
+	files := &testFiles{items: map[file.ID]file.File{}, urls: map[file.ID]string{}}
+	renderer, err := NewRenderer(standardFields(), files, site.Site{ID: 5, ProfileCode: "dev", Domain: "example.com", Locale: "ru-RU", IsPublic: true, Settings: map[string]any{"company": "ACME"}}, params, RendererConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := mailTemplate()
+	template.To = []AddressTemplate{{Email: "person@example.net"}}
+	template.Subject = "{{site.id}} {{site.profile_code}} {{site.domain}} {{site.locale}} {{site.is_public}} {{site.field.company}} {{data.name}}"
+	template.HTMLBody = "<p>Body</p>"
+	template.Variables = []field.Definition{{Key: "name", Type: field.TypeString, Label: "Name", Required: &required}}
+	if _, err := renderer.Render(context.Background(), template, nil, security.User(9)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("missing required value = %v", err)
+	}
+	result, err := renderer.Render(context.Background(), template, map[string]any{"name": "Alice"}, security.User(9))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Subject != "5 dev example.com ru-RU true ACME Alice" {
+		t.Fatalf("site variables = %q", result.Subject)
+	}
+	if _, err := renderer.Render(context.Background(), template, map[string]any{
+		"name": "Alice",
+		"site": map[string]any{"domain": "attacker.example"},
+	}, security.User(9)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("client-supplied site variables = %v", err)
+	}
+	template.Subject = "{{site.secret}}"
+	if err := renderer.ValidateTemplate(template); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unknown site variable = %v", err)
+	}
+}
+
+func TestRendererRejectsMissingRequiredStringEmailAndFile(t *testing.T) {
+	t.Parallel()
+	required := true
+	renderer, _ := testRenderer(t, SenderPolicy{})
+	for _, code := range []field.TypeCode{field.TypeString, field.TypeEmail, field.TypeFile} {
+		template := mailTemplate()
+		template.To = []AddressTemplate{{Email: "person@example.net"}}
+		template.HTMLBody = "<p>Body</p>"
+		definition := field.Definition{Key: "required_value", Type: code, Label: "Required", Required: &required}
+		if code == field.TypeFile {
+			definition.Options = field.FileOptions{}
+		}
+		template.Variables = []field.Definition{definition}
+		if _, err := renderer.Render(context.Background(), template, nil, security.User(9)); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("missing required %s = %v", code, err)
+		}
+	}
+}
+
+func TestAttachmentAuthorizationDistinguishesEditingManualAndTrustedSiteSources(t *testing.T) {
+	t.Parallel()
+	files := &testFiles{items: map[file.ID]file.File{7: {ID: 7, Name: "contract.pdf", MIMEType: "application/pdf", Size: 3}}, body: map[file.ID]string{7: "pdf"}, urls: map[file.ID]string{}, denyUsers: true}
+	params := []field.Definition{{Key: "contract", Type: field.TypeFile, Label: "Contract", Options: field.FileOptions{}}}
+	renderer, err := NewRenderer(standardFields(), files, site.Site{ID: 5, ProfileCode: "dev", Domain: "example.com", Locale: "ru-RU", Settings: map[string]any{"contract": int64(7)}}, params, RendererConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staticID := file.ID(7)
+	staticTemplate := mailTemplate()
+	staticTemplate.Attachments = []AttachmentTemplate{{Source: AttachmentStatic, FileID: &staticID}}
+	if err := renderer.ValidateTemplateFiles(context.Background(), security.User(9), staticTemplate); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unauthorized static edit = %v", err)
+	}
+	manual := mailTemplate()
+	manual.Attachments = []AttachmentTemplate{{Source: AttachmentVariable, Variable: "data.invoice"}}
+	if _, err := renderer.Render(context.Background(), manual, map[string]any{"email": "a@example.net", "invoice": float64(7)}, security.User(9)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unauthorized manual file = %v", err)
+	}
+	siteTemplate := mailTemplate()
+	siteTemplate.Attachments = []AttachmentTemplate{{Source: AttachmentSite, Variable: "site.field.contract"}}
+	result, err := renderer.Render(context.Background(), siteTemplate, map[string]any{"email": "a@example.net"}, security.User(9))
+	if err != nil || len(result.Attachments) != 1 || result.Attachments[0].FileID == nil || *result.Attachments[0].FileID != 7 {
+		t.Fatalf("trusted site attachment = %#v, %v", result.Attachments, err)
+	}
+}
+
 type allowAuthorizer struct{}
 
 func (allowAuthorizer) Check(context.Context, security.Actor, permission.Code) error { return nil }
+
+type testUsers struct{}
+
+func (testUsers) Current(_ context.Context, actor security.Actor) (coreuser.User, error) {
+	id, _ := actor.UserID()
+	return coreuser.User{ID: id, Login: "editor", Name: "Editor"}, nil
+}
 
 type memoryRepository struct {
 	template  Template
@@ -190,6 +286,7 @@ type memoryRepository struct {
 	attempts  []DeliveryAttempt
 	claimable bool
 	finishErr error
+	createErr error
 }
 
 func (r *memoryRepository) ListTemplates(context.Context, site.ID, PageQuery) (TemplatePage, error) {
@@ -224,6 +321,9 @@ func (r *memoryRepository) UpdateTemplate(_ context.Context, item Template) (Tem
 }
 func (r *memoryRepository) DeleteTemplate(context.Context, site.ID, TemplateID) error { return nil }
 func (r *memoryRepository) CreateMessageAndJob(_ context.Context, item Message, queued eventbus.Message) (Message, error) {
+	if r.createErr != nil {
+		return Message{}, r.createErr
+	}
 	item.ID = 11
 	var envelope job.Envelope
 	if err := json.Unmarshal(queued.Body, &envelope); err != nil {
@@ -236,14 +336,14 @@ func (r *memoryRepository) CreateMessageAndJob(_ context.Context, item Message, 
 	r.message, r.queued, r.claimable = item, queued, true
 	return item, nil
 }
-func (r *memoryRepository) ListMessages(context.Context, site.ID, PageQuery) (MessagePage, error) {
-	return MessagePage{Items: []Message{r.message}, Total: 1}, nil
+func (r *memoryRepository) ListMessages(context.Context, site.ID, MessageQuery) (MessageSummaryPage, error) {
+	return MessageSummaryPage{Items: []MessageSummary{{ID: r.message.ID}}, Total: 1}, nil
 }
 func (r *memoryRepository) MessageDetail(context.Context, site.ID, MessageID) (MessageDetail, error) {
 	return MessageDetail{Message: r.message, Attempts: r.attempts}, nil
 }
 func (r *memoryRepository) DeleteMessage(context.Context, site.ID, MessageID) error { return nil }
-func (r *memoryRepository) ClaimMessage(_ context.Context, siteID site.ID, id MessageID) (Message, DeliveryAttempt, bool, error) {
+func (r *memoryRepository) ClaimMessage(_ context.Context, siteID site.ID, id MessageID, _ int) (Message, DeliveryAttempt, bool, error) {
 	if !r.claimable || r.message.ID != id || r.message.SiteID != siteID || r.message.Status == StatusAccepted {
 		return Message{}, DeliveryAttempt{}, false, nil
 	}
@@ -253,21 +353,26 @@ func (r *memoryRepository) ClaimMessage(_ context.Context, siteID site.ID, id Me
 	r.attempts = append(r.attempts, attempt)
 	return r.message, attempt, true, nil
 }
-func (r *memoryRepository) FinishAttempt(_ context.Context, _ MessageID, number int, result DeliveryResult, sendErr error) error {
+func (r *memoryRepository) FinishAttempt(_ context.Context, _ MessageID, number int, result DeliveryResult, failure *DeliveryError, terminal bool) error {
 	if r.finishErr != nil {
 		return r.finishErr
 	}
 	item := &r.attempts[number-1]
 	item.Driver, item.ResponseCode = result.Driver, result.ResponseCode
-	if sendErr != nil {
-		item.Status, item.SafeError, r.message.Status = AttemptFailed, sendErr.Error(), StatusFailed
-		r.claimable = true
+	if failure != nil {
+		item.Status, item.SafeError, r.message.Status = AttemptFailed, failure.Error(), StatusFailed
+		if failure.Retryable && !terminal {
+			r.message.Status, r.claimable = StatusRetryable, true
+		}
 	} else {
 		item.Status, r.message.Status = AttemptAccepted, StatusAccepted
 	}
 	return nil
 }
 func (r *memoryRepository) Cleanup(context.Context, time.Duration, int) (int64, error) { return 0, nil }
+func (r *memoryRepository) ActiveSpoolKeys(context.Context, []string) (map[string]struct{}, error) {
+	return map[string]struct{}{}, nil
+}
 
 func TestPreviewAndQueueShareRendererAndPersistImmutableSnapshot(t *testing.T) {
 	t.Parallel()
@@ -275,7 +380,7 @@ func TestPreviewAndQueueShareRendererAndPersistImmutableSnapshot(t *testing.T) {
 	repository := &memoryRepository{template: mailTemplate()}
 	repository.template.ID = 3
 	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
-	service, err := NewService(5, repository, renderer, allowAuthorizer{}, transports, "default", "example.com")
+	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,15 +389,19 @@ func TestPreviewAndQueueShareRendererAndPersistImmutableSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	message, err := service.QueueManual(context.Background(), security.User(9), ManualSendInput{TemplateID: 3, Values: values, ActorName: "Editor"})
+	repository.template.Subject = "Updated {{data.name}}"
+	message, err := service.QueueManual(context.Background(), security.User(9), ManualSendInput{TemplateID: 3, Values: values})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if message.Subject != preview.Subject || message.HTMLBody != preview.HTMLBody || message.Status != StatusQueued || message.RequestedBy == nil || *message.RequestedBy != 9 || !strings.HasPrefix(message.RFCMessageID, "<") {
+	if message.Subject != "Updated Alice" || message.Subject == preview.Subject || message.HTMLBody != preview.HTMLBody || message.Status != StatusQueued || message.RequestedBy == nil || *message.RequestedBy != 9 || !strings.HasPrefix(message.RFCMessageID, "<") {
 		t.Fatalf("queued = %#v preview=%#v", message, preview)
 	}
+	if message.RequestedByName != "Editor" {
+		t.Fatalf("requester name = %q", message.RequestedByName)
+	}
 	repository.template.Subject = "Changed"
-	if repository.message.Subject != preview.Subject {
+	if repository.message.Subject != message.Subject {
 		t.Fatal("queued snapshot changed with template")
 	}
 	var envelope job.Envelope
@@ -314,31 +423,16 @@ func TestPreviewAndQueueShareRendererAndPersistImmutableSnapshot(t *testing.T) {
 	}
 }
 
-type emptySiteCatalog struct{}
-
-func (emptySiteCatalog) RuntimeByID(site.ID) (*site.Runtime, bool) { return nil, false }
-
-type sitePolicy struct {
-	allowed site.ID
-	seen    site.ID
-}
-
-func (p *sitePolicy) Check(_ context.Context, _ security.Actor, siteID site.ID, _ group.SiteAccessAction) error {
-	p.seen = siteID
-	if siteID != p.allowed {
-		return security.ErrForbidden
-	}
-	return nil
-}
-
-func TestMailHTTPRequiresAuthenticationAndChecksSiteAccessBeforeRuntimeResolution(t *testing.T) {
+func TestMailHTTPRequiresAuthentication(t *testing.T) {
 	t.Parallel()
-	policy := &sitePolicy{allowed: 5}
-	management, err := NewManagement(emptySiteCatalog{}, policy)
+	renderer, _ := testRenderer(t, SenderPolicy{})
+	repository := &memoryRepository{template: mailTemplate()}
+	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
+	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHTTPHandler(management)
+	handler, err := NewHTTPHandler(service)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,13 +447,6 @@ func TestMailHTTPRequiresAuthenticationAndChecksSiteAccessBeforeRuntimeResolutio
 		t.Fatalf("unauthenticated status = %d", unauthenticated.Code)
 	}
 
-	request := httptest.NewRequest(http.MethodGet, "/api/sites/8/mail/messages", nil)
-	request = request.WithContext(httptransport.WithActor(request.Context(), security.User(9)))
-	forbidden := httptest.NewRecorder()
-	router.ServeHTTP(forbidden, request)
-	if forbidden.Code != http.StatusForbidden || policy.seen != 8 || !strings.Contains(forbidden.Body.String(), `"code":"forbidden"`) {
-		t.Fatalf("forbidden response = %d %s, site=%d", forbidden.Code, forbidden.Body.String(), policy.seen)
-	}
 }
 
 func TestTemplateResponseUsesStableLowercaseChoiceDTO(t *testing.T) {
@@ -380,8 +467,9 @@ func TestTemplateResponseUsesStableLowercaseChoiceDTO(t *testing.T) {
 }
 
 type countingTransport struct {
-	count   int
-	failure error
+	count          int
+	failure        error
+	attachmentBody string
 }
 
 func (*countingTransport) Driver() string { return "test" }
@@ -389,20 +477,35 @@ func (t *countingTransport) Send(_ context.Context, delivery Delivery) (Delivery
 	t.count++
 	if len(delivery.Attachments) > 0 {
 		data, _ := io.ReadAll(delivery.Attachments[0].Body)
-		if string(data) != "pdf" {
+		expected := t.attachmentBody
+		if expected == "" {
+			expected = "pdf"
+		}
+		if string(data) != expected {
 			return DeliveryResult{}, errors.New("wrong attachment")
 		}
 	}
 	return DeliveryResult{Driver: "test", ResponseCode: "250"}, t.failure
 }
 
+func queuedDeliveryMessage(id MessageID) Message {
+	return Message{
+		ID: id, SiteID: 5, Transport: "default", RFCMessageID: fmt.Sprintf("<message-%d@example.com>", id),
+		From: Address{Email: "noreply@example.com"}, To: []Address{{Email: "person@example.net"}},
+		ContentType: ContentText, TextBody: "Body", Status: StatusQueued, RequestedAt: time.Now().UTC(),
+	}
+}
+
 func TestWorkerRecordsAttemptAndSkipsDuplicateTerminalDelivery(t *testing.T) {
 	t.Parallel()
 	_, files := testRenderer(t, SenderPolicy{})
-	repository := &memoryRepository{message: Message{ID: 11, SiteID: 5, Transport: "default", Status: StatusQueued, Attachments: []Attachment{{FileID: 7}}}, claimable: true}
+	fileID := file.ID(7)
+	message := queuedDeliveryMessage(11)
+	message.Attachments = []Attachment{{Source: AttachmentStatic, FileID: &fileID, Filename: "invoice.pdf", MIMEType: "application/pdf", Size: 3}}
+	repository := &memoryRepository{message: message, claimable: true}
 	transport := &countingTransport{}
 	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": transport})
-	worker, _ := NewWorker(5, repository, files, registry)
+	worker, _ := NewWorker(5, repository, files, nil, registry, 5, nil)
 	payload, _ := json.Marshal(struct {
 		MessageID MessageID `json:"message_id"`
 	}{11})
@@ -421,10 +524,10 @@ func TestWorkerRecordsAttemptAndSkipsDuplicateTerminalDelivery(t *testing.T) {
 func TestWorkerRecordsFailureThenRetryAndRejectsWrongSiteScope(t *testing.T) {
 	t.Parallel()
 	_, files := testRenderer(t, SenderPolicy{})
-	repository := &memoryRepository{message: Message{ID: 12, SiteID: 5, Transport: "default", Status: StatusQueued}, claimable: true}
-	transport := &countingTransport{failure: errors.New("temporary failure")}
+	repository := &memoryRepository{message: queuedDeliveryMessage(12), claimable: true}
+	transport := &countingTransport{failure: &DeliveryError{Retryable: true, Code: "temporary", Err: errors.New("temporary failure")}}
 	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": transport})
-	worker, _ := NewWorker(5, repository, files, registry)
+	worker, _ := NewWorker(5, repository, files, nil, registry, 5, nil)
 	payload, _ := json.Marshal(struct {
 		MessageID MessageID `json:"message_id"`
 	}{12})
@@ -434,12 +537,281 @@ func TestWorkerRecordsFailureThenRetryAndRejectsWrongSiteScope(t *testing.T) {
 	}
 	item := wrongScope
 	item.ScopeID = "5"
-	if err := worker.Handle(context.Background(), item); err == nil || repository.message.Status != StatusFailed || len(repository.attempts) != 1 || repository.attempts[0].Status != AttemptFailed {
+	if err := worker.Handle(context.Background(), item); err == nil || repository.message.Status != StatusRetryable || len(repository.attempts) != 1 || repository.attempts[0].Status != AttemptFailed {
 		t.Fatalf("failed delivery = %v, message=%#v attempts=%#v", err, repository.message, repository.attempts)
 	}
 	transport.failure = nil
 	if err := worker.Handle(context.Background(), item); err != nil || repository.message.Status != StatusAccepted || len(repository.attempts) != 2 || repository.attempts[1].Status != AttemptAccepted {
 		t.Fatalf("retry delivery = %v, message=%#v attempts=%#v", err, repository.message, repository.attempts)
+	}
+}
+
+func TestWorkerMakesRetryableFailureTerminalAtMaximumAttempts(t *testing.T) {
+	t.Parallel()
+	_, files := testRenderer(t, SenderPolicy{})
+	repository := &memoryRepository{message: queuedDeliveryMessage(13), claimable: true}
+	transport := &countingTransport{failure: &DeliveryError{Retryable: true, Code: "421", Err: errors.New("temporary")}}
+	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": transport})
+	worker, _ := NewWorker(5, repository, files, nil, registry, 1, nil)
+	payload, _ := json.Marshal(struct {
+		MessageID MessageID `json:"message_id"`
+	}{13})
+	item := job.Envelope{ID: "01H00000000000000000000009", Name: SendJobName, ScopeID: "5", SchemaVersion: 1, Payload: payload}
+	if err := worker.Handle(context.Background(), item); err != nil || repository.message.Status != StatusFailed {
+		t.Fatalf("maximum attempt = %v, %s", err, repository.message.Status)
+	}
+	if err := worker.Handle(context.Background(), item); err != nil || transport.count != 1 {
+		t.Fatalf("terminal duplicate = %v, count=%d", err, transport.count)
+	}
+}
+
+func TestWorkerTerminalizesMalformedImmutableMessageWithoutSending(t *testing.T) {
+	t.Parallel()
+	_, files := testRenderer(t, SenderPolicy{})
+	message := queuedDeliveryMessage(14)
+	message.Subject = "safe\r\nBcc: attacker@example.com"
+	repository := &memoryRepository{message: message, claimable: true}
+	transport := &countingTransport{}
+	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": transport})
+	worker, _ := NewWorker(5, repository, files, nil, registry, 5, nil)
+	payload, _ := json.Marshal(struct {
+		MessageID MessageID `json:"message_id"`
+	}{14})
+	item := job.Envelope{ID: "01H00000000000000000000010", Name: SendJobName, ScopeID: "5", SchemaVersion: 1, Payload: payload}
+	if err := worker.Handle(context.Background(), item); err != nil || repository.message.Status != StatusFailed || transport.count != 0 {
+		t.Fatalf("malformed immutable message = %v, status=%s, sends=%d", err, repository.message.Status, transport.count)
+	}
+}
+
+type memorySpoolDisk struct{ objects map[string][]byte }
+
+func (d *memorySpoolDisk) Code() filesystem.Code             { return "spool-test" }
+func (d *memorySpoolDisk) Visibility() filesystem.Visibility { return filesystem.VisibilityPrivate }
+func (d *memorySpoolDisk) Ping(context.Context) error        { return nil }
+func (d *memorySpoolDisk) PutNew(_ context.Context, key string, body io.Reader, _ string) error {
+	if d.objects == nil {
+		d.objects = map[string][]byte{}
+	}
+	if _, exists := d.objects[key]; exists {
+		return filesystem.ErrConflict
+	}
+	value, err := io.ReadAll(body)
+	if err == nil {
+		d.objects[key] = value
+	}
+	return err
+}
+func (d *memorySpoolDisk) Open(_ context.Context, key string) (io.ReadCloser, error) {
+	value, exists := d.objects[key]
+	if !exists {
+		return nil, filesystem.ErrNotFound
+	}
+	return io.NopCloser(bytes.NewReader(value)), nil
+}
+func (d *memorySpoolDisk) Delete(_ context.Context, key string) error {
+	if _, exists := d.objects[key]; !exists {
+		return filesystem.ErrNotFound
+	}
+	delete(d.objects, key)
+	return nil
+}
+func (d *memorySpoolDisk) URL(context.Context, filesystem.Reference) (string, error) {
+	return "", filesystem.ErrUnauthorized
+}
+func (d *memorySpoolDisk) TemporaryURL(context.Context, filesystem.Reference, time.Time) (string, error) {
+	return "", filesystem.ErrUnauthorized
+}
+func (d *memorySpoolDisk) Close() error { return nil }
+func (d *memorySpoolDisk) WalkPrefix(_ context.Context, prefix string, visit func(string) error) error {
+	for key := range d.objects {
+		if strings.HasPrefix(key, prefix) {
+			if err := visit(key); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func TestTransientSpoolSurvivesRetryAndIsDeletedOnTerminalSuccess(t *testing.T) {
+	t.Parallel()
+	disk := &memorySpoolDisk{objects: map[string][]byte{}}
+	spool, err := NewAttachmentSpool(disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderer, files := testRenderer(t, SenderPolicy{})
+	repository := &memoryRepository{template: mailTemplate()}
+	repository.template.ID = 3
+	transport := &countingTransport{failure: &DeliveryError{Retryable: true, Code: "421", Err: errors.New("temporary")}, attachmentBody: "resume"}
+	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": transport})
+	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, registry, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := service.QueueByCode(context.Background(), QueueInput{TemplateCode: "welcome", Values: map[string]any{"email": "a@example.net"}, Attachments: []TransientAttachment{{Filename: "resume.pdf", MIMEType: "application/pdf", Size: 6, Body: strings.NewReader("resume")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(disk.objects) != 1 || len(queued.Attachments) != 1 || queued.Attachments[0].Source != AttachmentTransient {
+		t.Fatalf("queued spool = %#v, objects=%d", queued.Attachments, len(disk.objects))
+	}
+	publicJSON, _ := json.Marshal(queued)
+	if strings.Contains(string(publicJSON), "mail-spool") {
+		t.Fatalf("spool key leaked: %s", publicJSON)
+	}
+	worker, err := NewWorker(5, repository, files, spool, registry, 5, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope job.Envelope
+	if err := json.Unmarshal(repository.queued.Body, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Handle(context.Background(), envelope); err == nil || len(disk.objects) != 1 || repository.message.Status != StatusRetryable {
+		t.Fatalf("retry state = %v, objects=%d, status=%s", err, len(disk.objects), repository.message.Status)
+	}
+	transport.failure = nil
+	if err := worker.Handle(context.Background(), envelope); err != nil || len(disk.objects) != 0 || repository.message.Status != StatusAccepted {
+		t.Fatalf("terminal state = %v, objects=%d, status=%s", err, len(disk.objects), repository.message.Status)
+	}
+}
+
+func TestQueueFailureBestEffortDeletesNewTransientSpoolObjects(t *testing.T) {
+	t.Parallel()
+	disk := &memorySpoolDisk{objects: map[string][]byte{}}
+	spool, err := NewAttachmentSpool(disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderer, _ := testRenderer(t, SenderPolicy{})
+	repository := &memoryRepository{template: mailTemplate(), createErr: errors.New("database unavailable")}
+	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
+	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, registry, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.QueueByCode(context.Background(), QueueInput{
+		TemplateCode: "welcome",
+		Values:       map[string]any{"email": "a@example.net"},
+		Attachments: []TransientAttachment{{
+			Filename: "resume.pdf", MIMEType: "application/pdf", Size: 6, Body: strings.NewReader("resume"),
+		}},
+	})
+	if err == nil || len(disk.objects) != 0 {
+		t.Fatalf("queue failure = %v, remaining spool objects=%d", err, len(disk.objects))
+	}
+}
+
+func TestTerminalDeliveryFailureDeletesTransientSpoolObjects(t *testing.T) {
+	t.Parallel()
+	disk := &memorySpoolDisk{objects: map[string][]byte{}}
+	spool, _ := NewAttachmentSpool(disk)
+	renderer, files := testRenderer(t, SenderPolicy{})
+	repository := &memoryRepository{template: mailTemplate()}
+	transport := &countingTransport{failure: &DeliveryError{Code: "550", Err: errors.New("rejected")}}
+	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": transport})
+	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, registry, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	_, err := service.QueueByCode(context.Background(), QueueInput{
+		TemplateCode: "welcome",
+		Values:       map[string]any{"email": "a@example.net"},
+		Attachments: []TransientAttachment{{
+			Filename: "resume.pdf", MIMEType: "application/pdf", Size: 6, Body: strings.NewReader("resume"),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope job.Envelope
+	if err := json.Unmarshal(repository.queued.Body, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	worker, _ := NewWorker(5, repository, files, spool, registry, 5, nil)
+	if err := worker.Handle(context.Background(), envelope); err != nil || repository.message.Status != StatusFailed || len(disk.objects) != 0 {
+		t.Fatalf("terminal failure = %v, status=%s, spool objects=%d", err, repository.message.Status, len(disk.objects))
+	}
+}
+
+func TestSpoolCleanupDeletesOnlyOldInactiveObjects(t *testing.T) {
+	t.Parallel()
+	activeKey := spoolPrefix + "1-00000000-0000-4000-8000-000000000001"
+	orphanKey := spoolPrefix + "2-00000000-0000-4000-8000-000000000002"
+	newKey := spoolPrefix + strconv.FormatInt(time.Now().UTC().Unix(), 10) + "-00000000-0000-4000-8000-000000000003"
+	disk := &memorySpoolDisk{objects: map[string][]byte{
+		activeKey: []byte("active"),
+		orphanKey: []byte("orphan"),
+		newKey:    []byte("new"),
+	}}
+	spool, _ := NewAttachmentSpool(disk)
+	deleted, err := spool.Cleanup(context.Background(), time.Now().Add(-time.Hour), 10, func(_ context.Context, _ []string) (map[string]struct{}, error) {
+		return map[string]struct{}{activeKey: {}}, nil
+	})
+	if err != nil || deleted != 1 {
+		t.Fatalf("cleanup = %d, %v", deleted, err)
+	}
+	if _, exists := disk.objects[activeKey]; !exists {
+		t.Fatal("active spool attachment deleted")
+	}
+	if _, exists := disk.objects[orphanKey]; exists {
+		t.Fatal("orphan spool attachment retained")
+	}
+}
+
+func TestSpoolRejectsInjectedOrMalformedInternalKeys(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{
+		"../secret",
+		spoolPrefix + "secret",
+		spoolPrefix + "1-../../secret",
+		spoolPrefix + "1-not-a-message-id",
+	} {
+		if validSpoolKey(key) {
+			t.Fatalf("unsafe spool key %q accepted", key)
+		}
+	}
+}
+
+func TestDeliveryErrorClassificationUsesProtocolSemantics(t *testing.T) {
+	t.Parallel()
+	if failure := classifyDeliveryError(&textproto.Error{Code: 421, Msg: "later"}); !failure.Retryable || failure.Code != "421" {
+		t.Fatalf("SMTP 421 = %#v", failure)
+	}
+	if failure := classifyDeliveryError(&textproto.Error{Code: 550, Msg: "rejected"}); failure.Retryable || failure.Code != "550" {
+		t.Fatalf("SMTP 550 = %#v", failure)
+	}
+}
+
+func TestConfigRejectsInvalidDeliveryAndSpoolLimits(t *testing.T) {
+	t.Parallel()
+	base := Config{SendMaxAttempts: 5, MaxRecipients: 100, MaxMessageSize: 25 << 20, MaxAttachmentSize: 20 << 20}
+	for name, mutate := range map[string]func(*Config){
+		"attempts":        func(config *Config) { config.SendMaxAttempts = 0 },
+		"recipients":      func(config *Config) { config.MaxRecipients = 0 },
+		"message size":    func(config *Config) { config.MaxMessageSize = -1 },
+		"attachment size": func(config *Config) { config.MaxAttachmentSize = 0 },
+		"spool TTL": func(config *Config) {
+			config.SpoolEnabled = true
+			config.SpoolTTL = 0
+			config.SpoolCleanupInterval = time.Hour
+			config.SpoolCleanupBatch = 10
+		},
+	} {
+		config := base
+		mutate(&config)
+		if _, err := normalizeConfig(config); err == nil {
+			t.Fatalf("%s configuration accepted", name)
+		}
+	}
+}
+
+func TestServiceRejectsUnsafeMessageIDDomain(t *testing.T) {
+	t.Parallel()
+	renderer, _ := testRenderer(t, SenderPolicy{})
+	repository := &memoryRepository{template: mailTemplate()}
+	registry, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
+	_, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, registry, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com\r\nBcc: attacker@example.com")
+	if err == nil {
+		t.Fatal("unsafe Message-ID domain accepted")
 	}
 }
 

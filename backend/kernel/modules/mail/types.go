@@ -2,6 +2,7 @@ package mail
 
 import (
 	"errors"
+	"io"
 	"time"
 
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
@@ -24,13 +25,16 @@ const (
 	ContentText ContentType = "text"
 	ContentHTML ContentType = "html"
 
-	AttachmentStatic   AttachmentSource = "static"
-	AttachmentVariable AttachmentSource = "variable"
+	AttachmentStatic    AttachmentSource = "static"
+	AttachmentVariable  AttachmentSource = "variable"
+	AttachmentSite      AttachmentSource = "site"
+	AttachmentTransient AttachmentSource = "transient"
 
-	StatusQueued   MessageStatus = "queued"
-	StatusSending  MessageStatus = "sending"
-	StatusAccepted MessageStatus = "accepted"
-	StatusFailed   MessageStatus = "failed"
+	StatusQueued    MessageStatus = "queued"
+	StatusSending   MessageStatus = "sending"
+	StatusRetryable MessageStatus = "retryable"
+	StatusAccepted  MessageStatus = "accepted"
+	StatusFailed    MessageStatus = "failed"
 
 	OriginManual    MessageOrigin = "manual"
 	OriginAutomatic MessageOrigin = "automatic"
@@ -92,11 +96,17 @@ type Address struct {
 }
 
 type Attachment struct {
-	FileID   file.ID `json:"file_id"`
-	Filename string  `json:"filename"`
-	MIMEType string  `json:"mime_type"`
-	Size     int64   `json:"size"`
-	Checksum string  `json:"checksum_sha256"`
+	Source   AttachmentSource `json:"source"`
+	FileID   *file.ID         `json:"file_id,omitempty"`
+	Filename string           `json:"filename"`
+	MIMEType string           `json:"mime_type"`
+	Size     int64            `json:"size"`
+	Checksum string           `json:"checksum_sha256"`
+	spoolKey string
+}
+
+func newStoredAttachment(source AttachmentSource, fileID *file.ID, spoolKey, filename, mimeType string, size int64, checksum string) Attachment {
+	return Attachment{Source: source, FileID: fileID, spoolKey: spoolKey, Filename: filename, MIMEType: mimeType, Size: size, Checksum: checksum}
 }
 
 type Warning struct {
@@ -122,6 +132,8 @@ type RenderedMessage struct {
 type Origin struct {
 	Kind          MessageOrigin
 	Source        string
+	Event         string
+	Reference     string
 	RequestedBy   *security.UserID
 	RequestedName string
 }
@@ -147,6 +159,8 @@ type Message struct {
 	Status          MessageStatus    `json:"status"`
 	Origin          MessageOrigin    `json:"origin"`
 	OriginSource    string           `json:"origin_source"`
+	OriginEvent     string           `json:"origin_event"`
+	OriginReference string           `json:"origin_reference"`
 	RequestedAt     time.Time        `json:"requested_at"`
 	RequestedBy     *security.UserID `json:"requested_by,omitempty"`
 	RequestedByName string           `json:"requested_by_name"`
@@ -182,8 +196,36 @@ type TemplatePage struct {
 	Total int
 }
 
-type MessagePage struct {
-	Items []Message
+type MessageQuery struct {
+	PageQuery
+	Status       MessageStatus
+	TemplateCode string
+	DateFrom     *time.Time
+	DateTo       *time.Time
+	Recipient    string
+}
+
+type MessageSummary struct {
+	ID              MessageID        `json:"id"`
+	TemplateCode    string           `json:"template_code"`
+	TemplateName    string           `json:"template_name"`
+	Subject         string           `json:"subject"`
+	Recipients      []string         `json:"recipients"`
+	Status          MessageStatus    `json:"status"`
+	Origin          MessageOrigin    `json:"origin"`
+	OriginSource    string           `json:"origin_source"`
+	OriginEvent     string           `json:"origin_event"`
+	OriginReference string           `json:"origin_reference"`
+	RequestedAt     time.Time        `json:"requested_at"`
+	RequestedBy     *security.UserID `json:"requested_by,omitempty"`
+	RequestedByName string           `json:"requested_by_name"`
+	AcceptedAt      *time.Time       `json:"accepted_at,omitempty"`
+	AttemptCount    int              `json:"attempt_count"`
+	LatestAttempt   *DeliveryAttempt `json:"latest_attempt,omitempty"`
+}
+
+type MessageSummaryPage struct {
+	Items []MessageSummary
 	Total int
 }
 
@@ -195,17 +237,50 @@ type MessageDetail struct {
 type QueueInput struct {
 	TemplateCode string
 	Values       map[string]any
+	Attachments  []TransientAttachment
 	Origin       Origin
+}
+
+type TransientAttachment struct {
+	Filename string
+	MIMEType string
+	Size     int64
+	Body     io.Reader
 }
 
 type ManualSendInput struct {
 	TemplateID TemplateID
 	Values     map[string]any
-	ActorName  string
 }
 
 type DeliveryResult struct {
 	Driver          string
 	RemoteMessageID string
 	ResponseCode    string
+}
+
+type Limits struct {
+	MaxRecipients     int
+	MaxMessageSize    int64
+	MaxAttachmentSize int64
+}
+
+type DeliveryError struct {
+	Retryable bool
+	Code      string
+	Err       error
+}
+
+func (e *DeliveryError) Error() string {
+	if e == nil || e.Err == nil {
+		return "mail delivery failed"
+	}
+	return e.Err.Error()
+}
+
+func (e *DeliveryError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }

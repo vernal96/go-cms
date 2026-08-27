@@ -20,7 +20,6 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
-	mailmodule "github.com/vernal96/go-cms/kernel/modules/mail"
 	"github.com/vernal96/go-cms/kernel/outbox"
 )
 
@@ -165,11 +164,6 @@ func (a *App) boot(ctx context.Context) error {
 			return err
 		}
 	}
-	mailManagement, err := mailmodule.NewManagement(catalog, siteAccessPolicy)
-	if err != nil {
-		return err
-	}
-
 	cmsSites, err := coremanagement.NewSites(coremanagement.SiteDependencies{
 		Profiles:         a.definition.Profiles,
 		ProfileSource:    profileResolver(profileBlueprints),
@@ -227,7 +221,7 @@ func (a *App) boot(ctx context.Context) error {
 	a.cmsResources = cmsResources
 	a.cmsFiles = cmsFiles
 	a.adminManagement = adminManagement
-	a.mailManagement = mailManagement
+	a.siteAccessPolicy = siteAccessPolicy
 	jobRunner, err := jobRunnerFromProfiles(a.definition.Profiles, catalog)
 	if err != nil {
 		return err

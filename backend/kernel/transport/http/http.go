@@ -2,7 +2,9 @@ package httptransport
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"regexp"
 
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -91,6 +93,30 @@ func (f BuilderFunc) Build(ctx context.Context) (Contribution, error) {
 // Provider is optional. kernel.ModuleRuntime intentionally does not embed it.
 type Provider interface {
 	HTTP() Builder
+}
+
+// SiteManagementContribution exposes an optional module's site-scoped
+// management API without teaching the application or HTTP server about the
+// concrete module. Path is one normalized URL segment below /sites/{siteID}.
+type SiteManagementContribution struct {
+	Path    string
+	Handler http.Handler
+}
+
+var siteManagementPathPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+
+func (c SiteManagementContribution) Validate() error {
+	if !siteManagementPathPattern.MatchString(c.Path) || c.Handler == nil {
+		return errors.New("site management HTTP contribution is invalid")
+	}
+	return nil
+}
+
+// SiteManagementProvider is optional. Implementations are discovered from the
+// already-published site runtime, so sites only expose APIs for modules that
+// are actually present in their profile.
+type SiteManagementProvider interface {
+	SiteManagementHTTP() SiteManagementContribution
 }
 
 type requestContextKey uint8

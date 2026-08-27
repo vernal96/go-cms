@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -14,20 +16,30 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
+	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
 
 const ModuleCode kernel.ModuleCode = "mail"
 
 type Config struct {
-	DefaultTransport TransportAlias
-	Transports       map[TransportAlias]Transport
-	Renderer         RendererConfig
-	MessageIDDomain  string
-	HistoryRetention time.Duration
-	CleanupInterval  time.Duration
-	CleanupBatchSize int
+	DefaultTransport     TransportAlias
+	Transports           map[TransportAlias]Transport
+	Renderer             RendererConfig
+	MessageIDDomain      string
+	HistoryRetention     time.Duration
+	CleanupInterval      time.Duration
+	CleanupBatchSize     int
+	SendMaxAttempts      int
+	MaxRecipients        int
+	MaxMessageSize       int64
+	MaxAttachmentSize    int64
+	SpoolEnabled         bool
+	SpoolTTL             time.Duration
+	SpoolCleanupInterval time.Duration
+	SpoolCleanupBatch    int
 }
 
 type Database interface {
@@ -39,6 +51,7 @@ type coreDependency interface {
 	kernel.ModuleRuntime
 	Files() file.ManagementService
 	Authorization() security.Authorizer
+	Users() user.Service
 }
 
 type Module struct{}
@@ -60,7 +73,9 @@ func (Module) Registry() kernel.ModuleRegistry {
 
 func (Module) JobNames() []string { return []string{SendJobName} }
 
-func (Module) BackgroundTaskNames() []string { return []string{"mail.history_retention"} }
+func (Module) BackgroundTaskNames() []string {
+	return []string{"mail.history_retention", "mail.spool_cleanup"}
+}
 
 func (Module) Build(_ context.Context, ctx kernel.ModuleContext) (kernel.ModuleRuntime, error) {
 	database, err := kernel.ModuleDatabaseFrom[Database](ctx, "", ModuleCode)
@@ -89,48 +104,107 @@ func (Module) Build(_ context.Context, ctx kernel.ModuleContext) (kernel.ModuleR
 	if _, exists := transports.Transport(config.DefaultTransport); !exists {
 		return nil, fmt.Errorf("default mail transport %q is unavailable", config.DefaultTransport)
 	}
+	var spool *AttachmentSpool
+	if config.SpoolEnabled {
+		disk, exists := ctx.Filesystems().Disk(SpoolFilesystemAlias)
+		if !exists {
+			return nil, errors.New("mail spool filesystem binding is unavailable")
+		}
+		spool, err = NewAttachmentSpool(disk)
+		if err != nil {
+			return nil, err
+		}
+	}
 	siteIDValue, err := strconv.ParseInt(ctx.Scope().SiteID(), 10, 64)
 	if err != nil || siteIDValue <= 0 {
 		return nil, errors.New("mail runtime site scope is invalid")
 	}
-	renderer, err := NewRenderer(ctx.Registry(), coreRuntime.Files(), ctx.Scope(), config.Renderer)
+	scope := ctx.Scope()
+	renderer, err := NewRenderer(ctx.Registry(), coreRuntime.Files(), site.Site{
+		ID: site.ID(siteIDValue), ProfileCode: ctx.Profile().Code, Domain: scope.Domain(),
+		Locale: scope.Locale(), IsPublic: scope.IsPublic(), Settings: scope.Settings(),
+	}, ctx.Profile().Params, config.Renderer)
 	if err != nil {
 		return nil, err
 	}
 	service, err := NewService(
 		site.ID(siteIDValue), database.Mail(), renderer, coreRuntime.Authorization(),
-		transports, config.DefaultTransport, config.MessageIDDomain,
+		coreRuntime.Users(), transports, spool, Limits{MaxRecipients: config.MaxRecipients, MaxMessageSize: config.MaxMessageSize, MaxAttachmentSize: config.MaxAttachmentSize}, config.DefaultTransport, config.MessageIDDomain,
 	)
 	if err != nil {
 		return nil, err
 	}
-	worker, err := NewWorker(site.ID(siteIDValue), database.Mail(), coreRuntime.Files(), transports)
+	service.logger = ctx.Logger()
+	worker, err := NewWorker(site.ID(siteIDValue), database.Mail(), coreRuntime.Files(), spool, transports, config.SendMaxAttempts, ctx.Logger())
 	if err != nil {
 		return nil, err
 	}
-	return &Runtime{service: service, worker: worker, retention: config.HistoryRetention, cleanupInterval: config.CleanupInterval, cleanupBatchSize: config.CleanupBatchSize}, nil
+	handler, err := NewHTTPHandler(service)
+	if err != nil {
+		return nil, err
+	}
+	return &Runtime{service: service, worker: worker, managementHTTP: handler, spool: spool, logger: ctx.Logger(), retention: config.HistoryRetention, cleanupInterval: config.CleanupInterval, cleanupBatchSize: config.CleanupBatchSize, spoolTTL: config.SpoolTTL, spoolCleanupInterval: config.SpoolCleanupInterval, spoolCleanupBatch: config.SpoolCleanupBatch}, nil
 }
 
 type Runtime struct {
-	service          *Service
-	worker           *Worker
-	retention        time.Duration
-	cleanupInterval  time.Duration
-	cleanupBatchSize int
+	service              *Service
+	worker               *Worker
+	managementHTTP       http.Handler
+	spool                *AttachmentSpool
+	logger               *slog.Logger
+	retention            time.Duration
+	cleanupInterval      time.Duration
+	cleanupBatchSize     int
+	spoolTTL             time.Duration
+	spoolCleanupInterval time.Duration
+	spoolCleanupBatch    int
 }
 
 func (*Runtime) ModuleCode() kernel.ModuleCode { return ModuleCode }
 func (r *Runtime) Mail() *Service              { return r.service }
+
+func (r *Runtime) SiteManagementHTTP() httptransport.SiteManagementContribution {
+	return httptransport.SiteManagementContribution{Path: "mail", Handler: r.managementHTTP}
+}
 
 func (r *Runtime) Jobs() []job.Definition {
 	return []job.Definition{{Name: SendJobName, ScopeID: fmt.Sprint(r.service.siteID), Handler: r.worker.Handle}}
 }
 
 func (r *Runtime) BackgroundTasks() []background.Task {
-	if r.retention == 0 {
-		return nil
+	result := make([]background.Task, 0, 2)
+	if r.retention > 0 {
+		result = append(result, background.Task{Name: "mail.history_retention", Run: r.runRetention})
 	}
-	return []background.Task{{Name: "mail.history_retention", Run: r.runRetention}}
+	if r.spool != nil {
+		result = append(result, background.Task{Name: "mail.spool_cleanup", Run: r.runSpoolCleanup})
+	}
+	return result
+}
+
+func (r *Runtime) runSpoolCleanup(ctx context.Context) error {
+	cleanup := func() error {
+		_, err := r.spool.Cleanup(ctx, time.Now().UTC().Add(-r.spoolTTL), r.spoolCleanupBatch, r.service.repository.ActiveSpoolKeys)
+		if err != nil && r.logger != nil {
+			r.logger.ErrorContext(ctx, "mail spool cleanup failed", slog.String("event", "mail.spool.cleanup.failed"), slog.Any("error", err))
+		}
+		return err
+	}
+	if err := cleanup(); err != nil && ctx.Err() == nil {
+		return err
+	}
+	ticker := time.NewTicker(r.spoolCleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if err := cleanup(); err != nil && ctx.Err() == nil {
+				return err
+			}
+		}
+	}
 }
 
 func (r *Runtime) runRetention(ctx context.Context) error {
@@ -179,6 +253,17 @@ func normalizeConfig(config Config) (Config, error) {
 	if config.CleanupBatchSize == 0 {
 		config.CleanupBatchSize = 100
 	}
+	if config.SendMaxAttempts < 1 {
+		return Config{}, errors.New("mail send maximum attempts is invalid")
+	}
+	if config.MaxRecipients < 1 || config.MaxMessageSize < 1 || config.MaxAttachmentSize < 1 {
+		return Config{}, errors.New("mail delivery limits are invalid")
+	}
+	if config.SpoolEnabled {
+		if config.SpoolTTL < time.Minute || config.SpoolCleanupInterval < time.Second || config.SpoolCleanupBatch < 1 {
+			return Config{}, errors.New("mail spool configuration is invalid")
+		}
+	}
 	return config, nil
 }
 
@@ -192,3 +277,4 @@ var _ kernel.ModuleRuntime = (*Runtime)(nil)
 var _ job.Provider = (*Runtime)(nil)
 var _ background.Provider = (*Runtime)(nil)
 var _ adminui.NavigationProvider = (*Runtime)(nil)
+var _ httptransport.SiteManagementProvider = (*Runtime)(nil)

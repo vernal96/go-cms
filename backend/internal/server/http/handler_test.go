@@ -448,6 +448,58 @@ type staticAccessTokens struct {
 	verifyErr error
 }
 
+type siteManagementTestModule struct{}
+type siteManagementTestRuntime struct{}
+
+func (siteManagementTestModule) Code() kernel.ModuleCode { return "site_management_test" }
+func (siteManagementTestModule) Build(context.Context, kernel.ModuleContext) (kernel.ModuleRuntime, error) {
+	return siteManagementTestRuntime{}, nil
+}
+func (siteManagementTestRuntime) ModuleCode() kernel.ModuleCode { return "site_management_test" }
+func (siteManagementTestRuntime) SiteManagementHTTP() httptransport.SiteManagementContribution {
+	router := http.NewServeMux()
+	router.HandleFunc("/ping", func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusNoContent) })
+	return httptransport.SiteManagementContribution{Path: "feature", Handler: router}
+}
+
+func TestOptionalSiteManagementHTTPIsRuntimeContributed(t *testing.T) {
+	sites := &publicationSiteRepository{items: []site.Site{
+		{ID: 1, ProfileCode: "with_feature", Domain: "feature.example.test", Locale: "ru-RU", IsPublic: true},
+		{ID: 2, ProfileCode: "plain", Domain: "plain.example.test", Locale: "ru-RU", IsPublic: true},
+	}}
+	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
+		Logger: loggerFactory{}, PasswordHasher: argon2id.Factory{}, SiteAccessPolicy: admin.AllowAllSitesPolicy{}, EventBus: eventBusFactory{},
+		MainDatabase: appkernel.DatabaseDefinition{Connector: connectorFactory{}, Adapters: []kernel.ModuleDatabaseFactory{databaseFactory{sites: sites, access: knownUserAccessRepository{}}}},
+		Profiles: []kernel.Profile{
+			{Code: "with_feature", Modules: []kernel.ProfileModule{{Module: core.Module{}}, {Module: admin.Module{}}, {Module: siteManagementTestModule{}}}},
+			{Code: "plain", Modules: []kernel.ProfileModule{{Module: core.Module{}}, {Module: admin.Module{}}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runtimeApp.Close() }()
+	if err := runtimeApp.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := newTestHandler(runtimeApp, httpserver.WithAccessTokens(staticAccessTokens{verified: security.User(42)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		path   string
+		status int
+	}{{"/api/sites/1/feature/ping", http.StatusNoContent}, {"/api/sites/2/feature/ping", http.StatusNotFound}} {
+		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		request.Header.Set("Authorization", "Bearer signed")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != test.status {
+			t.Fatalf("%s = %d, %s", test.path, response.Code, response.Body.String())
+		}
+	}
+}
+
 func (s staticAccessTokens) IssueAccessToken(
 	context.Context,
 	security.Actor,

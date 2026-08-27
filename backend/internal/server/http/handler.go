@@ -20,9 +20,9 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
+	"github.com/vernal96/go-cms/kernel/modules/core/group"
 	coremanagement "github.com/vernal96/go-cms/kernel/modules/core/management"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
-	mailmodule "github.com/vernal96/go-cms/kernel/modules/mail"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
@@ -243,18 +243,78 @@ func newCMSHandler(application *app.App) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	mailManagement, err := application.MailManagement()
-	if err != nil {
-		return nil, err
-	}
-	mailHandler, err := mailmodule.NewHTTPHandler(mailManagement)
-	if err != nil {
-		return nil, err
-	}
 	router := chi.NewRouter()
-	router.Mount("/sites/{siteID}/mail", mailHandler)
+	optional := &siteManagementHTTP{app: application}
+	router.Handle("/sites/{siteID}/{feature}", optional)
+	router.Handle("/sites/{siteID}/{feature}/*", optional)
 	router.Mount("/", coreHandler)
 	return router, nil
+}
+
+type siteManagementHTTP struct{ app *app.App }
+
+func (h *siteManagementHTTP) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	actor, exists := httptransport.ActorFromContext(request.Context())
+	if !exists || !actor.IsUser() {
+		httptransport.WriteJSONError(response, http.StatusUnauthorized, "unauthenticated", "authentication required")
+		return
+	}
+	siteIDValue, err := strconv.ParseInt(chi.URLParam(request, "siteID"), 10, 64)
+	if err != nil || siteIDValue <= 0 {
+		http.NotFound(response, request)
+		return
+	}
+	action := group.SiteAccessEdit
+	if request.Method == http.MethodGet || request.Method == http.MethodHead {
+		action = group.SiteAccessView
+	}
+	runtime, err := h.app.ManagementSiteRuntime(request.Context(), actor, site.ID(siteIDValue), action)
+	if err != nil {
+		writeSiteManagementError(response, err)
+		return
+	}
+	feature := chi.URLParam(request, "feature")
+	seen := make(map[string]struct{})
+	var handler http.Handler
+	for _, moduleRuntime := range runtime.Profile().Modules() {
+		provider, ok := moduleRuntime.(httptransport.SiteManagementProvider)
+		if !ok {
+			continue
+		}
+		contribution := provider.SiteManagementHTTP()
+		if err := contribution.Validate(); err != nil {
+			httptransport.WriteJSONError(response, http.StatusInternalServerError, "internal_error", "site management contribution is invalid")
+			return
+		}
+		if _, duplicate := seen[contribution.Path]; duplicate {
+			httptransport.WriteJSONError(response, http.StatusInternalServerError, "internal_error", "site management contribution is duplicated")
+			return
+		}
+		seen[contribution.Path] = struct{}{}
+		if contribution.Path != feature {
+			continue
+		}
+		handler = contribution.Handler
+	}
+	if handler != nil {
+		next := request.Clone(request.Context())
+		remainder := strings.TrimPrefix(chi.URLParam(request, "*"), "/")
+		next.URL.Path = "/" + remainder
+		handler.ServeHTTP(response, next)
+		return
+	}
+	http.NotFound(response, request)
+}
+
+func writeSiteManagementError(response http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, security.ErrForbidden):
+		httptransport.WriteJSONError(response, http.StatusForbidden, "forbidden", "access denied")
+	case errors.Is(err, site.ErrNotFound):
+		httptransport.WriteJSONError(response, http.StatusNotFound, "not_found", "not found")
+	default:
+		httptransport.WriteJSONError(response, http.StatusInternalServerError, "internal_error", "internal server error")
+	}
 }
 
 func (h *Handler) ServeHTTP(

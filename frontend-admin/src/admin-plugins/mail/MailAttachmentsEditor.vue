@@ -4,14 +4,15 @@ import { Delete, FolderOpened, Plus } from '@element-plus/icons-vue'
 import { ElButton, ElInput, ElOption, ElSelect } from 'element-plus'
 import FilePickerDialog from '../../components/files/FilePickerDialog.vue'
 import type { FilesystemItem, FieldDefinition } from '../../types/admin'
-import type { MailAttachmentTemplate } from './types'
+import type { MailAttachmentTemplate, MailSiteVariable } from './types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: MailAttachmentTemplate[]
   variables: FieldDefinition[]
+  siteVariables?: MailSiteVariable[]
   accessToken: string
   permissions: ReadonlySet<string>
-}>()
+}>(), { siteVariables: () => [] })
 const emit = defineEmits<{ 'update:modelValue': [value: MailAttachmentTemplate[]] }>()
 const pickerVisible = ref(false)
 const pickerIndex = ref<number | null>(null)
@@ -28,12 +29,13 @@ function update(index: number, patch: Partial<MailAttachmentTemplate>): void {
   result[index] = { ...result[index], ...patch }
   emit('update:modelValue', result)
 }
-function setSource(index: number, source: 'static' | 'variable'): void {
+function setSource(index: number, source: 'static' | 'variable' | 'site'): void {
   update(index, source === 'static'
     ? { source, variable: undefined }
-    : { source, file_id: undefined })
+    : { source, file_id: undefined, variable: undefined })
 }
 function openPicker(index: number): void {
+  if (!props.permissions.has('core.file.read')) return
   pickerIndex.value = index
   pickerVisible.value = true
 }
@@ -50,8 +52,9 @@ function selectFile(item: FilesystemItem): void {
       <el-select :model-value="attachment.source" @update:model-value="setSource(index, $event)">
         <el-option value="static" label="Статический файл" />
         <el-option value="variable" label="Файловая переменная" />
+        <el-option value="site" label="Файл из настроек сайта" />
       </el-select>
-      <el-button v-if="attachment.source === 'static'" :icon="FolderOpened" @click="openPicker(index)">
+      <el-button v-if="attachment.source === 'static'" :icon="FolderOpened" :disabled="!permissions.has('core.file.read')" @click="openPicker(index)">
         {{ selectedNames[index] ?? (attachment.file_id ? `Файл #${attachment.file_id}` : 'Выбрать файл') }}
       </el-button>
       <el-select
@@ -60,12 +63,22 @@ function selectFile(item: FilesystemItem): void {
         placeholder="Выберите файловую переменную"
         @update:model-value="update(index, { variable: $event })"
       >
-        <el-option
-          v-for="variable in variables.filter((item) => item.type === 'file')"
-          :key="variable.key"
-          :label="`${variable.label} — {{data.${variable.key}}}`"
-          :value="`data.${variable.key}`"
-        />
+        <template v-if="attachment.source === 'variable'">
+          <el-option
+            v-for="variable in variables.filter((item) => item.type === 'file')"
+            :key="variable.key"
+            :label="`${variable.label} — {{data.${variable.key}}}`"
+            :value="`data.${variable.key}`"
+          />
+        </template>
+        <template v-else>
+          <el-option
+            v-for="variable in siteVariables.filter((item) => item.type === 'file')"
+            :key="variable.variable"
+            :label="`${variable.label} — {{${variable.variable}}}`"
+            :value="variable.variable"
+          />
+        </template>
       </el-select>
       <el-input
         :model-value="attachment.filename_template"

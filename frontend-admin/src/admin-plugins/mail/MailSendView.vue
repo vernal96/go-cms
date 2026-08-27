@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElAlert, ElButton, ElCard, ElDescriptions, ElDescriptionsItem, ElForm, ElFormItem, ElMessage, ElOption, ElSelect, ElTag } from 'element-plus'
 import { AdminAPIError } from '../../api/admin-api'
+import { useRouter } from 'vue-router'
 import AccessDeniedView from '../../components/AccessDeniedView.vue'
 import DynamicFieldsForm from '../../components/fields/DynamicFieldsForm.vue'
 import { createFieldValues, validateFieldValues, type DynamicFieldErrors, type DynamicValues } from '../../components/fields/model'
@@ -13,6 +14,7 @@ import type { MailAddress, MailTemplate, RenderedMailMessage } from './types'
 const props = defineProps<{ accessToken: string; permissions: ReadonlySet<string> }>()
 const emit = defineEmits<{ unauthorized: [] }>()
 const selected = useSelectedSite()
+const router = useRouter()
 const templates = ref<MailTemplate[]>([])
 const templateID = ref<number | null>(null)
 const values = ref<DynamicValues>({})
@@ -22,6 +24,7 @@ const loading = ref(false)
 const previewing = ref(false)
 const sending = ref(false)
 const error = ref<string | null>(null)
+const queuedID = ref<number | null>(null)
 const template = computed(() => templates.value.find((item) => item.id === templateID.value) ?? null)
 
 async function load(): Promise<void> {
@@ -40,6 +43,7 @@ function choose(id: number | null): void {
   values.value = createFieldValues(selectedTemplate?.variables ?? [])
   fieldErrors.value = {}
   preview.value = null
+  queuedID.value = null
   error.value = null
 }
 
@@ -64,6 +68,7 @@ async function send(): Promise<void> {
   sending.value = true; error.value = null
   try {
     const queued = await queueMail(props.accessToken, siteID, templateID.value, values.value)
+    queuedID.value = queued.id
     ElMessage.success(`Письмо #${queued.id} поставлено в очередь. Доставка выполняется асинхронно.`)
     preview.value = null
   } catch (caught) { handleError(caught) }
@@ -86,6 +91,9 @@ onMounted(() => void load())
     <header class="page-header"><div><h1>Отправить письмо</h1><p>Предпросмотр обязателен; доставка после постановки в очередь выполняется асинхронно</p></div></header>
     <el-alert v-if="!selected.selectedSite.value" type="warning" :closable="false" title="Выберите сайт в боковой панели." />
     <el-alert v-if="error" type="error" :closable="false" :title="error" show-icon />
+    <el-alert v-if="queuedID" type="success" :closable="false" :title="`Письмо #${queuedID} поставлено в очередь.`" show-icon>
+      <el-button text type="primary" @click="router.push({ name: 'mail.history.detail', params: { messageId: queuedID } })">Открыть историю доставки</el-button>
+    </el-alert>
     <el-card v-if="selected.selectedSite.value" shadow="never" header="1. Шаблон и данные">
       <el-form label-position="top">
         <el-form-item label="Шаблон">
@@ -113,7 +121,7 @@ onMounted(() => void load())
       </el-descriptions>
       <pre v-if="preview.content_type === 'text'" class="mail-text-preview">{{ preview.text_body }}</pre>
       <mail-html-preview v-else :html="preview.html_body" />
-      <div class="mail-attachment-list"><strong>Вложения</strong><span v-if="!preview.attachments.length">Нет</span><el-tag v-for="item in preview.attachments" :key="`${item.file_id}:${item.filename}`">{{ item.filename }} · {{ item.mime_type }} · {{ item.size }} байт</el-tag></div>
+      <div class="mail-attachment-list"><strong>Вложения</strong><span v-if="!preview.attachments.length">Нет</span><el-tag v-for="item in preview.attachments" :key="`${item.source}:${item.file_id ?? 0}:${item.filename}`">{{ item.filename }} · {{ item.mime_type }} · {{ item.size }} байт</el-tag></div>
       <el-button type="success" :loading="sending" :disabled="previewing" @click="send">Поставить в очередь</el-button>
     </el-card>
   </section>

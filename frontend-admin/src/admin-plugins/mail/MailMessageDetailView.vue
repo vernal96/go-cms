@@ -18,7 +18,7 @@ const detail = ref<MailMessageDetailResponse | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
 const messageID = computed(() => Number(route.params.messageId ?? 0))
-const statusLabels: Record<MailMessageStatus, string> = { queued: 'В очереди', sending: 'Отправляется', accepted: 'Принято транспортом', failed: 'Ошибка' }
+const statusLabels: Record<MailMessageStatus, string> = { queued: 'В очереди', sending: 'Отправляется', retryable: 'Ожидает повтора', accepted: 'Принято транспортом', failed: 'Ошибка' }
 
 async function load(): Promise<void> {
   const siteID = selected.selectedSite.value?.id
@@ -35,7 +35,7 @@ function origin(): string {
   const item = detail.value?.message
   if (!item) return '—'
   if (item.origin === 'manual') return item.requested_by_name || (item.requested_by ? `Пользователь #${item.requested_by}` : 'Ручная отправка')
-  return item.origin_source || 'Система'
+  return [item.origin_source || 'Система', item.origin_event, item.origin_reference].filter(Boolean).join(' · ')
 }
 function handleError(caught: unknown): void {
   if (caught instanceof AdminAPIError && caught.status === 401) { emit('unauthorized'); return }

@@ -22,7 +22,6 @@ import (
 	coremanagement "github.com/vernal96/go-cms/kernel/modules/core/management"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
-	mailmodule "github.com/vernal96/go-cms/kernel/modules/mail"
 	"github.com/vernal96/go-cms/kernel/outbox"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/seeds"
@@ -97,7 +96,7 @@ type App struct {
 	cmsResources      *coremanagement.Resources
 	cmsFiles          *coremanagement.Files
 	adminManagement   *admin.Management
-	mailManagement    *mailmodule.Management
+	siteAccessPolicy  coremanagement.SiteAccessPolicy
 
 	bootOnce sync.Once
 	bootErr  error

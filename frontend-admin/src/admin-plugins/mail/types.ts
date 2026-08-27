@@ -1,8 +1,8 @@
 import type { FieldDefinition, Pagination } from '../../types/admin'
 
 export type MailContentType = 'text' | 'html'
-export type MailAttachmentSource = 'static' | 'variable'
-export type MailMessageStatus = 'queued' | 'sending' | 'accepted' | 'failed'
+export type MailAttachmentSource = 'static' | 'variable' | 'site'
+export type MailMessageStatus = 'queued' | 'sending' | 'retryable' | 'accepted' | 'failed'
 
 export interface MailAddressTemplate {
   name: string
@@ -54,12 +54,22 @@ export interface MailAddress {
 }
 
 export interface MailAttachment {
-  file_id: number
+  source: MailAttachmentSource | 'transient'
+  file_id?: number
   filename: string
   mime_type: string
   size: number
   checksum_sha256: string
 }
+
+export interface MailSiteVariable {
+  variable: string
+  label: string
+  type: FieldDefinition['type']
+  source: 'site'
+}
+
+export interface MailSiteVariablesResponse { items: MailSiteVariable[] }
 
 export interface MailWarning {
   field: string
@@ -117,6 +127,8 @@ export interface MailMessage {
   status: MailMessageStatus
   origin: 'manual' | 'automatic'
   origin_source: string
+  origin_event: string
+  origin_reference: string
   requested_at: string
   requested_by?: number | null
   requested_by_name: string
@@ -128,8 +140,35 @@ export interface MailMessage {
 }
 
 export interface MailMessageListResponse {
-  items: MailMessage[]
+  items: MailMessageSummary[]
   pagination: Pagination
+}
+
+export interface MailMessageSummary {
+  id: number
+  template_code: string
+  template_name: string
+  subject: string
+  recipients: string[]
+  status: MailMessageStatus
+  origin: 'manual' | 'automatic'
+  origin_source: string
+  origin_event: string
+  origin_reference: string
+  requested_at: string
+  requested_by?: number | null
+  requested_by_name: string
+  accepted_at?: string | null
+  attempt_count: number
+  latest_attempt?: MailDeliveryAttempt | null
+}
+
+export interface MailMessageFilters {
+  status?: MailMessageStatus | ''
+  template_code?: string
+  date_from?: string
+  date_to?: string
+  recipient?: string
 }
 
 export interface MailMessageDetailResponse {

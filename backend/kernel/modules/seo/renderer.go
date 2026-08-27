@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/templating"
@@ -59,6 +60,7 @@ type RenderInput struct {
 type Renderer struct {
 	allowed           map[string]struct{}
 	variables         []string
+	siteParams        []field.Definition
 	maxTemplateLength int
 	maxResultLength   int
 }
@@ -77,11 +79,9 @@ func NewRenderer(
 		"resource.annotation": {},
 		"resource.slug":       {},
 		"resource.path":       {},
-		"site.domain":         {},
-		"site.locale":         {},
 	}
-	for _, definition := range profile.Params {
-		allowed["site.field."+definition.Key] = struct{}{}
+	for variable := range site.NewTemplateVariables(site.Site{}, profile.Params).Allowed() {
+		allowed[variable] = struct{}{}
 	}
 	for _, template := range profile.Templates {
 		for _, definition := range template.Fields {
@@ -96,6 +96,7 @@ func NewRenderer(
 	return &Renderer{
 		allowed:           allowed,
 		variables:         variables,
+		siteParams:        field.CloneDefinitions(profile.Params),
 		maxTemplateLength: maxTemplateLength,
 		maxResultLength:   maxResultLength,
 	}, nil
@@ -139,7 +140,7 @@ func (r *Renderer) Render(settings Settings, input RenderInput) (Preview, error)
 	if err := r.Validate(settings); err != nil {
 		return Preview{}, err
 	}
-	resolver := valueResolver{site: input.Site, resource: input.Resource}
+	resolver := valueResolver{siteVariables: site.NewTemplateVariables(input.Site, r.siteParams), resource: input.Resource}
 	warnings := make([]Warning, 0)
 	render := func(field, source string) (string, error) {
 		if source == "" {
@@ -241,8 +242,8 @@ func (e ValidationError) Error() string {
 func (e ValidationError) Unwrap() error { return e.Err }
 
 type valueResolver struct {
-	site     site.Site
-	resource resource.Resource
+	siteVariables site.TemplateVariables
+	resource      resource.Resource
 }
 
 func (r valueResolver) resolve(variable string) (any, bool, error) {
@@ -265,16 +266,12 @@ func (r valueResolver) value(variable string) (string, bool) {
 			return "", false
 		}
 		return stringValue(*r.resource.Path)
-	case "site.domain":
-		return stringValue(r.site.Domain)
-	case "site.locale":
-		return stringValue(r.site.Locale)
 	}
 	if key, found := strings.CutPrefix(variable, "resource.field."); found {
 		return scalarValue(r.resource.Fields[key])
 	}
-	if key, found := strings.CutPrefix(variable, "site.field."); found {
-		return scalarValue(r.site.Settings[key])
+	if value, exists := r.siteVariables.Value(variable); exists {
+		return scalarValue(value)
 	}
 	return "", false
 }

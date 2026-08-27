@@ -200,7 +200,7 @@ func decodeTemplateScanned(item mail.Template, from, to, cc, bcc, replyTo, attac
 }
 
 const messageColumns = `
-id,site_id,template_id,template_code,template_name,transport_alias,rfc_message_id,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,content_type,text_body,html_body,attachments,status,origin,origin_source,requested_at,requested_by,requested_by_name,accepted_at,created_at,updated_at`
+id,site_id,template_id,template_code,template_name,transport_alias,rfc_message_id,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,content_type,text_body,html_body,attachments,status,origin,origin_source,origin_event,origin_reference,requested_at,requested_by,requested_by_name,accepted_at,created_at,updated_at`
 
 func (r *Repository) CreateMessageAndJob(ctx context.Context, item mail.Message, busMessage eventbus.Message) (_ mail.Message, resultErr error) {
 	values, err := messageJSON(item)
@@ -217,9 +217,9 @@ func (r *Repository) CreateMessageAndJob(ctx context.Context, item mail.Message,
 		}
 	}()
 	created, err := scanMessage(tx.QueryRow(ctx, `
-INSERT INTO mail.messages(site_id,template_id,template_code,template_name,transport_alias,rfc_message_id,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,content_type,text_body,html_body,attachments,status,origin,origin_source,requested_at,requested_by,requested_by_name)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'queued',$17,$18,$19,$20,$21)
-RETURNING `+messageColumns+`;`, item.SiteID, item.TemplateID, item.TemplateCode, item.TemplateName, item.Transport, item.RFCMessageID, values.from, values.to, values.cc, values.bcc, values.replyTo, item.Subject, item.ContentType, item.TextBody, item.HTMLBody, values.attachments, item.Origin, item.OriginSource, item.RequestedAt, item.RequestedBy, item.RequestedByName))
+INSERT INTO mail.messages(site_id,template_id,template_code,template_name,transport_alias,rfc_message_id,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,content_type,text_body,html_body,attachments,status,origin,origin_source,origin_event,origin_reference,requested_at,requested_by,requested_by_name)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'queued',$17,$18,$19,$20,$21,$22,$23)
+RETURNING `+messageColumns+`;`, item.SiteID, item.TemplateID, item.TemplateCode, item.TemplateName, item.Transport, item.RFCMessageID, values.from, values.to, values.cc, values.bcc, values.replyTo, item.Subject, item.ContentType, item.TextBody, item.HTMLBody, values.attachments, item.Origin, item.OriginSource, item.OriginEvent, item.OriginReference, item.RequestedAt, item.RequestedBy, item.RequestedByName))
 	if err != nil {
 		return mail.Message{}, mapWriteError(err)
 	}
@@ -259,7 +259,7 @@ func messageJSON(item mail.Message) (messageValues, error) {
 	values := []struct {
 		target *[]byte
 		value  any
-	}{{&result.from, item.From}, {&result.to, item.To}, {&result.cc, item.CC}, {&result.bcc, item.BCC}, {&result.attachments, item.Attachments}}
+	}{{&result.from, item.From}, {&result.to, item.To}, {&result.cc, item.CC}, {&result.bcc, item.BCC}}
 	if item.ReplyTo != nil {
 		values = append(values, struct {
 			target *[]byte
@@ -273,27 +273,67 @@ func messageJSON(item mail.Message) (messageValues, error) {
 		}
 		*value.target = raw
 	}
+	attachments, err := encodeMessageAttachments(item.Attachments)
+	if err != nil {
+		return messageValues{}, err
+	}
+	result.attachments = attachments
 	return result, nil
 }
 
-func (r *Repository) ListMessages(ctx context.Context, siteID site.ID, query mail.PageQuery) (mail.MessagePage, error) {
-	rows, err := r.connector.Pool().Query(ctx, `SELECT `+messageColumns+`,count(*) OVER(),
+func (r *Repository) ListMessages(ctx context.Context, siteID site.ID, query mail.MessageQuery) (mail.MessageSummaryPage, error) {
+	rows, err := r.connector.Pool().Query(ctx, `SELECT id,template_code,template_name,subject,to_addresses,cc_addresses,bcc_addresses,status,origin,origin_source,origin_event,origin_reference,requested_at,requested_by,requested_by_name,accepted_at,count(*) OVER(),
 (SELECT count(*) FROM mail.delivery_attempts a WHERE a.message_id=mail.messages.id),
 (SELECT jsonb_build_object('id',a.id,'message_id',a.message_id,'attempt_number',a.attempt_number,'transport',a.transport_alias,'driver',a.driver,'started_at',a.started_at,'finished_at',a.finished_at,'status',a.status,'remote_message_id',a.remote_message_id,'response_code',a.response_code,'safe_error',a.safe_error,'created_at',a.created_at) FROM mail.delivery_attempts a WHERE a.message_id=mail.messages.id ORDER BY a.attempt_number DESC LIMIT 1)
-FROM mail.messages WHERE site_id=$1 ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3;`, siteID, query.PerPage, (query.Page-1)*query.PerPage)
+FROM mail.messages WHERE site_id=$1
+AND ($2='' OR status=$2)
+AND ($3='' OR template_code=$3)
+AND ($4::timestamptz IS NULL OR requested_at >= $4)
+AND ($5::timestamptz IS NULL OR requested_at <= $5)
+AND ($6='' OR EXISTS (SELECT 1 FROM jsonb_array_elements(to_addresses || cc_addresses || bcc_addresses) recipient WHERE recipient->>'email' ILIKE '%' || $6 || '%'))
+ORDER BY created_at DESC,id DESC LIMIT $7 OFFSET $8;`, siteID, query.Status, query.TemplateCode, query.DateFrom, query.DateTo, query.Recipient, query.PerPage, (query.Page-1)*query.PerPage)
 	if err != nil {
-		return mail.MessagePage{}, err
+		return mail.MessageSummaryPage{}, err
 	}
 	defer rows.Close()
-	result := mail.MessagePage{Items: []mail.Message{}}
+	result := mail.MessageSummaryPage{Items: []mail.MessageSummary{}}
 	for rows.Next() {
-		item, total, err := scanMessageWithPage(rows)
+		item, total, err := scanMessageSummary(rows)
 		if err != nil {
-			return mail.MessagePage{}, err
+			return mail.MessageSummaryPage{}, err
 		}
 		result.Items, result.Total = append(result.Items, item), total
 	}
 	return result, rows.Err()
+}
+
+func scanMessageSummary(row rowScanner) (mail.MessageSummary, int, error) {
+	var item mail.MessageSummary
+	var to, cc, bcc, latestAttempt []byte
+	var total int
+	err := row.Scan(&item.ID, &item.TemplateCode, &item.TemplateName, &item.Subject, &to, &cc, &bcc, &item.Status, &item.Origin, &item.OriginSource, &item.OriginEvent, &item.OriginReference, &item.RequestedAt, &item.RequestedBy, &item.RequestedByName, &item.AcceptedAt, &total, &item.AttemptCount, &latestAttempt)
+	if err != nil {
+		return mail.MessageSummary{}, 0, err
+	}
+	for _, raw := range [][]byte{to, cc, bcc} {
+		var addresses []mail.Address
+		if err := decodeJSON(raw, &addresses); err != nil {
+			return mail.MessageSummary{}, 0, err
+		}
+		for _, address := range addresses {
+			item.Recipients = append(item.Recipients, address.Email)
+		}
+	}
+	if item.Recipients == nil {
+		item.Recipients = []string{}
+	}
+	if len(latestAttempt) > 0 {
+		item.LatestAttempt = &mail.DeliveryAttempt{}
+		if err := json.Unmarshal(latestAttempt, item.LatestAttempt); err != nil {
+			return mail.MessageSummary{}, 0, err
+		}
+	}
+	return item, total, nil
 }
 
 func (r *Repository) MessageDetail(ctx context.Context, siteID site.ID, id mail.MessageID) (mail.MessageDetail, error) {
@@ -340,7 +380,10 @@ func (r *Repository) DeleteMessage(ctx context.Context, siteID site.ID, id mail.
 	return nil
 }
 
-func (r *Repository) ClaimMessage(ctx context.Context, siteID site.ID, id mail.MessageID) (_ mail.Message, _ mail.DeliveryAttempt, _ bool, resultErr error) {
+func (r *Repository) ClaimMessage(ctx context.Context, siteID site.ID, id mail.MessageID, maxAttempts int) (_ mail.Message, _ mail.DeliveryAttempt, _ bool, resultErr error) {
+	if maxAttempts < 1 {
+		return mail.Message{}, mail.DeliveryAttempt{}, false, errors.New("mail maximum attempts is invalid")
+	}
 	tx, err := r.connector.Pool().Begin(ctx)
 	if err != nil {
 		return mail.Message{}, mail.DeliveryAttempt{}, false, err
@@ -350,8 +393,17 @@ func (r *Repository) ClaimMessage(ctx context.Context, siteID site.ID, id mail.M
 			resultErr = errors.Join(resultErr, rollbackErr)
 		}
 	}()
-	message, err := scanMessage(tx.QueryRow(ctx, `UPDATE mail.messages SET status='sending',updated_at=clock_timestamp() WHERE site_id=$1 AND id=$2 AND (status IN ('queued','failed') OR (status='sending' AND updated_at <= clock_timestamp()-interval '10 minutes')) RETURNING `+messageColumns+`;`, siteID, id))
+	message, err := scanMessage(tx.QueryRow(ctx, `UPDATE mail.messages SET status='sending',updated_at=clock_timestamp() WHERE site_id=$1 AND id=$2 AND (status IN ('queued','retryable') OR (status='sending' AND updated_at <= clock_timestamp()-interval '10 minutes')) AND (SELECT count(*) FROM mail.delivery_attempts WHERE message_id=$2) < $3 RETURNING `+messageColumns+`;`, siteID, id, maxAttempts))
 	if errors.Is(err, pgx.ErrNoRows) {
+		command, terminalErr := tx.Exec(ctx, `UPDATE mail.messages SET status='failed',updated_at=clock_timestamp() WHERE site_id=$1 AND id=$2 AND (status IN ('queued','retryable') OR (status='sending' AND updated_at <= clock_timestamp()-interval '10 minutes')) AND (SELECT count(*) FROM mail.delivery_attempts WHERE message_id=$2) >= $3;`, siteID, id, maxAttempts)
+		if terminalErr != nil {
+			return mail.Message{}, mail.DeliveryAttempt{}, false, terminalErr
+		}
+		if command.RowsAffected() > 0 {
+			if _, terminalErr = tx.Exec(ctx, `UPDATE mail.delivery_attempts SET finished_at=clock_timestamp(),status='failed',response_code='lease_expired',safe_error='delivery lease expired' WHERE message_id=$1 AND status='sending';`, id); terminalErr != nil {
+				return mail.Message{}, mail.DeliveryAttempt{}, false, terminalErr
+			}
+		}
 		var exists bool
 		if queryErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM mail.messages WHERE site_id=$1 AND id=$2);`, siteID, id).Scan(&exists); queryErr != nil {
 			return mail.Message{}, mail.DeliveryAttempt{}, false, queryErr
@@ -367,6 +419,9 @@ func (r *Repository) ClaimMessage(ctx context.Context, siteID site.ID, id mail.M
 	if err != nil {
 		return mail.Message{}, mail.DeliveryAttempt{}, false, err
 	}
+	if _, err := tx.Exec(ctx, `UPDATE mail.delivery_attempts SET finished_at=clock_timestamp(),status='failed',response_code='lease_expired',safe_error='delivery lease expired' WHERE message_id=$1 AND status='sending';`, id); err != nil {
+		return mail.Message{}, mail.DeliveryAttempt{}, false, err
+	}
 	var attempt mail.DeliveryAttempt
 	err = tx.QueryRow(ctx, `INSERT INTO mail.delivery_attempts(message_id,attempt_number,transport_alias,status) SELECT $1,coalesce(max(attempt_number),0)+1,$2,'sending' FROM mail.delivery_attempts WHERE message_id=$1 RETURNING id,message_id,attempt_number,transport_alias,driver,started_at,finished_at,status,remote_message_id,response_code,safe_error,created_at;`, id, message.Transport).Scan(&attempt.ID, &attempt.MessageID, &attempt.AttemptNumber, &attempt.Transport, &attempt.Driver, &attempt.StartedAt, &attempt.FinishedAt, &attempt.Status, &attempt.RemoteMessageID, &attempt.ResponseCode, &attempt.SafeError, &attempt.CreatedAt)
 	if err != nil {
@@ -378,10 +433,17 @@ func (r *Repository) ClaimMessage(ctx context.Context, siteID site.ID, id mail.M
 	return message, attempt, true, nil
 }
 
-func (r *Repository) FinishAttempt(ctx context.Context, id mail.MessageID, number int, result mail.DeliveryResult, sendErr error) (_ error) {
+func (r *Repository) FinishAttempt(ctx context.Context, id mail.MessageID, number int, result mail.DeliveryResult, failure *mail.DeliveryError, terminal bool) (_ error) {
 	status, messageStatus, safeError := mail.AttemptAccepted, mail.StatusAccepted, ""
-	if sendErr != nil {
-		status, messageStatus, safeError = mail.AttemptFailed, mail.StatusFailed, sendErr.Error()
+	if failure != nil {
+		messageStatus = mail.StatusFailed
+		if failure.Retryable && !terminal {
+			messageStatus = mail.StatusRetryable
+		}
+		status, safeError = mail.AttemptFailed, failure.Error()
+		if result.ResponseCode == "" {
+			result.ResponseCode = failure.Code
+		}
 	}
 	if len(safeError) > 4096 {
 		safeError = safeError[:4096]
@@ -416,31 +478,34 @@ func (r *Repository) Cleanup(ctx context.Context, retention time.Duration, limit
 	return command.RowsAffected(), nil
 }
 
+func (r *Repository) ActiveSpoolKeys(ctx context.Context, keys []string) (map[string]struct{}, error) {
+	result := make(map[string]struct{})
+	if len(keys) == 0 {
+		return result, nil
+	}
+	rows, err := r.connector.Pool().Query(ctx, `SELECT DISTINCT attachment->>'spool_key' FROM mail.messages CROSS JOIN LATERAL jsonb_array_elements(attachments) attachment WHERE status IN ('queued','sending','retryable') AND attachment->>'spool_key'=ANY($1);`, keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		result[key] = struct{}{}
+	}
+	return result, rows.Err()
+}
+
 func scanMessage(row rowScanner) (mail.Message, error) {
 	var item mail.Message
 	var from, to, cc, bcc, replyTo, attachments []byte
-	err := row.Scan(&item.ID, &item.SiteID, &item.TemplateID, &item.TemplateCode, &item.TemplateName, &item.Transport, &item.RFCMessageID, &from, &to, &cc, &bcc, &replyTo, &item.Subject, &item.ContentType, &item.TextBody, &item.HTMLBody, &attachments, &item.Status, &item.Origin, &item.OriginSource, &item.RequestedAt, &item.RequestedBy, &item.RequestedByName, &item.AcceptedAt, &item.CreatedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.SiteID, &item.TemplateID, &item.TemplateCode, &item.TemplateName, &item.Transport, &item.RFCMessageID, &from, &to, &cc, &bcc, &replyTo, &item.Subject, &item.ContentType, &item.TextBody, &item.HTMLBody, &attachments, &item.Status, &item.Origin, &item.OriginSource, &item.OriginEvent, &item.OriginReference, &item.RequestedAt, &item.RequestedBy, &item.RequestedByName, &item.AcceptedAt, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return mail.Message{}, err
 	}
 	return decodeMessageScanned(item, from, to, cc, bcc, replyTo, attachments)
-}
-
-func scanMessageWithPage(row rowScanner) (mail.Message, int, error) {
-	var item mail.Message
-	var from, to, cc, bcc, replyTo, attachments []byte
-	var latestAttempt []byte
-	var total int
-	err := row.Scan(&item.ID, &item.SiteID, &item.TemplateID, &item.TemplateCode, &item.TemplateName, &item.Transport, &item.RFCMessageID, &from, &to, &cc, &bcc, &replyTo, &item.Subject, &item.ContentType, &item.TextBody, &item.HTMLBody, &attachments, &item.Status, &item.Origin, &item.OriginSource, &item.RequestedAt, &item.RequestedBy, &item.RequestedByName, &item.AcceptedAt, &item.CreatedAt, &item.UpdatedAt, &total, &item.AttemptCount, &latestAttempt)
-	if err != nil {
-		return mail.Message{}, 0, err
-	}
-	decoded, err := decodeMessageScanned(item, from, to, cc, bcc, replyTo, attachments)
-	if err == nil && len(latestAttempt) > 0 {
-		decoded.LatestAttempt = &mail.DeliveryAttempt{}
-		err = json.Unmarshal(latestAttempt, decoded.LatestAttempt)
-	}
-	return decoded, total, err
 }
 
 func decodeMessageScanned(item mail.Message, from, to, cc, bcc, replyTo, attachments []byte) (mail.Message, error) {
@@ -450,11 +515,16 @@ func decodeMessageScanned(item mail.Message, from, to, cc, bcc, replyTo, attachm
 	for _, pair := range []struct {
 		raw    []byte
 		target any
-	}{{to, &item.To}, {cc, &item.CC}, {bcc, &item.BCC}, {attachments, &item.Attachments}} {
+	}{{to, &item.To}, {cc, &item.CC}, {bcc, &item.BCC}} {
 		if err := decodeJSON(pair.raw, pair.target); err != nil {
 			return mail.Message{}, err
 		}
 	}
+	decodedAttachments, err := decodeMessageAttachments(attachments)
+	if err != nil {
+		return mail.Message{}, err
+	}
+	item.Attachments = decodedAttachments
 	if len(replyTo) > 0 {
 		item.ReplyTo = &mail.Address{}
 		if err := decodeJSON(replyTo, item.ReplyTo); err != nil {
