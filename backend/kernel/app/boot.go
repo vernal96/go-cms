@@ -15,6 +15,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/outbox"
 )
 
 func (a *App) Boot(ctx context.Context) error {
@@ -216,6 +217,22 @@ func (a *App) boot(ctx context.Context) error {
 	a.cmsResources = cmsResources
 	a.cmsFiles = cmsFiles
 	a.adminManagement = adminManagement
+	if len(a.outboxSources) > 0 {
+		publisher, err := outbox.NewPublisher(a.eventBus, a.outboxSources, a.logger, a.definition.OutboxPublisher)
+		if err != nil {
+			return err
+		}
+		workerContext, cancel := context.WithCancel(context.Background())
+		a.outboxPublisher = publisher
+		a.workerCancel = cancel
+		a.workers.Add(1)
+		go func() {
+			defer a.workers.Done()
+			if err := publisher.Run(workerContext); err != nil && a.logger != nil {
+				a.logger.Error("outbox publisher exited", slog.String("event", "outbox.publisher.failed"), slog.Any("error", err))
+			}
+		}()
+	}
 	a.booted.Store(true)
 	return nil
 }

@@ -22,6 +22,7 @@ import (
 	coremanagement "github.com/vernal96/go-cms/kernel/modules/core/management"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
+	"github.com/vernal96/go-cms/kernel/outbox"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
@@ -58,6 +59,7 @@ type Definition struct {
 	UploadTimeout       time.Duration
 	AvatarStorage       filesystem.Code
 	AvatarMaxSize       int64
+	OutboxPublisher     outbox.PublisherConfig
 }
 
 type bindingRuntime struct {
@@ -81,6 +83,10 @@ type App struct {
 	seedPlan        []seeds.Plan
 	providers       []console.Provider
 	console         *console.Console
+	outboxSources   []outbox.Source
+	outboxPublisher *outbox.Publisher
+	workerCancel    context.CancelFunc
+	workers         sync.WaitGroup
 
 	profileBlueprints map[kernel.ProfileCode]*kernel.ProfileBlueprint
 	sites             *site.Catalog

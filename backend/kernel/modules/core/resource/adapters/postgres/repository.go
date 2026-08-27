@@ -659,6 +659,9 @@ RETURNING
 	if err := r.appendRevision(ctx, transaction, result, resource.RevisionCreated, nil, actorID); err != nil {
 		return resource.Resource{}, err
 	}
+	if err := appendResourceEvent(ctx, transaction, resource.EventCreated, result.ID, result.SiteID, resource.StorageTree, result.Version, actorID); err != nil {
+		return resource.Resource{}, err
+	}
 
 	if err := transaction.Commit(ctx); err != nil {
 		return resource.Resource{}, translateError(err)
@@ -1347,6 +1350,9 @@ WHERE item.id = tree.id
 	if err := r.appendRevision(ctx, transaction, updated, resource.RevisionUpdated, nil, actorID); err != nil {
 		return resource.Resource{}, err
 	}
+	if err := appendResourceEvent(ctx, transaction, resource.EventUpdated, updated.ID, updated.SiteID, resource.StorageTree, updated.Version, actorID); err != nil {
+		return resource.Resource{}, err
+	}
 
 	if !sameMediaID(current.ImageMediaID, item.ImageMediaID) &&
 		current.ImageMediaID != nil {
@@ -1812,6 +1818,9 @@ RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bot
 			return widget.Binding{}, err
 		}
 	}
+	if err := appendWidgetResourceEvent(ctx, tx, resourceID, version, actorID); err != nil {
+		return widget.Binding{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return widget.Binding{}, translateError(err)
 	}
@@ -1861,6 +1870,9 @@ RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bot
 		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
 			return widget.Binding{}, err
 		}
+	}
+	if err := appendWidgetResourceEvent(ctx, tx, resourceID, version, actorID); err != nil {
+		return widget.Binding{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return widget.Binding{}, translateError(err)
@@ -1913,6 +1925,9 @@ func (r *Repository) DeleteWidget(
 		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
 			return err
 		}
+	}
+	if err := appendWidgetResourceEvent(ctx, tx, resourceID, version, actorID); err != nil {
+		return err
 	}
 	return translateError(tx.Commit(ctx))
 }
@@ -2011,6 +2026,9 @@ func (r *Repository) ReorderWidgets(
 		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
 			return nil, err
 		}
+	}
+	if err := appendWidgetResourceEvent(ctx, tx, resourceID, version, actorID); err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, translateError(err)

@@ -312,6 +312,9 @@ UPDATE core.resources item SET path=tree.path,updated_at=now(),updated_by=$2 FRO
 			return resource.Resource{}, translateError(err)
 		}
 	}
+	if err := appendResourceEvent(ctx, tx, resource.EventUpdated, candidate.ID, candidate.SiteID, resource.StorageTree, candidate.Version, actorID); err != nil {
+		return resource.Resource{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return resource.Resource{}, translateError(err)
 	}
@@ -419,6 +422,9 @@ WHERE id=$1 RETURNING `+libraryItemColumns+`;`, candidate.ID, candidate.LibraryI
 		if _, err := tx.Exec(ctx, `DELETE FROM core.media WHERE id=$1;`, *locked.ImageMediaID); err != nil {
 			return resource.LibraryItem{}, translateError(err)
 		}
+	}
+	if err := appendResourceEvent(ctx, tx, resource.EventUpdated, restored.ID, restored.SiteID, resource.StorageLibraryItem, restored.Version, actorID); err != nil {
+		return resource.LibraryItem{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return resource.LibraryItem{}, translateError(err)

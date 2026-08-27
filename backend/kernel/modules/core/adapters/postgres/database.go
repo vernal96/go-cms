@@ -22,6 +22,7 @@ import (
 	sitepostgres "github.com/vernal96/go-cms/kernel/modules/core/site/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
 	userpostgres "github.com/vernal96/go-cms/kernel/modules/core/user/adapters/postgres"
+	"github.com/vernal96/go-cms/kernel/outbox"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
@@ -40,6 +41,7 @@ type Database struct {
 	users     user.Repository
 	groups    group.Repository
 	access    access.Repository
+	outbox    outbox.Source
 }
 
 type DatabaseFactory struct{}
@@ -109,6 +111,7 @@ func NewDatabase(
 		users:     userRepository,
 		groups:    groupRepository,
 		access:    accessRepository,
+		outbox:    newOutboxSource(connector),
 	}, nil
 }
 
@@ -142,6 +145,13 @@ func (d *Database) Groups() group.Repository {
 
 func (d *Database) Access() access.Repository {
 	return d.access
+}
+
+func (d *Database) OutboxSources() []outbox.Source {
+	if d == nil || d.outbox == nil {
+		return nil
+	}
+	return []outbox.Source{d.outbox}
 }
 
 func (d *Database) MigrationSources() []migrations.Source {
@@ -178,3 +188,4 @@ var _ core.Database = (*Database)(nil)
 var _ kernel.ModuleDatabaseFactory = DatabaseFactory{}
 var _ migrations.Provider = (*Database)(nil)
 var _ seeds.Provider = (*Database)(nil)
+var _ outbox.Provider = (*Database)(nil)

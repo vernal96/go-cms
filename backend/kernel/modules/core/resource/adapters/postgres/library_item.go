@@ -104,6 +104,9 @@ RETURNING `+libraryItemColumns+`;`, item.ID, item.SiteID, item.LibraryID, partit
 			return resource.LibraryItem{}, err
 		}
 	}
+	if err := appendResourceEvent(ctx, tx, resource.EventCreated, stored.ID, stored.SiteID, resource.StorageLibraryItem, stored.Version, actorID); err != nil {
+		return resource.LibraryItem{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return resource.LibraryItem{}, translateError(err)
 	}
@@ -250,6 +253,9 @@ RETURNING `+libraryItemColumns+`;`, item.ID, partitionAt, item.Template, item.Co
 		if _, err := tx.Exec(ctx, `DELETE FROM core.media WHERE id=$1;`, *locked.ImageMediaID); err != nil {
 			return resource.LibraryItem{}, translateError(err)
 		}
+	}
+	if err := appendResourceEvent(ctx, tx, resource.EventUpdated, updated.ID, updated.SiteID, resource.StorageLibraryItem, updated.Version, actorID); err != nil {
+		return resource.LibraryItem{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return resource.LibraryItem{}, translateError(err)
@@ -404,6 +410,9 @@ func (r *Repository) moveLibraryItemOnce(ctx context.Context, actorID *security.
 		if err := r.appendLibraryItemRevision(ctx, tx, moved, resource.RevisionUpdated, nil, actorID); err != nil {
 			return resource.LibraryItem{}, err
 		}
+	}
+	if err := appendResourceEvent(ctx, tx, resource.EventUpdated, moved.ID, moved.SiteID, resource.StorageLibraryItem, moved.Version, actorID); err != nil {
+		return resource.LibraryItem{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return resource.LibraryItem{}, translateError(err)

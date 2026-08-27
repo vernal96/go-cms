@@ -22,6 +22,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/console"
 	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/logging"
+	"github.com/vernal96/go-cms/kernel/messageid"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
@@ -36,6 +37,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/modules/core/user/adapters/argon2id"
+	"github.com/vernal96/go-cms/kernel/outbox"
 	"github.com/vernal96/go-cms/kernel/security"
 	"github.com/vernal96/go-cms/kernel/seeds"
 )
@@ -598,6 +600,7 @@ type fakeCoreDatabase struct {
 	groupRepository    coregroup.Repository
 	accessRepository   coreaccess.Repository
 	seedSources        []seeds.Source
+	outboxSources      []outbox.Source
 }
 
 func (*fakeCoreDatabase) ModuleCode() kernel.ModuleCode { return core.ModuleCode }
@@ -637,6 +640,40 @@ func (d *fakeCoreDatabase) Access() coreaccess.Repository {
 		return d.accessRepository
 	}
 	return fakeAccessRepository{}
+}
+func (d *fakeCoreDatabase) OutboxSources() []outbox.Source {
+	return append([]outbox.Source(nil), d.outboxSources...)
+}
+
+type blockingOutboxSource struct {
+	started chan struct{}
+	onStart func()
+	onStop  func()
+	once    sync.Once
+}
+
+func (*blockingOutboxSource) Name() string { return "core:test" }
+func (s *blockingOutboxSource) Claim(ctx context.Context, _ outbox.Claim) ([]outbox.Record, error) {
+	s.once.Do(func() {
+		if s.onStart != nil {
+			s.onStart()
+		}
+		close(s.started)
+	})
+	<-ctx.Done()
+	if s.onStop != nil {
+		s.onStop()
+	}
+	return nil, ctx.Err()
+}
+func (*blockingOutboxSource) MarkPublished(context.Context, messageid.ID, string, time.Time) error {
+	return nil
+}
+func (*blockingOutboxSource) MarkFailed(context.Context, messageid.ID, string, string, time.Time) error {
+	return nil
+}
+func (*blockingOutboxSource) CleanupPublished(context.Context, time.Time, int) (int64, error) {
+	return 0, nil
 }
 
 type fakeFileRepository struct {
@@ -1438,6 +1475,66 @@ func TestAppCloseStopsActiveEventBusConsumerBeforeDatabase(t *testing.T) {
 	}
 	if databaseClosedTooEarly.Load() {
 		t.Fatal("database closed before the event bus handler stopped")
+	}
+}
+
+func TestAppOutboxPublisherStartsAfterMigrationAndStopsBeforeDependencies(t *testing.T) {
+	var eventsMu sync.Mutex
+	var events []string
+	record := func(value string) {
+		eventsMu.Lock()
+		defer eventsMu.Unlock()
+		events = append(events, value)
+	}
+	databaseConnector := newFakeConnector("main")
+	source := &blockingOutboxSource{started: make(chan struct{})}
+	source.onStart = func() {
+		version, exists := databaseConnector.version(migrations.DefaultHistoryTable)
+		if !exists || version != 1 {
+			record("worker.started.before.migration")
+		} else {
+			record("worker.start")
+		}
+	}
+	source.onStop = func() { record("worker.stop") }
+	databaseConnector.onClose = func() { record("database.close") }
+	eventBusConnector := &fakeEventBusConnector{onClose: func() { record("eventbus.close") }}
+	application, err := appkernel.New(context.Background(), appkernel.Definition{
+		Logger: fakeLoggerFactory{}, PasswordHasher: argon2id.Factory{}, SiteAccessPolicy: admin.AllowAllSitesPolicy{},
+		EventBus: fakeEventBusFactory{connector: eventBusConnector},
+		MainDatabase: appkernel.DatabaseDefinition{
+			Connector: &fakeConnectorFactory{connector: databaseConnector},
+			Adapters: []kernel.ModuleDatabaseFactory{&fakeDatabaseFactory{code: core.ModuleCode, database: &fakeCoreDatabase{
+				repository: &fakeSiteRepository{}, outboxSources: []outbox.Source{source},
+			}}},
+		},
+		Profiles:        []kernel.Profile{{Code: "dev", Modules: []kernel.ProfileModule{{Module: core.Module{}}, {Module: admin.Module{}}}}},
+		OutboxPublisher: outbox.PublisherConfig{PollInterval: time.Millisecond},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-source.started:
+		t.Fatal("outbox publisher started before Boot")
+	default:
+	}
+	if err := application.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-source.started:
+	case <-time.After(time.Second):
+		t.Fatal("outbox publisher did not start")
+	}
+	if err := application.Close(); err != nil {
+		t.Fatal(err)
+	}
+	eventsMu.Lock()
+	actual := append([]string(nil), events...)
+	eventsMu.Unlock()
+	if strings.Join(actual, ",") != "worker.start,worker.stop,eventbus.close,database.close" {
+		t.Fatalf("outbox lifecycle order = %#v", actual)
 	}
 }
 

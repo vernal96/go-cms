@@ -9,6 +9,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms/kernel/outbox"
 )
 
 func validateDefinition(definition Definition) error {
@@ -29,6 +30,9 @@ func validateDefinition(definition Definition) error {
 	}
 	if definition.AvatarMaxSize < 0 {
 		return errors.New("avatar maximum size is invalid")
+	}
+	if _, err := outbox.NormalizePublisherConfig(definition.OutboxPublisher); err != nil {
+		return err
 	}
 
 	filesystemCodes := make(

@@ -18,6 +18,7 @@ import (
 
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/domainevent"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
@@ -81,10 +82,12 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 32 {
+	if len(entries) != 34 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	expected := map[string]bool{
+		"000017_outbox_messages.up.sql":                      false,
+		"000017_outbox_messages.down.sql":                    false,
 		"000016_resource_revisions.up.sql":                   false,
 		"000016_resource_revisions.down.sql":                 false,
 		"000005_identity.up.sql":                             false,
@@ -209,7 +212,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 16 || !hasVersion || dirty {
+	if version != 17 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,
@@ -769,6 +772,29 @@ WHERE id = $1;
 	if err != nil {
 		t.Fatalf("create root resource: %v", err)
 	}
+	var createdEventTopic string
+	var createdEventKey, createdEventBody []byte
+	if err := connector.Pool().QueryRow(ctx, `
+SELECT topic,message_key,body FROM core.outbox_messages
+WHERE topic=$1 AND message_key=$2 ORDER BY created_at LIMIT 1;`, resource.EventCreated, strconv.FormatInt(int64(root.ID), 10)).Scan(
+		&createdEventTopic, &createdEventKey, &createdEventBody,
+	); err != nil {
+		t.Fatalf("load created resource event: %v", err)
+	}
+	var createdEnvelope domainevent.Envelope
+	if err := json.Unmarshal(createdEventBody, &createdEnvelope); err != nil {
+		t.Fatalf("decode created resource event: %v", err)
+	}
+	var createdPayload resource.EventPayload
+	if err := json.Unmarshal(createdEnvelope.Payload, &createdPayload); err != nil {
+		t.Fatalf("decode created resource payload: %v", err)
+	}
+	if createdEventTopic != resource.EventCreated || string(createdEventKey) != strconv.FormatInt(int64(root.ID), 10) ||
+		createdEnvelope.Name != resource.EventCreated || createdPayload.ResourceID != root.ID ||
+		createdPayload.SiteID != root.SiteID || createdPayload.StorageKind != resource.StorageTree ||
+		createdPayload.Version != root.Version || createdPayload.ActorID == nil || *createdPayload.ActorID != adminID {
+		t.Fatalf("created event = %#v, payload = %#v", createdEnvelope, createdPayload)
+	}
 	revisionRepository, ok := resourceRepository.(resource.RevisionRepository)
 	if !ok {
 		t.Fatal("resource revision repository is unavailable")
@@ -817,6 +843,65 @@ WHERE id = $1;
 		createdDetailErr != nil || createdRevision.Snapshot == nil || createdRevision.Snapshot.Fields["headline"] != "Home" ||
 		len(latest.Snapshot.Widgets) != 2 {
 		t.Fatalf("widget revision history = %#v, latest = %#v, created = %#v, errors = %v / %v / %v", rootHistory, latest, createdRevision, err, detailErr, createdDetailErr)
+	}
+	rows, err := connector.Pool().Query(ctx, `
+SELECT body FROM core.outbox_messages
+WHERE topic=$1 AND message_key=$2 ORDER BY created_at,message_id;`, resource.EventUpdated, strconv.FormatInt(int64(root.ID), 10))
+	if err != nil {
+		t.Fatalf("query widget resource events: %v", err)
+	}
+	var eventVersions []int64
+	for rows.Next() {
+		var body []byte
+		if err := rows.Scan(&body); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		var envelope domainevent.Envelope
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		var payload resource.EventPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		eventVersions = append(eventVersions, payload.Version)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(eventVersions, []int64{2, 3, 4}) {
+		t.Fatalf("widget event versions = %#v", eventVersions)
+	}
+	if _, err := connector.Pool().Exec(ctx, `
+CREATE OR REPLACE FUNCTION core.reject_outbox_insert() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'forced outbox insertion failure'; END; $$;
+DROP TRIGGER IF EXISTS reject_outbox_insert ON core.outbox_messages;
+CREATE TRIGGER reject_outbox_insert BEFORE INSERT ON core.outbox_messages
+FOR EACH ROW EXECUTE FUNCTION core.reject_outbox_insert();`); err != nil {
+		t.Fatalf("install outbox failure trigger: %v", err)
+	}
+	failedWidget := reordered[1]
+	_, forcedOutboxErr := widgetRepository.UpdateWidget(ctx, &adminID, root.ID, 4, failedWidget, true)
+	if _, err := connector.Pool().Exec(ctx, `
+DROP TRIGGER IF EXISTS reject_outbox_insert ON core.outbox_messages;
+DROP FUNCTION IF EXISTS core.reject_outbox_insert();`); err != nil {
+		t.Fatalf("remove outbox failure trigger: %v", err)
+	}
+	if forcedOutboxErr == nil || !strings.Contains(forcedOutboxErr.Error(), "forced outbox insertion failure") {
+		t.Fatalf("forced outbox insertion error = %v", forcedOutboxErr)
+	}
+	rootAfterOutboxFailure, loadAfterOutboxFailureErr := resourceRepository.ByID(ctx, root.ID)
+	rootHistoryAfterOutboxFailure, historyAfterOutboxFailureErr := revisionRepository.ListRevisions(ctx, root.SiteID, root.ID, 1, 20)
+	var rootOutboxCount int
+	if err := connector.Pool().QueryRow(ctx, `SELECT count(*) FROM core.outbox_messages WHERE message_key=$1;`, strconv.FormatInt(int64(root.ID), 10)).Scan(&rootOutboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if loadAfterOutboxFailureErr != nil || historyAfterOutboxFailureErr != nil || rootAfterOutboxFailure.Version != 4 || rootHistoryAfterOutboxFailure.Total != 4 || rootOutboxCount != 4 {
+		t.Fatalf("outbox rollback state: resource=%#v history=%#v outbox=%d errors=%v/%v", rootAfterOutboxFailure, rootHistoryAfterOutboxFailure, rootOutboxCount, loadAfterOutboxFailureErr, historyAfterOutboxFailureErr)
 	}
 	if _, err := widgetRepository.UpdateWidget(ctx, &adminID, root.ID, 3, firstWidget, true); !errors.Is(err, resource.ErrConflict) {
 		t.Fatalf("stale widget update error = %v", err)
@@ -2021,6 +2106,20 @@ WHERE library_id=$1
 	}
 	assertTemplateCodes(archive.ID)
 	assertTemplateCodes(library.ID, usageAlpha, usageGamma)
+	for _, restored := range []resource.LibraryItem{usageFirst, usageSecond} {
+		var matchingEvents int
+		if err := connector.Pool().QueryRow(ctx, `
+SELECT count(*) FROM core.outbox_messages
+WHERE topic=$1 AND message_key=$2
+  AND (convert_from(body,'UTF8')::jsonb #>> '{payload,version}')::bigint=$3;`,
+			resource.EventUpdated, strconv.FormatInt(int64(restored.ID), 10), restored.Version,
+		).Scan(&matchingEvents); err != nil {
+			t.Fatal(err)
+		}
+		if matchingEvents != 1 {
+			t.Fatalf("restored library item %d version %d event count = %d", restored.ID, restored.Version, matchingEvents)
+		}
+	}
 
 	if err := libraryItems.DeleteLibraryItem(ctx, usageFirst.ID); err != nil {
 		t.Fatal(err)

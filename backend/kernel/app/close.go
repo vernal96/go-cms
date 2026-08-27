@@ -21,6 +21,11 @@ func (a *App) Close() error {
 		}
 
 		var closeErrors []error
+		a.lifecycleMu.Lock()
+		if a.workerCancel != nil {
+			a.workerCancel()
+		}
+		a.workers.Wait()
 		if a.eventBus != nil {
 			if err := a.eventBus.Close(); err != nil {
 				closeErrors = append(closeErrors, fmt.Errorf(
@@ -30,7 +35,6 @@ func (a *App) Close() error {
 			}
 		}
 
-		a.lifecycleMu.Lock()
 		for index := len(a.connectors) - 1; index >= 0; index-- {
 			connector := a.connectors[index]
 			if err := connector.Close(); err != nil {

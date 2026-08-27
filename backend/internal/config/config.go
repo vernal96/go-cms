@@ -18,6 +18,7 @@ import (
 	corepostgres "github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/user/adapters/argon2id"
 	seopostgres "github.com/vernal96/go-cms/kernel/modules/seo/adapters/postgres"
+	"github.com/vernal96/go-cms/kernel/outbox"
 )
 
 type Config struct {
@@ -28,6 +29,25 @@ type Config struct {
 	Files    FilesConfig         `envconfig:"FILES"`
 	Caches   projectcache.Config `envconfig:"CACHE"`
 	JWT      jwtsecurity.Config  `envconfig:"JWT"`
+	Outbox   OutboxConfig        `envconfig:"OUTBOX"`
+}
+
+type OutboxConfig struct {
+	PollInterval       time.Duration `envconfig:"POLL_INTERVAL" default:"500ms"`
+	BatchSize          int           `envconfig:"BATCH_SIZE" default:"100"`
+	LeaseDuration      time.Duration `envconfig:"LEASE_DURATION" default:"30s"`
+	InitialRetryDelay  time.Duration `envconfig:"INITIAL_RETRY_DELAY" default:"1s"`
+	MaximumRetryDelay  time.Duration `envconfig:"MAXIMUM_RETRY_DELAY" default:"1h"`
+	PublishedRetention time.Duration `envconfig:"PUBLISHED_RETENTION" default:"168h"`
+	CleanupInterval    time.Duration `envconfig:"CLEANUP_INTERVAL" default:"1h"`
+}
+
+func (c OutboxConfig) PublisherConfig() outbox.PublisherConfig {
+	return outbox.PublisherConfig{
+		PollInterval: c.PollInterval, BatchSize: c.BatchSize, LeaseDuration: c.LeaseDuration,
+		InitialRetryDelay: c.InitialRetryDelay, MaximumRetryDelay: c.MaximumRetryDelay,
+		PublishedRetention: c.PublishedRetention, CleanupInterval: c.CleanupInterval,
+	}
 }
 
 type FilesConfig struct {
@@ -68,12 +88,13 @@ func (c Config) Application() appkernel.Definition {
 			corefiles.PublicFactory(c.Files.Public),
 			corefiles.PrivateFactory(c.Files.Private),
 		},
-		Caches:         c.Caches.Factories(),
-		Profiles:       []kernel.Profile{dev.Profile},
-		PasswordHasher: argon2id.Factory{},
-		MaxUploadSize:  c.Files.MaxUploadSize,
-		UploadTimeout:  c.Files.UploadTimeout,
-		AvatarStorage:  c.Files.AvatarStorage,
-		AvatarMaxSize:  c.Files.AvatarMaxSize,
+		Caches:          c.Caches.Factories(),
+		Profiles:        []kernel.Profile{dev.Profile},
+		PasswordHasher:  argon2id.Factory{},
+		MaxUploadSize:   c.Files.MaxUploadSize,
+		UploadTimeout:   c.Files.UploadTimeout,
+		AvatarStorage:   c.Files.AvatarStorage,
+		AvatarMaxSize:   c.Files.AvatarMaxSize,
+		OutboxPublisher: c.Outbox.PublisherConfig(),
 	}
 }
