@@ -11,6 +11,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	coremanagement "github.com/vernal96/go-cms/kernel/modules/core/management"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	mailmodule "github.com/vernal96/go-cms/kernel/modules/mail"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
@@ -81,6 +82,19 @@ func (a *App) CMSManagement() (*coremanagement.Sites, *coremanagement.Resources,
 		return nil, nil, nil, ErrNotBooted
 	}
 	return a.cmsSites, a.cmsResources, a.cmsFiles, nil
+}
+
+func (a *App) MailManagement() (*mailmodule.Management, error) {
+	if a == nil {
+		return nil, errors.New("app is nil")
+	}
+	if a.closed.Load() {
+		return nil, ErrClosed
+	}
+	if !a.booted.Load() || a.mailManagement == nil {
+		return nil, ErrNotBooted
+	}
+	return a.mailManagement, nil
 }
 
 func (a *App) RuntimeByDomain(

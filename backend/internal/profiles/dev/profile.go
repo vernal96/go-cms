@@ -11,6 +11,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
+	"github.com/vernal96/go-cms/kernel/modules/mail"
 	"github.com/vernal96/go-cms/kernel/modules/seo"
 )
 
@@ -49,4 +50,15 @@ var Profile = kernel.Profile{
 			Module: admin.Module{},
 		},
 	},
+}
+
+func ProfileWithMail(config mail.Config) kernel.Profile {
+	result := Profile
+	result.Modules = append([]kernel.ProfileModule(nil), Profile.Modules...)
+	mailModule := kernel.ProfileModule{Module: mail.Module{}, Config: config}
+	adminIndex := len(result.Modules) - 1
+	result.Modules = append(result.Modules, kernel.ProfileModule{})
+	copy(result.Modules[adminIndex+1:], result.Modules[adminIndex:])
+	result.Modules[adminIndex] = mailModule
+	return result
 }

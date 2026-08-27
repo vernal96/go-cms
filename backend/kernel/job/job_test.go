@@ -86,6 +86,18 @@ func TestRegistryDispatcherAndRunner(t *testing.T) {
 	}
 }
 
+func TestScopedJobPreservesAndValidatesScope(t *testing.T) {
+	t.Parallel()
+	item, err := job.NewScoped("test.scoped", 1, "42", struct{}{})
+	if err != nil || item.ScopeID != "42" {
+		t.Fatalf("scoped job = %#v, %v", item, err)
+	}
+	item.ScopeID = " 42"
+	if err := item.Validate(); err == nil {
+		t.Fatal("invalid scoped job was accepted")
+	}
+}
+
 func mustJob(t *testing.T, name string) job.Envelope {
 	t.Helper()
 	item, err := job.New(name, 1, struct{}{})

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { AdminPluginRegistry } from './registry'
+import { adminPluginRegistry } from '../admin-plugins'
 
 const view = { template: '<div />' }
 
@@ -33,5 +34,17 @@ describe('AdminPluginRegistry', () => {
       { code: 'forms', icons: { feature: view } },
       { code: 'seo', icons: { feature: view } },
     ])).toThrow(/icon is registered more than once/i)
+  })
+
+  it('registers every Mail navigation target and icon', () => {
+    expect(adminPluginRegistry.icon('mail')).toBeDefined()
+    expect([
+      'mail.templates',
+      'mail.templates.create',
+      'mail.templates.edit',
+      'mail.send',
+      'mail.history',
+      'mail.history.detail',
+    ].every((name) => adminPluginRegistry.hasRoute(name))).toBe(true)
   })
 })

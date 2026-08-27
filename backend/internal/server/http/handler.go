@@ -22,6 +22,7 @@ import (
 	corefile "github.com/vernal96/go-cms/kernel/modules/core/file"
 	coremanagement "github.com/vernal96/go-cms/kernel/modules/core/management"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	mailmodule "github.com/vernal96/go-cms/kernel/modules/mail"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
@@ -234,11 +235,26 @@ func newCMSHandler(application *app.App) (http.Handler, error) {
 		return nil, err
 	}
 	definition := application.Definition()
-	return coremanagement.NewHTTPHandler(coremanagement.HTTPDependencies{
+	coreHandler, err := coremanagement.NewHTTPHandler(coremanagement.HTTPDependencies{
 		Sites: sites, Resources: resources, Files: files,
 		MaxUploadSize: definition.MaxUploadSize,
 		UploadTimeout: definition.UploadTimeout,
 	})
+	if err != nil {
+		return nil, err
+	}
+	mailManagement, err := application.MailManagement()
+	if err != nil {
+		return nil, err
+	}
+	mailHandler, err := mailmodule.NewHTTPHandler(mailManagement)
+	if err != nil {
+		return nil, err
+	}
+	router := chi.NewRouter()
+	router.Mount("/sites/{siteID}/mail", mailHandler)
+	router.Mount("/", coreHandler)
+	return router, nil
 }
 
 func (h *Handler) ServeHTTP(

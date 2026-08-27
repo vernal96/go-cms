@@ -6,6 +6,7 @@ import (
 	"fmt"
 	stdhtml "html"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -13,6 +14,7 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/templating"
 	xhtml "golang.org/x/net/html"
 )
 
@@ -90,7 +92,7 @@ func NewRenderer(
 	for variable := range allowed {
 		variables = append(variables, variable)
 	}
-	slicesSort(variables)
+	slices.Sort(variables)
 	return &Renderer{
 		allowed:           allowed,
 		variables:         variables,
@@ -119,10 +121,13 @@ func (r *Renderer) Validate(settings Settings) error {
 		if field.source == "" {
 			continue
 		}
-		if _, err := CompileTemplate(
+		if _, err := templating.Compile(
 			field.source,
 			r.allowed,
-			r.maxTemplateLength,
+			templating.Limits{
+				MaxSourceLength: r.maxTemplateLength,
+				MaxResultLength: r.maxResultLength,
+			},
 		); err != nil {
 			return ValidationError{Field: field.key, Err: err}
 		}
@@ -140,23 +145,29 @@ func (r *Renderer) Render(settings Settings, input RenderInput) (Preview, error)
 		if source == "" {
 			return "", nil
 		}
-		compiled, err := CompileTemplate(source, r.allowed, r.maxTemplateLength)
+		compiled, err := templating.Compile(source, r.allowed, templating.Limits{
+			MaxSourceLength: r.maxTemplateLength,
+			MaxResultLength: r.maxResultLength,
+		})
 		if err != nil {
 			return "", ValidationError{Field: field, Err: err}
 		}
-		value, missing := compiled.render(resolver.resolve)
-		value = plainText(value)
+		result, err := templating.Render(compiled, resolver.resolve, templating.PlainText)
+		if err != nil {
+			return "", ValidationError{Field: field, Err: err}
+		}
+		value := plainText(result.Value)
 		if utf8.RuneCountInString(value) > r.maxResultLength {
 			return "", ValidationError{Field: field, Err: fmt.Errorf(
 				"result exceeds %d characters",
 				r.maxResultLength,
 			)}
 		}
-		for _, variable := range missing {
+		for _, warning := range result.Warnings {
 			warnings = append(warnings, Warning{
 				Field:    field,
-				Variable: variable,
-				Message:  "variable has no current value",
+				Variable: warning.Variable,
+				Message:  warning.Message,
 			})
 		}
 		return value, nil
@@ -234,7 +245,12 @@ type valueResolver struct {
 	resource resource.Resource
 }
 
-func (r valueResolver) resolve(variable string) (string, bool) {
+func (r valueResolver) resolve(variable string) (any, bool, error) {
+	value, exists := r.value(variable)
+	return value, exists, nil
+}
+
+func (r valueResolver) value(variable string) (string, bool) {
 	switch variable {
 	case "resource.title":
 		return stringValue(r.resource.Title)
@@ -347,12 +363,4 @@ func splitKeywords(value string) []string {
 		}
 	}
 	return result
-}
-
-func slicesSort(values []string) {
-	for index := 1; index < len(values); index++ {
-		for current := index; current > 0 && values[current] < values[current-1]; current-- {
-			values[current], values[current-1] = values[current-1], values[current]
-		}
-	}
 }

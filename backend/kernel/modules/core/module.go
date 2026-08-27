@@ -241,6 +241,13 @@ func (r *Runtime) Authorization() security.Authorizer {
 	return r.services.Authorization
 }
 
+func (r *Runtime) Files() file.ManagementService {
+	if r == nil || r.services == nil {
+		return nil
+	}
+	return r.services.Files
+}
+
 func (r *Runtime) RepositoryCache() (
 	RepositoryCacheDescriptor,
 	bool,

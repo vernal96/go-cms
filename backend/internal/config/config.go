@@ -17,6 +17,8 @@ import (
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	corepostgres "github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/user/adapters/argon2id"
+	mailmodule "github.com/vernal96/go-cms/kernel/modules/mail"
+	mailpostgres "github.com/vernal96/go-cms/kernel/modules/mail/adapters/postgres"
 	seopostgres "github.com/vernal96/go-cms/kernel/modules/seo/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/outbox"
 )
@@ -30,6 +32,52 @@ type Config struct {
 	Caches   projectcache.Config `envconfig:"CACHE"`
 	JWT      jwtsecurity.Config  `envconfig:"JWT"`
 	Outbox   OutboxConfig        `envconfig:"OUTBOX"`
+	Mail     MailConfig          `envconfig:"MAIL"`
+}
+
+type MailConfig struct {
+	DefaultTransport       mailmodule.TransportAlias `envconfig:"DEFAULT_TRANSPORT" default:"default"`
+	DefaultDriver          string                    `envconfig:"TRANSPORT_DEFAULT_DRIVER" default:"log"`
+	SMTPHost               string                    `envconfig:"SMTP_HOST"`
+	SMTPPort               int                       `envconfig:"SMTP_PORT" default:"587"`
+	SMTPUsername           string                    `envconfig:"SMTP_USERNAME"`
+	SMTPPassword           string                    `envconfig:"SMTP_PASSWORD"`
+	SMTPTLSEnabled         bool                      `envconfig:"SMTP_TLS_ENABLED" default:"true"`
+	SMTPTLSServerName      string                    `envconfig:"SMTP_TLS_SERVER_NAME"`
+	SMTPTimeout            time.Duration             `envconfig:"SMTP_TIMEOUT" default:"10s"`
+	AllowedSenderAddresses []string                  `envconfig:"ALLOWED_SENDER_ADDRESSES"`
+	AllowedSenderDomains   []string                  `envconfig:"ALLOWED_SENDER_DOMAINS"`
+	MessageIDDomain        string                    `envconfig:"MESSAGE_ID_DOMAIN" default:"localhost"`
+	HistoryRetention       time.Duration             `envconfig:"HISTORY_RETENTION" default:"720h"`
+	HistoryCleanupInterval time.Duration             `envconfig:"HISTORY_CLEANUP_INTERVAL" default:"1h"`
+	HistoryCleanupBatch    int                       `envconfig:"HISTORY_CLEANUP_BATCH" default:"100"`
+}
+
+func (c MailConfig) ModuleConfig() mailmodule.Config {
+	var transport mailmodule.Transport
+	switch c.DefaultDriver {
+	case "smtp":
+		transport = mailmodule.ConfiguredSMTPTransport{Config: mailmodule.SMTPConfig{
+			Host: c.SMTPHost, Port: c.SMTPPort, Username: c.SMTPUsername, Password: c.SMTPPassword,
+			TLSEnabled: c.SMTPTLSEnabled, TLSServerName: c.SMTPTLSServerName, Timeout: c.SMTPTimeout,
+		}}
+	case "null":
+		transport = mailmodule.NullTransport{}
+	case "log":
+		transport = mailmodule.LogTransport{}
+	default:
+		transport = mailmodule.InvalidTransport{Name: c.DefaultDriver}
+	}
+	return mailmodule.Config{
+		DefaultTransport: c.DefaultTransport,
+		Transports:       map[mailmodule.TransportAlias]mailmodule.Transport{c.DefaultTransport: transport},
+		Renderer: mailmodule.RendererConfig{SenderPolicy: mailmodule.SenderPolicy{
+			AllowedAddresses: append([]string(nil), c.AllowedSenderAddresses...),
+			AllowedDomains:   append([]string(nil), c.AllowedSenderDomains...),
+		}},
+		MessageIDDomain: c.MessageIDDomain, HistoryRetention: c.HistoryRetention,
+		CleanupInterval: c.HistoryCleanupInterval, CleanupBatchSize: c.HistoryCleanupBatch,
+	}
 }
 
 type OutboxConfig struct {
@@ -84,6 +132,7 @@ func (c Config) Application() appkernel.Definition {
 			Adapters: []kernel.ModuleDatabaseFactory{
 				corepostgres.DatabaseFactory{},
 				seopostgres.DatabaseFactory{},
+				mailpostgres.DatabaseFactory{},
 			},
 		},
 		Filesystems: []filesystem.Factory{
@@ -91,7 +140,7 @@ func (c Config) Application() appkernel.Definition {
 			corefiles.PrivateFactory(c.Files.Private),
 		},
 		Caches:          c.Caches.Factories(),
-		Profiles:        []kernel.Profile{dev.Profile},
+		Profiles:        []kernel.Profile{dev.ProfileWithMail(c.Mail.ModuleConfig())},
 		PasswordHasher:  argon2id.Factory{},
 		MaxUploadSize:   c.Files.MaxUploadSize,
 		UploadTimeout:   c.Files.UploadTimeout,

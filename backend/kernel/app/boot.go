@@ -5,8 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"sort"
+	"time"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/background"
+	"github.com/vernal96/go-cms/kernel/job"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
@@ -15,6 +20,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
+	mailmodule "github.com/vernal96/go-cms/kernel/modules/mail"
 	"github.com/vernal96/go-cms/kernel/outbox"
 )
 
@@ -159,6 +165,10 @@ func (a *App) boot(ctx context.Context) error {
 			return err
 		}
 	}
+	mailManagement, err := mailmodule.NewManagement(catalog, siteAccessPolicy)
+	if err != nil {
+		return err
+	}
 
 	cmsSites, err := coremanagement.NewSites(coremanagement.SiteDependencies{
 		Profiles:         a.definition.Profiles,
@@ -217,14 +227,30 @@ func (a *App) boot(ctx context.Context) error {
 	a.cmsResources = cmsResources
 	a.cmsFiles = cmsFiles
 	a.adminManagement = adminManagement
+	a.mailManagement = mailManagement
+	jobRunner, err := jobRunnerFromProfiles(a.definition.Profiles, catalog)
+	if err != nil {
+		return err
+	}
+	backgroundTasks, err := backgroundTasksFromProfiles(a.definition.Profiles, catalog)
+	if err != nil {
+		return err
+	}
+	var publisher *outbox.Publisher
 	if len(a.outboxSources) > 0 {
-		publisher, err := outbox.NewPublisher(a.eventBus, a.outboxSources, a.logger, a.definition.OutboxPublisher)
+		publisher, err = outbox.NewPublisher(a.eventBus, a.outboxSources, a.logger, a.definition.OutboxPublisher)
 		if err != nil {
 			return err
 		}
-		workerContext, cancel := context.WithCancel(context.Background())
-		a.outboxPublisher = publisher
+	}
+	var workerContext context.Context
+	if len(a.outboxSources) > 0 || jobRunner != nil || len(backgroundTasks) > 0 {
+		var cancel context.CancelFunc
+		workerContext, cancel = context.WithCancel(context.Background())
 		a.workerCancel = cancel
+	}
+	if len(a.outboxSources) > 0 {
+		a.outboxPublisher = publisher
 		a.workers.Add(1)
 		go func() {
 			defer a.workers.Done()
@@ -233,6 +259,177 @@ func (a *App) boot(ctx context.Context) error {
 			}
 		}()
 	}
+	if jobRunner != nil {
+		a.workers.Add(1)
+		go func() {
+			defer a.workers.Done()
+			if err := jobRunner.Run(workerContext, a.eventBus, "go-cms"); err != nil && a.logger != nil && workerContext.Err() == nil {
+				a.logger.Error("job runner exited", slog.String("event", "job.runner.failed"), slog.Any("error", err))
+			}
+		}()
+	}
+	for _, task := range backgroundTasks {
+		task := task
+		a.workers.Add(1)
+		go func() {
+			defer a.workers.Done()
+			for workerContext.Err() == nil {
+				err := task.Run(workerContext)
+				if workerContext.Err() != nil {
+					return
+				}
+				if err != nil && a.logger != nil {
+					a.logger.Error("background task exited", slog.String("event", "background.task.failed"), slog.String("task", task.Name), slog.Any("error", err))
+				}
+				timer := time.NewTimer(5 * time.Second)
+				select {
+				case <-workerContext.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			}
+		}()
+	}
 	a.booted.Store(true)
 	return nil
+}
+
+func backgroundTasksFromProfiles(profiles []kernel.Profile, catalog *site.Catalog) ([]background.Task, error) {
+	names, err := declaredNames(profiles, func(module kernel.Module) ([]string, bool) {
+		provider, ok := module.(background.NamesProvider)
+		if !ok {
+			return nil, false
+		}
+		return provider.BackgroundTaskNames(), true
+	})
+	if err != nil {
+		return nil, fmt.Errorf("collect background task declarations: %w", err)
+	}
+	result := make([]background.Task, len(names))
+	for index, name := range names {
+		name := name
+		result[index] = background.Task{Name: name, Run: func(ctx context.Context) error {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				if task, exists := runtimeBackgroundTask(catalog, name); exists {
+					return task.Run(ctx)
+				}
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-ticker.C:
+				}
+			}
+		}}
+	}
+	return result, nil
+}
+
+func runtimeBackgroundTask(catalog *site.Catalog, name string) (background.Task, bool) {
+	for _, runtime := range catalog.Runtimes() {
+		for _, moduleRuntime := range runtime.Profile().Modules() {
+			provider, ok := moduleRuntime.(background.Provider)
+			if !ok {
+				continue
+			}
+			for _, task := range provider.BackgroundTasks() {
+				if task.Name == name && task.Run != nil {
+					return task, true
+				}
+			}
+		}
+	}
+	return background.Task{}, false
+}
+
+func jobRunnerFromProfiles(profiles []kernel.Profile, catalog *site.Catalog) (*job.Runner, error) {
+	names, err := declaredNames(profiles, func(module kernel.Module) ([]string, bool) {
+		provider, ok := module.(job.NamesProvider)
+		if !ok {
+			return nil, false
+		}
+		return provider.JobNames(), true
+	})
+	if err != nil {
+		return nil, fmt.Errorf("collect job declarations: %w", err)
+	}
+	registry := job.NewRegistry()
+	if len(names) == 0 {
+		return nil, nil
+	}
+	for _, name := range names {
+		name := name
+		if err := registry.Register(name, func(ctx context.Context, item job.Envelope) error {
+			candidates := make([]job.Definition, 0, 1)
+			for _, runtime := range catalog.Runtimes() {
+				if item.ScopeID != "" && item.ScopeID != fmt.Sprint(runtime.Site().ID) {
+					continue
+				}
+				for _, moduleRuntime := range runtime.Profile().Modules() {
+					provider, ok := moduleRuntime.(job.Provider)
+					if !ok {
+						continue
+					}
+					for _, definition := range provider.Jobs() {
+						if definition.Name != name || definition.Handler == nil || (definition.ScopeID != "" && definition.ScopeID != item.ScopeID) {
+							continue
+						}
+						candidates = append(candidates, definition)
+					}
+				}
+			}
+			if len(candidates) == 0 {
+				return fmt.Errorf("job handler %q scope %q has no current site runtime", name, item.ScopeID)
+			}
+			if len(candidates) > 1 {
+				return fmt.Errorf("job handler %q scope %q is ambiguous", name, item.ScopeID)
+			}
+			return candidates[0].Handler(ctx, item)
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return job.NewRunner(registry)
+}
+
+func declaredNames(
+	profiles []kernel.Profile,
+	resolve func(kernel.Module) ([]string, bool),
+) ([]string, error) {
+	owners := make(map[string]kernel.ModuleCode)
+	modules := make(map[kernel.ModuleCode][]string)
+	for _, profile := range profiles {
+		for _, profileModule := range profile.Modules {
+			names, ok := resolve(profileModule.Module)
+			if !ok {
+				continue
+			}
+			names = append([]string(nil), names...)
+			sort.Strings(names)
+			if previous, exists := modules[profileModule.Module.Code()]; exists {
+				if !slices.Equal(previous, names) {
+					return nil, fmt.Errorf("module %q has inconsistent declarations", profileModule.Module.Code())
+				}
+				continue
+			}
+			modules[profileModule.Module.Code()] = names
+			for _, name := range names {
+				if name == "" {
+					return nil, fmt.Errorf("module %q declares an empty name", profileModule.Module.Code())
+				}
+				if owner, exists := owners[name]; exists && owner != profileModule.Module.Code() {
+					return nil, fmt.Errorf("name %q is declared by modules %q and %q", name, owner, profileModule.Module.Code())
+				}
+				owners[name] = profileModule.Module.Code()
+			}
+		}
+	}
+	result := make([]string, 0, len(owners))
+	for name := range owners {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result, nil
 }

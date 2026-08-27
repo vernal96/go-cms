@@ -17,11 +17,16 @@ const TopicPrefix = "job."
 type Envelope struct {
 	ID            messageid.ID    `json:"id"`
 	Name          string          `json:"name"`
+	ScopeID       string          `json:"scope_id,omitempty"`
 	SchemaVersion int             `json:"schema_version"`
 	Payload       json.RawMessage `json:"payload"`
 }
 
 func New(name string, schemaVersion int, payload any) (Envelope, error) {
+	return NewScoped(name, schemaVersion, "", payload)
+}
+
+func NewScoped(name string, schemaVersion int, scopeID string, payload any) (Envelope, error) {
 	id, err := messageid.New()
 	if err != nil {
 		return Envelope{}, fmt.Errorf("create job ID: %w", err)
@@ -30,7 +35,7 @@ func New(name string, schemaVersion int, payload any) (Envelope, error) {
 	if err != nil {
 		return Envelope{}, fmt.Errorf("encode job payload: %w", err)
 	}
-	job := Envelope{ID: id, Name: name, SchemaVersion: schemaVersion, Payload: raw}
+	job := Envelope{ID: id, Name: name, ScopeID: scopeID, SchemaVersion: schemaVersion, Payload: raw}
 	if err := job.Validate(); err != nil {
 		return Envelope{}, err
 	}
@@ -44,6 +49,9 @@ func (j Envelope) Validate() error {
 	if strings.TrimSpace(j.Name) == "" || j.Name != strings.TrimSpace(j.Name) {
 		return errors.New("job name is invalid")
 	}
+	if j.ScopeID != strings.TrimSpace(j.ScopeID) {
+		return errors.New("job scope ID is invalid")
+	}
 	if j.SchemaVersion < 1 {
 		return errors.New("job schema version is invalid")
 	}
@@ -56,6 +64,25 @@ func (j Envelope) Validate() error {
 func Topic(name string) string { return TopicPrefix + name }
 
 type Handler func(context.Context, Envelope) error
+
+type Definition struct {
+	Name    string
+	ScopeID string
+	Handler Handler
+}
+
+// Provider is an optional module-runtime capability for application-scoped
+// asynchronous job handlers.
+type Provider interface {
+	Jobs() []Definition
+}
+
+// NamesProvider lets a module declaration advertise stable job topics before
+// any site runtime exists. Handlers remain runtime-owned and are resolved from
+// the current published site runtimes for each delivery.
+type NamesProvider interface {
+	JobNames() []string
+}
 
 type Registry struct{ handlers map[string]Handler }
 

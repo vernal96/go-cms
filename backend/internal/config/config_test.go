@@ -11,6 +11,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	"github.com/vernal96/go-cms/kernel/modules/mail"
 )
 
 func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
@@ -50,6 +51,8 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	t.Setenv("JWT_CLOCK_SKEW", "5s")
 	t.Setenv("OUTBOX_BATCH_SIZE", "25")
 	t.Setenv("OUTBOX_CLEANUP_MAX_BATCHES", "40")
+	t.Setenv("MAIL_TRANSPORT_DEFAULT_DRIVER", "null")
+	t.Setenv("MAIL_HISTORY_RETENTION", "240h")
 
 	config, err := configloader.Load[projectconfig.Config]("")
 	if err != nil {
@@ -89,6 +92,9 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		config.Outbox.CleanupMaxBatches != 40 {
 		t.Fatalf("outbox configuration = %#v", config.Outbox)
 	}
+	if config.Mail.DefaultDriver != "null" || config.Mail.HistoryRetention != 240*time.Hour {
+		t.Fatalf("mail configuration = %#v", config.Mail)
+	}
 
 	definition := config.Application()
 	if definition.Logger == nil {
@@ -100,9 +106,10 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	if definition.MainDatabase.Connector.Code() != mainpostgres.ConnectionCode {
 		t.Fatalf("connection code = %q", definition.MainDatabase.Connector.Code())
 	}
-	if len(definition.MainDatabase.Adapters) != 2 ||
+	if len(definition.MainDatabase.Adapters) != 3 ||
 		definition.MainDatabase.Adapters[0].ModuleCode() != core.ModuleCode ||
-		definition.MainDatabase.Adapters[1].ModuleCode() != "seo" {
+		definition.MainDatabase.Adapters[1].ModuleCode() != "seo" ||
+		definition.MainDatabase.Adapters[2].ModuleCode() != mail.ModuleCode {
 		t.Fatalf("database adapters = %#v", definition.MainDatabase.Adapters)
 	}
 	if len(definition.Profiles) != 1 || definition.Profiles[0].Code != "dev" {
@@ -122,10 +129,11 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		definition.OutboxPublisher.CleanupMaxBatches != 40 {
 		t.Fatalf("outbox publisher definition = %#v", definition.OutboxPublisher)
 	}
-	if len(definition.Profiles[0].Modules) != 3 ||
+	if len(definition.Profiles[0].Modules) != 4 ||
 		definition.Profiles[0].Modules[0].Module.Code() != core.ModuleCode ||
 		definition.Profiles[0].Modules[1].Module.Code() != "seo" ||
-		definition.Profiles[0].Modules[2].Module.Code() != admin.ModuleCode ||
+		definition.Profiles[0].Modules[2].Module.Code() != mail.ModuleCode ||
+		definition.Profiles[0].Modules[3].Module.Code() != admin.ModuleCode ||
 		len(definition.Profiles[0].Modules[0].Caches) != 2 ||
 		definition.Profiles[0].Modules[0].Caches[0].Alias != core.DurableCacheAlias ||
 		definition.Profiles[0].Modules[0].Caches[0].Code != projectcache.FilesystemCode ||

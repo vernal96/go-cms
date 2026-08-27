@@ -181,8 +181,12 @@ func (r *Runtime) serveSession(
 		)
 		return
 	}
-	permissions := make([]permission.Code, 0, len(AdminPermissionCodes))
-	for _, code := range AdminPermissionCodes {
+	permissionCodes := AdminPermissionCodes
+	if catalog, ok := r.authorization.(interface{ Codes() []permission.Code }); ok {
+		permissionCodes = catalog.Codes()
+	}
+	permissions := make([]permission.Code, 0, len(permissionCodes))
+	for _, code := range permissionCodes {
 		err := r.authorization.Check(request.Context(), actor, code)
 		if err == nil {
 			permissions = append(permissions, code)
