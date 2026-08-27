@@ -470,6 +470,17 @@ func (r *Repository) FinishAttempt(ctx context.Context, id mail.MessageID, numbe
 	return tx.Commit(ctx)
 }
 
+func (r *Repository) HasActiveMessages(ctx context.Context, siteID site.ID) (bool, error) {
+	if ctx == nil {
+		return false, errors.New("mail active-message query context is nil")
+	}
+	var active bool
+	if err := r.connector.Pool().QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM mail.messages WHERE site_id=$1 AND status IN ('queued','sending','retryable') LIMIT 1);`, siteID).Scan(&active); err != nil {
+		return false, fmt.Errorf("query active mail messages: %w", err)
+	}
+	return active, nil
+}
+
 func (r *Repository) Cleanup(ctx context.Context, siteID site.ID, retention time.Duration, limit int) (int64, error) {
 	if siteID <= 0 || retention < 0 || limit < 1 {
 		return 0, errors.New("mail cleanup request is invalid")

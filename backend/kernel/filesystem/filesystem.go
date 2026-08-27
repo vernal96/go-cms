@@ -61,16 +61,24 @@ type PrefixWalker interface {
 	WalkPrefix(context.Context, string, func(string) error) error
 }
 
-type PrefixPage struct {
-	Keys       []string
-	NextCursor string
+type PrefixScanPage struct {
+	Keys []string
+	Done bool
 }
 
-// PrefixPager is an optional maintenance capability for bounded, resumable
-// scans. A non-empty NextCursor resumes strictly after the final returned key;
-// an empty cursor marks the end of the current scan.
-type PrefixPager interface {
-	ListPrefix(context.Context, string, string, int) (PrefixPage, error)
+// PrefixScan is a stateful bounded scan. Each Next call advances retained
+// traversal/continuation state instead of restarting from the prefix root.
+// Implementations must release resources on Close and when Done is reached.
+type PrefixScan interface {
+	Next(context.Context, int) (PrefixScanPage, error)
+	Close() error
+}
+
+// PrefixScannerProvider is an optional maintenance capability that maps to a
+// stateful directory traversal locally and continuation-token scans on object
+// stores.
+type PrefixScannerProvider interface {
+	OpenPrefixScan(context.Context, string) (PrefixScan, error)
 }
 
 type KeyDistribution string

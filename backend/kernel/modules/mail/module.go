@@ -78,7 +78,7 @@ func (Module) Registry() kernel.ModuleRegistry {
 
 func (Module) JobNames() []string { return []string{SendJobName} }
 
-func (Module) Build(_ context.Context, ctx kernel.ModuleContext) (kernel.ModuleRuntime, error) {
+func (Module) Build(buildCtx context.Context, ctx kernel.ModuleContext) (kernel.ModuleRuntime, error) {
 	database, err := kernel.ModuleDatabaseFrom[Database](ctx, "", ModuleCode)
 	if err != nil {
 		return nil, err
@@ -96,6 +96,9 @@ func (Module) Build(_ context.Context, ctx kernel.ModuleContext) (kernel.ModuleR
 	}
 	config, err = normalizeConfig(config)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateUploadStorage(buildCtx, coreRuntime.Files(), config.UploadStorage); err != nil {
 		return nil, err
 	}
 	transports, err := NewTransportRegistry(config.Transports)
@@ -138,7 +141,7 @@ func (Module) Build(_ context.Context, ctx kernel.ModuleContext) (kernel.ModuleR
 	service.logger = ctx.Logger()
 	service.uploadStorage = config.UploadStorage
 	service.uploadPath = config.UploadPath
-	worker, err := NewWorker(site.ID(siteIDValue), database.Mail(), coreRuntime.Files(), spool, transports, config.SendMaxAttempts, ctx.Logger())
+	worker, err := newWorker(site.ID(siteIDValue), database.Mail(), coreRuntime.Files(), spool, transports, service.lifecycle, config.SendMaxAttempts, ctx.Logger())
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +188,37 @@ func (r *Runtime) BackgroundTasks() []background.Task {
 	return result
 }
 
-func (r *Runtime) runSpoolCleanup(ctx context.Context) error {
+func (r *Runtime) PrepareRuntimeTransition(ctx context.Context, transition kernel.RuntimeTransition) (kernel.PreparedRuntimeTransition, error) {
+	if transition.Reason != kernel.RuntimeTransitionProfileChange && transition.Reason != kernel.RuntimeTransitionSiteDelete {
+		return nil, fmt.Errorf("unsupported Mail runtime transition reason %q", transition.Reason)
+	}
+	if transition.ScopeID != fmt.Sprint(r.service.siteID) {
+		return nil, errors.New("mail runtime transition scope is invalid")
+	}
+	prepared := &preparedRuntimeTransition{lifecycle: r.service.lifecycle}
+	if err := r.service.lifecycle.beginDrain(); err != nil {
+		return nil, err
+	}
+	active, err := r.service.repository.HasActiveMessages(ctx, r.service.siteID)
+	if err != nil {
+		prepared.Abort()
+		return nil, err
+	}
+	if active {
+		prepared.Abort()
+		return nil, fmt.Errorf("%w: %w for site %d", kernel.ErrRuntimeTransitionBlocked, ErrActiveMessages, r.service.siteID)
+	}
+	if r.spool != nil {
+		if _, err := r.spool.Purge(ctx, r.spoolCleanupBatch); err != nil {
+			prepared.Abort()
+			return nil, fmt.Errorf("purge mail spool before runtime transition: %w", err)
+		}
+	}
+	return prepared, nil
+}
+
+func (r *Runtime) runSpoolCleanup(ctx context.Context) (resultErr error) {
+	defer func() { resultErr = errors.Join(resultErr, r.spool.CloseCleanupScan()) }()
 	cleanup := func() error {
 		_, err := r.spool.Cleanup(ctx, time.Now().UTC().Add(-r.spoolTTL), r.spoolCleanupBatch, func(ctx context.Context, keys []string) (map[string]struct{}, error) {
 			return r.service.repository.ActiveSpoolKeys(ctx, r.service.siteID, keys)
@@ -210,6 +243,26 @@ func (r *Runtime) runSpoolCleanup(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+type uploadDiskCatalog interface {
+	Disks(context.Context, security.Actor) ([]filesystem.DiskInfo, error)
+}
+
+func validateUploadStorage(ctx context.Context, catalog uploadDiskCatalog, code filesystem.Code) error {
+	if catalog == nil {
+		return errors.New("mail upload filesystem catalog is unavailable")
+	}
+	disks, err := catalog.Disks(ctx, security.System())
+	if err != nil {
+		return fmt.Errorf("list filesystems for Mail uploads: %w", err)
+	}
+	for _, disk := range disks {
+		if disk.Code == code {
+			return nil
+		}
+	}
+	return fmt.Errorf("mail upload storage %q is unavailable", code)
 }
 
 func (r *Runtime) runRetention(ctx context.Context) error {
@@ -267,11 +320,15 @@ func normalizeConfig(config Config) (Config, error) {
 	if strings.TrimSpace(string(config.UploadStorage)) == "" {
 		config.UploadStorage = "private"
 	}
-	config.UploadPath = strings.Trim(strings.TrimSpace(config.UploadPath), "/")
+	rawUploadPath := strings.TrimSpace(config.UploadPath)
+	if path.IsAbs(rawUploadPath) || strings.Contains(rawUploadPath, "\\") {
+		return Config{}, errors.New("mail upload path is invalid")
+	}
+	config.UploadPath = strings.Trim(rawUploadPath, "/")
 	if config.UploadPath == "" {
 		config.UploadPath = "mail"
 	}
-	if path.IsAbs(config.UploadPath) || path.Clean(config.UploadPath) != config.UploadPath || config.UploadPath == ".." || strings.HasPrefix(config.UploadPath, "../") || strings.Contains(config.UploadPath, "\\") {
+	if path.Clean(config.UploadPath) != config.UploadPath || config.UploadPath == ".." || strings.HasPrefix(config.UploadPath, "../") {
 		return Config{}, errors.New("mail upload path is invalid")
 	}
 	if config.SpoolEnabled {
@@ -288,6 +345,7 @@ var _ kernel.ModuleDescriptorProvider = Module{}
 var _ kernel.RegistryProvider = Module{}
 var _ job.NamesProvider = Module{}
 var _ kernel.ModuleRuntime = (*Runtime)(nil)
+var _ kernel.RuntimeTransitionParticipant = (*Runtime)(nil)
 var _ job.Provider = (*Runtime)(nil)
 var _ background.Provider = (*Runtime)(nil)
 var _ adminui.NavigationProvider = (*Runtime)(nil)

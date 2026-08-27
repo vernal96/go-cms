@@ -38,6 +38,7 @@ type Service struct {
 	siteID     site.ID
 	repository Repository
 	renderer   *Renderer
+	lifecycle  *runtimeLifecycle
 	authorizer security.Authorizer
 	users      interface {
 		Current(context.Context, security.Actor) (coreuser.User, error)
@@ -86,7 +87,7 @@ func NewService(siteID site.ID, repository Repository, renderer *Renderer, autho
 	if !messageIDDomainPattern.MatchString(messageIDDomain) {
 		return nil, errors.New("mail Message-ID domain is invalid")
 	}
-	return &Service{siteID: siteID, repository: repository, renderer: renderer, authorizer: authorizer, users: users, transports: transports, spool: spool, limits: limits, defaultTransport: defaultTransport, messageIDDomain: messageIDDomain}, nil
+	return &Service{siteID: siteID, repository: repository, renderer: renderer, lifecycle: &runtimeLifecycle{}, authorizer: authorizer, users: users, transports: transports, spool: spool, limits: limits, defaultTransport: defaultTransport, messageIDDomain: messageIDDomain}, nil
 }
 
 func (s *Service) ListTemplates(ctx context.Context, actor security.Actor, query PageQuery) (TemplatePage, error) {
@@ -177,6 +178,15 @@ func (s *Service) SetTemplateEnabled(ctx context.Context, actor security.Actor, 
 	if id <= 0 {
 		return Template{}, fmt.Errorf("%w: template ID is invalid", ErrInvalid)
 	}
+	if enabled {
+		template, err := s.repository.TemplateByID(ctx, s.siteID, id)
+		if err != nil {
+			return Template{}, err
+		}
+		if err := s.renderer.ValidateTemplate(template); err != nil {
+			return Template{}, err
+		}
+	}
 	return s.repository.SetTemplateEnabled(ctx, s.siteID, id, enabled, actor.AuditUserID())
 }
 
@@ -255,6 +265,16 @@ func (s *Service) QueueByCode(ctx context.Context, input QueueInput) (Message, e
 }
 
 func (s *Service) queue(ctx context.Context, template Template, values map[string]any, transient []TransientAttachment, renderActor security.Actor, origin Origin) (_ Message, resultErr error) {
+	var result Message
+	err := s.lifecycle.withActive(func() error {
+		var err error
+		result, err = s.queueActive(ctx, template, values, transient, renderActor, origin)
+		return err
+	})
+	return result, err
+}
+
+func (s *Service) queueActive(ctx context.Context, template Template, values map[string]any, transient []TransientAttachment, renderActor security.Actor, origin Origin) (_ Message, resultErr error) {
 	if !template.Enabled {
 		return Message{}, ErrTemplateDisabled
 	}

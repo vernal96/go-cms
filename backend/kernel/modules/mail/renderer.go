@@ -43,6 +43,7 @@ type RendererConfig struct {
 type Renderer struct {
 	fields        field.TypeResolver
 	files         FileService
+	siteID        site.ID
 	siteVariables site.TemplateVariables
 	config        RendererConfig
 }
@@ -67,11 +68,11 @@ func NewRenderer(fields field.TypeResolver, files FileService, item site.Site, p
 		config.SenderPolicy.AllowedDomains = []string{item.Domain}
 	}
 	config.SenderPolicy = normalizeSenderPolicy(config.SenderPolicy)
-	return &Renderer{fields: fields, files: files, siteVariables: site.NewTemplateVariables(item, params), config: config}, nil
+	return &Renderer{fields: fields, files: files, siteID: item.ID, siteVariables: site.NewTemplateVariables(item, params), config: config}, nil
 }
 
 func (r *Renderer) ValidateTemplate(template Template) error {
-	if template.SiteID <= 0 || !templateCodePattern.MatchString(template.Code) || strings.TrimSpace(template.Name) == "" {
+	if template.SiteID <= 0 || template.SiteID != r.siteID || !templateCodePattern.MatchString(template.Code) || strings.TrimSpace(template.Name) == "" {
 		return fmt.Errorf("%w: identity is invalid", ErrInvalid)
 	}
 	if strings.TrimSpace(string(template.Transport)) == "" || strings.TrimSpace(string(template.Transport)) != string(template.Transport) {

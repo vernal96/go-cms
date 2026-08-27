@@ -29,8 +29,10 @@ func TestMigrationSourceDefinesSiteScopedMailHistoryAndOutboxDependencies(t *tes
 	sql := string(raw)
 	for _, required := range []string{
 		"CREATE TABLE mail.templates",
+		"site_id         BIGINT      NOT NULL REFERENCES core.sites (id) ON DELETE CASCADE",
 		"UNIQUE (site_id, code)",
 		"CREATE TABLE mail.messages",
+		"site_id           BIGINT      NOT NULL REFERENCES core.sites (id) ON DELETE CASCADE",
 		"template_id       BIGINT      NULL REFERENCES mail.templates (id) ON DELETE SET NULL",
 		"CREATE TABLE mail.delivery_attempts",
 		"message_id        BIGINT      NOT NULL REFERENCES mail.messages (id) ON DELETE CASCADE",
@@ -39,6 +41,13 @@ func TestMigrationSourceDefinesSiteScopedMailHistoryAndOutboxDependencies(t *tes
 		if !strings.Contains(sql, required) {
 			t.Fatalf("mail migration is missing %q", required)
 		}
+	}
+	retryRaw, err := fs.ReadFile(sources[0].FS, sources[0].Path+"/000002_delivery_retry.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(retryRaw), "CREATE INDEX idx_mail_messages_site_retryable") || !strings.Contains(string(retryRaw), "WHERE status IN ('queued', 'sending', 'retryable')") {
+		t.Fatal("mail active-delivery index is missing")
 	}
 	if (&Database{}).ModuleCode() != mail.ModuleCode {
 		t.Fatal("database module code mismatch")

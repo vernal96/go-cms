@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/vernal96/go-cms/kernel/eventbus"
@@ -95,6 +96,27 @@ func TestScopedJobPreservesAndValidatesScope(t *testing.T) {
 	item.ScopeID = " 42"
 	if err := item.Validate(); err == nil {
 		t.Fatal("invalid scoped job was accepted")
+	}
+}
+
+func TestRunnerAcknowledgesOnlyExplicitlyObsoleteJobs(t *testing.T) {
+	registry := job.NewRegistry()
+	if err := registry.Register("test.obsolete", func(context.Context, job.Envelope) error {
+		return fmt.Errorf("scope disappeared: %w", job.ErrObsolete)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := job.NewRunner(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, _ := job.NewScoped("test.obsolete", 1, "42", struct{}{})
+	body, _ := json.Marshal(item)
+	if err := runner.Handle(context.Background(), eventbus.Message{Topic: job.Topic(item.Name), Body: body}); err != nil {
+		t.Fatalf("obsolete job was not acknowledged: %v", err)
+	}
+	if err := runner.Handle(context.Background(), eventbus.Message{Topic: job.Topic(item.Name), Body: []byte("not-json")}); err == nil {
+		t.Fatal("malformed job was acknowledged")
 	}
 }
 

@@ -25,6 +25,7 @@ type Repository interface {
 	DeleteMessage(context.Context, site.ID, MessageID) error
 	ClaimMessage(context.Context, site.ID, MessageID, int) (Message, DeliveryAttempt, bool, error)
 	FinishAttempt(context.Context, MessageID, int, DeliveryResult, *DeliveryError, bool) error
+	HasActiveMessages(context.Context, site.ID) (bool, error)
 	Cleanup(context.Context, site.ID, time.Duration, int) (int64, error)
 	ActiveSpoolKeys(context.Context, site.ID, []string) (map[string]struct{}, error)
 }

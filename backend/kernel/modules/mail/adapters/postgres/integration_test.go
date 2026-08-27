@@ -85,6 +85,23 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	otherTemplate, err := repository.CreateTemplate(ctx, mail.Template{
+		SiteID: siteIDs[1], Code: "invoice", Name: "Other Invoice", Enabled: true, Transport: "default",
+		From: mail.AddressTemplate{Email: "noreply@example.test"}, To: []mail.AddressTemplate{{Email: "{{data.email}}"}},
+		Subject: "Other Invoice", ContentType: mail.ContentText, TextBody: "Other",
+		Variables: []field.Definition{{Key: "email", Type: field.TypeEmail, Label: "Email"}},
+	})
+	if err != nil {
+		t.Fatalf("same template code on another site: %v", err)
+	}
+	resolvedFirst, err := repository.TemplateByCode(ctx, siteIDs[0], "invoice")
+	if err != nil || resolvedFirst.ID != template.ID {
+		t.Fatalf("site A template by code = %#v, %v", resolvedFirst, err)
+	}
+	resolvedSecond, err := repository.TemplateByCode(ctx, siteIDs[1], "invoice")
+	if err != nil || resolvedSecond.ID != otherTemplate.ID || resolvedSecond.ID == template.ID {
+		t.Fatalf("site B template by code = %#v, %v", resolvedSecond, err)
+	}
 	if _, err := repository.CreateTemplate(ctx, mail.Template{SiteID: siteIDs[0], Code: "invoice", Name: "Duplicate", Enabled: true, Transport: "default", From: mail.AddressTemplate{}, ContentType: mail.ContentText}); !errors.Is(err, mail.ErrConflict) {
 		t.Fatalf("duplicate template error = %v", err)
 	}
@@ -104,6 +121,12 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 	}{})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if active, err := repository.HasActiveMessages(ctx, siteIDs[0]); err != nil || !active {
+		t.Fatalf("queued message active = %t, %v", active, err)
+	}
+	if active, err := repository.HasActiveMessages(ctx, siteIDs[1]); err != nil || active {
+		t.Fatalf("site-scoped active query leaked = %t, %v", active, err)
 	}
 	body, _ := json.Marshal(queuedJob)
 	stored, err := repository.CreateMessageAndJob(ctx, message, eventbus.Message{Topic: job.Topic(mail.SendJobName), Key: []byte(queuedJob.ID), Body: body})
@@ -131,6 +154,9 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 	}
 	if err := repository.FinishAttempt(ctx, stored.ID, secondAttempt.AttemptNumber, mail.DeliveryResult{Driver: "smtp", ResponseCode: "250", RemoteMessageID: "provider-1"}, nil, true); err != nil {
 		t.Fatal(err)
+	}
+	if active, err := repository.HasActiveMessages(ctx, siteIDs[0]); err != nil || active {
+		t.Fatalf("accepted-only site active = %t, %v", active, err)
 	}
 	otherMessage := message
 	otherMessage.SiteID, otherMessage.TemplateID = siteIDs[1], nil
@@ -176,6 +202,35 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 	}
 	if _, err := repository.MessageDetail(ctx, siteIDs[1], otherStored.ID); err != nil {
 		t.Fatalf("other site's terminal message was removed: %v", err)
+	}
+	if _, err := connector.Pool().Exec(ctx, `UPDATE core.sites SET profile_code='without-mail' WHERE id=$1;`, siteIDs[1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.TemplateByCode(ctx, siteIDs[1], "invoice"); err != nil {
+		t.Fatalf("profile removal deleted Mail template: %v", err)
+	}
+	if _, err := repository.MessageDetail(ctx, siteIDs[1], otherStored.ID); err != nil {
+		t.Fatalf("profile removal deleted Mail history: %v", err)
+	}
+	deleteTemplate, err := repository.CreateTemplate(ctx, mail.Template{
+		SiteID: siteIDs[0], Code: "delete_owned", Name: "Delete Owned", Enabled: false, Transport: "default",
+		From: mail.AddressTemplate{Email: "noreply@example.test"}, To: []mail.AddressTemplate{{Email: "person@example.test"}},
+		Subject: "Delete", ContentType: mail.ContentText, TextBody: "Delete",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connector.Pool().Exec(ctx, `DELETE FROM core.sites WHERE id=$1;`, siteIDs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.TemplateByID(ctx, siteIDs[0], deleteTemplate.ID); !errors.Is(err, mail.ErrNotFound) {
+		t.Fatalf("deleted site's template remains: %v", err)
+	}
+	if _, err := repository.TemplateByCode(ctx, siteIDs[1], "invoice"); err != nil {
+		t.Fatalf("deleting Site A removed Site B template: %v", err)
+	}
+	if _, err := repository.MessageDetail(ctx, siteIDs[1], otherStored.ID); err != nil {
+		t.Fatalf("deleting Site A removed Site B history: %v", err)
 	}
 }
 

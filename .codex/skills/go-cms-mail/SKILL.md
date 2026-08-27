@@ -29,9 +29,40 @@ Generic `kernel/app` must not import `modules/mail`, store `*mail.Management`, e
 
 ## Site scope
 
-Mail templates and history are site-scoped unless an explicit global use case is introduced.
+MailTemplate belongs to exactly one Site and never exists globally. Keep `Template.SiteID` and relational ownership through `mail.templates.site_id -> core.sites(id)`. Template Code is unique only within its Site (`UNIQUE(site_id, code)`), so different Sites may independently use the same Code.
 
 Use the existing SiteRuntime/module wiring and site-scoped authorization patterns. Never create a mutable global active site/mail instance.
+
+Template lookup is always site/runtime scoped, semantically `TemplateByCode(ctx, siteID, code)`. Never introduce a global code lookup. Manual APIs do not accept authoritative template `site_id`, and cross-site template IDs are rejected.
+
+All `site.*` values used to validate/render a template come from the current SiteRuntime that owns `Template.SiteID`. Never accept a second arbitrary rendering Site ID. Future Forms integration resolves Mail from the same Form SiteRuntime and calls that site-scoped service by template Code.
+
+## Runtime transition lifecycle
+
+Mail participates in generic SiteRuntime deactivation for every profile-code change and actual Site deletion.
+
+Required ordering:
+
+```text
+enter Mail draining
+  -> reject new QueueManual and QueueByCode
+  -> prevent workers from starting a new Message claim
+  -> query this Site for queued/sending/retryable Messages
+  -> if active: abort drain and block transition
+  -> if inactive: purge only this Site's transient spool prefix
+  -> allow Site mutation/publication
+```
+
+- Hold the lifecycle read gate through the queue persistence mutation and through the worker claim mutation. Checking a flag and releasing it before the mutation leaves a transition race.
+- Already-running SMTP I/O is not force-cancelled and never runs inside a database transaction. Its Message is `sending`, so the active-message query blocks the transition until it becomes terminal.
+- A failed participant/preparer or Site repository mutation aborts draining and restores queue/claim availability on the old runtime.
+- Same-profile Site settings updates do not trigger Mail deactivation or wait for the queue to empty.
+- Any profile change is blocked while active Mail exists, even when both profiles include Mail.
+- Removing Mail from a profile keeps that Site's templates, messages and delivery attempts. Re-adding Mail exposes them again under the new current runtime.
+- Deleting the actual Site may cascade-delete its Site-owned Mail business data, but only after the active check and spool purge succeed.
+- Transient spool cleanup is irreversible on abort only after the active check proved the objects unreferenced; persistent core Files are never purged by this lifecycle.
+- A late scoped Mail job whose Site no longer exists or whose current profile intentionally lacks Mail is generically obsolete and must be ACKed without endless retry. Malformed envelopes, ambiguous handlers and invalid current registries remain errors.
+- Mail draining shares the current process-local SiteRuntime limitation; it is not a distributed lock across multiple application processes.
 
 ## Template identity
 

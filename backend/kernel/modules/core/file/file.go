@@ -268,6 +268,12 @@ type ManagementService interface {
 		filesystem.Code,
 		string,
 	) (Folder, error)
+	EnsureFolderPath(
+		context.Context,
+		security.Actor,
+		filesystem.Code,
+		string,
+	) (Folder, error)
 	CreateAvailableFolder(
 		context.Context,
 		security.Actor,

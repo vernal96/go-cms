@@ -52,6 +52,8 @@ var (
 	ErrNoRecipients      = errors.New("mail message has no recipients")
 	ErrSenderNotAllowed  = errors.New("mail sender is not allowed")
 	ErrTransportNotFound = errors.New("mail transport not found")
+	ErrRuntimeDraining   = errors.New("mail runtime is draining")
+	ErrActiveMessages    = errors.New("mail has active deliveries")
 )
 
 type AddressTemplate struct {

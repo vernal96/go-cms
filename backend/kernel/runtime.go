@@ -63,6 +63,42 @@ type ModuleRuntime interface {
 	ModuleCode() ModuleCode
 }
 
+type RuntimeTransitionReason string
+
+var ErrRuntimeTransitionBlocked = errors.New("runtime transition is blocked")
+
+const (
+	RuntimeTransitionProfileChange RuntimeTransitionReason = "profile_change"
+	RuntimeTransitionSiteDelete    RuntimeTransitionReason = "site_delete"
+)
+
+// RuntimeTransition describes a semantic change that will replace or remove
+// the currently published site runtime. Ordinary same-profile site updates do
+// not produce a transition.
+type RuntimeTransition struct {
+	Reason      RuntimeTransitionReason
+	ScopeID     string
+	FromProfile ProfileCode
+	ToProfile   ProfileCode
+}
+
+// PreparedRuntimeTransition keeps a module's temporary transition state alive
+// until the owning site mutation either commits or aborts. Commit must be a
+// non-failing finalization step; fallible external cleanup belongs in prepare.
+type PreparedRuntimeTransition interface {
+	Commit()
+	Abort()
+}
+
+// RuntimeTransitionParticipant is an optional module-runtime capability for
+// safely draining runtime-owned work before a profile change or site deletion.
+type RuntimeTransitionParticipant interface {
+	PrepareRuntimeTransition(
+		context.Context,
+		RuntimeTransition,
+	) (PreparedRuntimeTransition, error)
+}
+
 // RuntimeScope is the immutable site snapshot available while modules build
 // their final site-scoped runtime state. Request-specific values do not belong
 // here.

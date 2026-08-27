@@ -37,6 +37,34 @@ Prepare and validate the complete candidate state before publishing it. If prepa
 
 HTTP artifacts may be compiled once per site, but transport/server code should own transport-specific handler state. Runtime and its required HTTP artifact must switch coherently.
 
+## Runtime deactivation transitions
+
+Runtime-owned work that must be drained or cleaned before a SiteRuntime is removed participates through the generic kernel runtime-transition capability. Keep feature-specific behavior out of the Site catalog.
+
+Preserve transaction-like semantics:
+
+```text
+prepare participants in deterministic runtime/module order
+  -> participant may enter a temporary draining state
+  -> perform fallible validation and safe ephemeral cleanup
+  -> prepare detached catalog/HTTP/background state
+  -> persist the Site mutation
+  -> publish/finalize every preparation
+
+any later preparation or repository mutation fails
+  -> abort prepared participants in reverse order
+  -> restore the old published runtime's temporary state
+```
+
+- Transition preparation must finish before the Site repository update/delete.
+- A preparation that mutates temporary state must expose both non-failing commit and idempotent abort behavior.
+- If one participant fails during its own prepare, it must undo its partial temporary state before returning the error.
+- Later participant/preparer failure and repository mutation failure abort all earlier preparations.
+- Derive reasons from semantic Site changes. Site deletion and profile-code change are deactivation transitions; an ordinary same-profile settings update is not.
+- Profile changes invoke participants even when both profiles contain the same optional module because their runtime infrastructure/configuration may differ.
+- Existing snapshot publication remains atomic for request handlers and background-task owners. Publish replacements only after preparation and persistence succeed.
+- Runtime draining is process-local while SiteRuntime publication is process-local. Do not imply distributed exclusion; introduce distributed coordination only as a separate explicit architecture decision.
+
 ## Cache coherence
 
 For every affected cached mutable entity trace:

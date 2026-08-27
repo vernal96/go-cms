@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -127,13 +128,60 @@ func TestConnectorListsPrefixInBoundedCursorPages(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	first, err := connector.ListPrefix(context.Background(), "spool/site/", "", 2)
-	if err != nil || len(first.Keys) != 2 || first.Keys[0] != "spool/site/a" || first.Keys[1] != "spool/site/b" || first.NextCursor != "spool/site/b" {
+	scanValue, err := connector.OpenPrefixScan(context.Background(), "spool/site/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan := scanValue.(*prefixScan)
+	first, err := scan.Next(context.Background(), 2)
+	if err != nil || len(first.Keys) > 2 || first.Done {
 		t.Fatalf("first page = %#v, %v", first, err)
 	}
-	second, err := connector.ListPrefix(context.Background(), "spool/site/", first.NextCursor, 2)
-	if err != nil || len(second.Keys) != 1 || second.Keys[0] != "spool/site/c" || second.NextCursor != "" {
-		t.Fatalf("second page = %#v, %v", second, err)
+	visited := scan.visited
+	var keys []string
+	keys = append(keys, first.Keys...)
+	for !first.Done {
+		first, err = scan.Next(context.Background(), 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if scan.visited-visited > 2 {
+			t.Fatalf("later page physically traversed %d entries", scan.visited-visited)
+		}
+		visited = scan.visited
+		keys = append(keys, first.Keys...)
+	}
+	slices.Sort(keys)
+	if !slices.Equal(keys, []string{"spool/site/a", "spool/site/b", "spool/site/c"}) || !scan.done || len(scan.stack) != 0 {
+		t.Fatalf("scan keys/state = %#v done=%t open=%d", keys, scan.done, len(scan.stack))
+	}
+}
+
+func TestPrefixScanClosesOnCancellationAndExplicitClose(t *testing.T) {
+	connector, err := New(context.Background(), Config{Code: "private", Visibility: filesystem.VisibilityPrivate, Root: t.TempDir(), BaseURL: "https://files.example.test", SigningKey: "0123456789abcdef0123456789abcdef"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := connector.PutNew(context.Background(), "spool/site/a", strings.NewReader("a"), "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	scanValue, err := connector.OpenPrefixScan(context.Background(), "spool/site/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan := scanValue.(*prefixScan)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := scan.Next(ctx, 1); !errors.Is(err, context.Canceled) || !scan.done || len(scan.stack) != 0 {
+		t.Fatalf("cancelled scan = %v done=%t open=%d", err, scan.done, len(scan.stack))
+	}
+	scanValue, err = connector.OpenPrefixScan(context.Background(), "spool/site/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan = scanValue.(*prefixScan)
+	if err := scan.Close(); err != nil || !scan.done || len(scan.stack) != 0 {
+		t.Fatalf("closed scan = %v done=%t open=%d", err, scan.done, len(scan.stack))
 	}
 }
 

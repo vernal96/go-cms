@@ -268,7 +268,7 @@ func (a *App) boot(ctx context.Context) error {
 }
 
 func jobRunnerFromProfiles(profiles []kernel.Profile, catalog *site.Catalog) (*job.Runner, error) {
-	names, err := declaredNames(profiles, func(module kernel.Module) ([]string, bool) {
+	owners, err := declaredNames(profiles, func(module kernel.Module) ([]string, bool) {
 		provider, ok := module.(job.NamesProvider)
 		if !ok {
 			return nil, false
@@ -279,37 +279,19 @@ func jobRunnerFromProfiles(profiles []kernel.Profile, catalog *site.Catalog) (*j
 		return nil, fmt.Errorf("collect job declarations: %w", err)
 	}
 	registry := job.NewRegistry()
-	if len(names) == 0 {
+	if len(owners) == 0 {
 		return nil, nil
 	}
+	names := make([]string, 0, len(owners))
+	for name := range owners {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	for _, name := range names {
 		name := name
+		owner := owners[name]
 		if err := registry.Register(name, func(ctx context.Context, item job.Envelope) error {
-			candidates := make([]job.Definition, 0, 1)
-			for _, runtime := range catalog.Runtimes() {
-				if item.ScopeID != "" && item.ScopeID != fmt.Sprint(runtime.Site().ID) {
-					continue
-				}
-				for _, moduleRuntime := range runtime.Profile().Modules() {
-					provider, ok := moduleRuntime.(job.Provider)
-					if !ok {
-						continue
-					}
-					for _, definition := range provider.Jobs() {
-						if definition.Name != name || definition.Handler == nil || (definition.ScopeID != "" && definition.ScopeID != item.ScopeID) {
-							continue
-						}
-						candidates = append(candidates, definition)
-					}
-				}
-			}
-			if len(candidates) == 0 {
-				return fmt.Errorf("job handler %q scope %q has no current site runtime", name, item.ScopeID)
-			}
-			if len(candidates) > 1 {
-				return fmt.Errorf("job handler %q scope %q is ambiguous", name, item.ScopeID)
-			}
-			return candidates[0].Handler(ctx, item)
+			return dispatchRuntimeJob(ctx, catalog, owner, name, item)
 		}); err != nil {
 			return nil, err
 		}
@@ -317,10 +299,72 @@ func jobRunnerFromProfiles(profiles []kernel.Profile, catalog *site.Catalog) (*j
 	return job.NewRunner(registry)
 }
 
+func dispatchRuntimeJob(ctx context.Context, catalog *site.Catalog, owner kernel.ModuleCode, name string, item job.Envelope) error {
+	runtimes := catalog.Runtimes()
+	if item.ScopeID != "" {
+		var scoped *site.Runtime
+		for _, runtime := range runtimes {
+			if item.ScopeID == fmt.Sprint(runtime.Site().ID) {
+				scoped = runtime
+				break
+			}
+		}
+		if scoped == nil {
+			return fmt.Errorf("%w: scoped job %q site %q no longer exists", job.ErrObsolete, name, item.ScopeID)
+		}
+		moduleRuntime, exists := scoped.Profile().Registry().Module(owner)
+		if !exists {
+			return fmt.Errorf("%w: scoped job %q module %q is absent from site %q", job.ErrObsolete, name, owner, item.ScopeID)
+		}
+		return dispatchModuleJob(ctx, moduleRuntime, name, item)
+	}
+	candidates := make([]job.Definition, 0, 1)
+	for _, runtime := range runtimes {
+		moduleRuntime, exists := runtime.Profile().Registry().Module(owner)
+		if !exists {
+			continue
+		}
+		provider, ok := moduleRuntime.(job.Provider)
+		if !ok {
+			return fmt.Errorf("job owner module %q does not provide runtime jobs", owner)
+		}
+		candidates = append(candidates, matchingJobDefinitions(provider, name, item.ScopeID)...)
+	}
+	return runJobCandidate(ctx, item, candidates)
+}
+
+func dispatchModuleJob(ctx context.Context, moduleRuntime kernel.ModuleRuntime, name string, item job.Envelope) error {
+	provider, ok := moduleRuntime.(job.Provider)
+	if !ok {
+		return fmt.Errorf("job owner module %q does not provide runtime jobs", moduleRuntime.ModuleCode())
+	}
+	return runJobCandidate(ctx, item, matchingJobDefinitions(provider, name, item.ScopeID))
+}
+
+func matchingJobDefinitions(provider job.Provider, name, scopeID string) []job.Definition {
+	result := make([]job.Definition, 0, 1)
+	for _, definition := range provider.Jobs() {
+		if definition.Name == name && definition.Handler != nil && (definition.ScopeID == "" || definition.ScopeID == scopeID) {
+			result = append(result, definition)
+		}
+	}
+	return result
+}
+
+func runJobCandidate(ctx context.Context, item job.Envelope, candidates []job.Definition) error {
+	if len(candidates) == 0 {
+		return fmt.Errorf("job handler %q scope %q is missing from its current module runtime", item.Name, item.ScopeID)
+	}
+	if len(candidates) > 1 {
+		return fmt.Errorf("job handler %q scope %q is ambiguous", item.Name, item.ScopeID)
+	}
+	return candidates[0].Handler(ctx, item)
+}
+
 func declaredNames(
 	profiles []kernel.Profile,
 	resolve func(kernel.Module) ([]string, bool),
-) ([]string, error) {
+) (map[string]kernel.ModuleCode, error) {
 	owners := make(map[string]kernel.ModuleCode)
 	modules := make(map[kernel.ModuleCode][]string)
 	for _, profile := range profiles {
@@ -349,10 +393,5 @@ func declaredNames(
 			}
 		}
 	}
-	result := make([]string, 0, len(owners))
-	for name := range owners {
-		result = append(result, name)
-	}
-	sort.Strings(result)
-	return result, nil
+	return owners, nil
 }

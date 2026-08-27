@@ -21,10 +21,15 @@ type filesystemManagementService struct {
 	file.ManagementService
 	listing  file.BrowserListing
 	resolved file.Folder
+	ensured  file.Folder
 }
 
 func (s filesystemManagementService) ResolveFolder(context.Context, security.Actor, filesystem.Code, string) (file.Folder, error) {
 	return s.resolved, nil
+}
+
+func (s filesystemManagementService) EnsureFolderPath(context.Context, security.Actor, filesystem.Code, string) (file.Folder, error) {
+	return s.ensured, nil
 }
 
 func (s filesystemManagementService) Disks(context.Context, security.Actor) ([]filesystem.DiskInfo, error) {
@@ -112,5 +117,22 @@ func TestFilesRouteResolvesConfiguredFolderPath(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":7`) {
 		t.Fatalf("resolve route = %d, %s", response.Code, response.Body.String())
+	}
+}
+
+func TestFilesRouteEnsuresConfiguredFolderPath(t *testing.T) {
+	now := time.Now().UTC()
+	handler := &filesHTTP{files: &Files{
+		files:      filesystemManagementService{ensured: file.Folder{ID: 9, Storage: "private", Name: "uploads", CreatedAt: now, UpdatedAt: now}},
+		authorizer: managementAuthorizer{denied: map[permission.Code]error{}},
+	}}
+	router := chi.NewRouter()
+	registerFileRoutes(router, handler)
+	request := httptest.NewRequest(http.MethodPost, "/files/folders/ensure", strings.NewReader(`{"disk":"private","path":"mail/uploads"}`))
+	request = request.WithContext(httptransport.WithActor(request.Context(), security.User(1)))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":9`) {
+		t.Fatalf("ensure route = %d, %s", response.Code, response.Body.String())
 	}
 }

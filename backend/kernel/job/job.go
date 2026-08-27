@@ -14,6 +14,8 @@ import (
 
 const TopicPrefix = "job."
 
+var ErrObsolete = errors.New("job is obsolete")
+
 type Envelope struct {
 	ID            messageid.ID    `json:"id"`
 	Name          string          `json:"name"`
@@ -163,7 +165,11 @@ func (r *Runner) Handle(ctx context.Context, message eventbus.Message) error {
 	if message.Topic != Topic(item.Name) {
 		return errors.New("job topic and name do not match")
 	}
-	return r.registry.Handle(ctx, item)
+	err := r.registry.Handle(ctx, item)
+	if errors.Is(err, ErrObsolete) {
+		return nil
+	}
+	return err
 }
 
 func (r *Runner) Run(ctx context.Context, bus eventbus.Bus, group string) error {

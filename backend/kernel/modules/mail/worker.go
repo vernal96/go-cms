@@ -28,15 +28,20 @@ type Worker struct {
 	files       AttachmentOpener
 	spool       *AttachmentSpool
 	transports  *TransportRegistry
+	lifecycle   *runtimeLifecycle
 	maxAttempts int
 	logger      *slog.Logger
 }
 
 func NewWorker(siteID site.ID, repository Repository, files AttachmentOpener, spool *AttachmentSpool, transports *TransportRegistry, maxAttempts int, logger *slog.Logger) (*Worker, error) {
-	if siteID <= 0 || repository == nil || files == nil || transports == nil || maxAttempts < 1 {
+	return newWorker(siteID, repository, files, spool, transports, &runtimeLifecycle{}, maxAttempts, logger)
+}
+
+func newWorker(siteID site.ID, repository Repository, files AttachmentOpener, spool *AttachmentSpool, transports *TransportRegistry, lifecycle *runtimeLifecycle, maxAttempts int, logger *slog.Logger) (*Worker, error) {
+	if siteID <= 0 || repository == nil || files == nil || transports == nil || lifecycle == nil || maxAttempts < 1 {
 		return nil, errors.New("mail worker dependencies are nil")
 	}
-	return &Worker{siteID: siteID, repository: repository, files: files, spool: spool, transports: transports, maxAttempts: maxAttempts, logger: logger}, nil
+	return &Worker{siteID: siteID, repository: repository, files: files, spool: spool, transports: transports, lifecycle: lifecycle, maxAttempts: maxAttempts, logger: logger}, nil
 }
 
 func (w *Worker) Handle(ctx context.Context, item job.Envelope) error {
@@ -52,7 +57,14 @@ func (w *Worker) Handle(ctx context.Context, item job.Envelope) error {
 	if err := json.Unmarshal(item.Payload, &payload); err != nil || payload.MessageID <= 0 {
 		return errors.New("mail send job payload is invalid")
 	}
-	message, attempt, claimed, err := w.repository.ClaimMessage(ctx, w.siteID, payload.MessageID, w.maxAttempts)
+	var message Message
+	var attempt DeliveryAttempt
+	var claimed bool
+	err := w.lifecycle.withActive(func() error {
+		var claimErr error
+		message, attempt, claimed, claimErr = w.repository.ClaimMessage(ctx, w.siteID, payload.MessageID, w.maxAttempts)
+		return claimErr
+	})
 	if errors.Is(err, ErrNotFound) {
 		return nil
 	}

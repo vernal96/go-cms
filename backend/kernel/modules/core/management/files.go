@@ -135,6 +135,14 @@ func (m *Files) ResolveFilesystemFolder(ctx context.Context, actor security.Acto
 	return folderItemDTO(item, nil), nil
 }
 
+func (m *Files) EnsureFilesystemFolder(ctx context.Context, actor security.Actor, storage filesystem.Code, folderPath string) (FilesystemItemDTO, error) {
+	item, err := m.files.EnsureFolderPath(ctx, actor, storage, folderPath)
+	if err != nil {
+		return FilesystemItemDTO{}, fileValidationError(err)
+	}
+	return folderItemDTO(item, nil), nil
+}
+
 func (m *Files) CreateFilesystemFolder(
 	ctx context.Context,
 	actor security.Actor,

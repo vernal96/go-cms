@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vernal96/go-cms/kernel/filesystem"
@@ -316,60 +317,130 @@ func (c *Connector) WalkPrefix(
 	return nil
 }
 
-var errPrefixPageFull = errors.New("localstorage prefix page is full")
-
-func (c *Connector) ListPrefix(ctx context.Context, prefix string, cursor string, limit int) (filesystem.PrefixPage, error) {
+func (c *Connector) OpenPrefixScan(ctx context.Context, prefix string) (filesystem.PrefixScan, error) {
 	if ctx == nil {
-		return filesystem.PrefixPage{}, errors.New("localstorage list-prefix context is nil")
+		return nil, errors.New("localstorage prefix-scan context is nil")
 	}
-	if limit < 1 {
-		return filesystem.PrefixPage{}, errors.New("localstorage list-prefix limit is invalid")
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	normalizedPrefix := strings.Trim(prefix, "/")
-	if cursor != "" && cursor != normalizedPrefix && !strings.HasPrefix(cursor, normalizedPrefix+"/") {
-		return filesystem.PrefixPage{}, errors.New("localstorage list-prefix cursor is outside prefix")
+	if normalizedPrefix == "" {
+		return nil, errors.New("localstorage prefix-scan prefix is empty")
 	}
 	root, err := c.resolve(normalizedPrefix)
 	if err != nil {
-		return filesystem.PrefixPage{}, err
+		return nil, err
 	}
-	keys := make([]string, 0, limit+1)
-	err = filepath.WalkDir(root, func(pathValue string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			if errors.Is(walkErr, os.ErrNotExist) {
-				return nil
-			}
-			return walkErr
-		}
+	if err := c.ensureNoSymlinks(root); err != nil {
+		return nil, err
+	}
+	handle, err := os.Open(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return &prefixScan{done: true}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open localstorage prefix scan: %w", err)
+	}
+	info, err := handle.Stat()
+	if err != nil {
+		_ = handle.Close()
+		return nil, fmt.Errorf("inspect localstorage prefix scan: %w", err)
+	}
+	if !info.IsDir() {
+		_ = handle.Close()
+		return nil, errors.New("localstorage prefix-scan root is not a directory")
+	}
+	return &prefixScan{stack: []prefixScanDirectory{{handle: handle, path: root, key: normalizedPrefix}}}, nil
+}
+
+type prefixScanDirectory struct {
+	handle *os.File
+	path   string
+	key    string
+}
+
+type prefixScan struct {
+	mu      sync.Mutex
+	stack   []prefixScanDirectory
+	done    bool
+	visited int
+}
+
+func (s *prefixScan) Next(ctx context.Context, limit int) (filesystem.PrefixScanPage, error) {
+	if ctx == nil {
+		return filesystem.PrefixScanPage{}, errors.New("localstorage prefix-scan next context is nil")
+	}
+	if limit < 1 {
+		return filesystem.PrefixScanPage{}, errors.New("localstorage prefix-scan limit is invalid")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.done {
+		return filesystem.PrefixScanPage{Done: true}, nil
+	}
+	page := filesystem.PrefixScanPage{Keys: make([]string, 0, limit)}
+	steps := 0
+	for steps < limit && len(s.stack) > 0 {
 		if err := ctx.Err(); err != nil {
-			return err
+			closeErr := s.closeLocked()
+			return filesystem.PrefixScanPage{}, errors.Join(err, closeErr)
 		}
-		if entry.IsDir() {
-			return nil
+		index := len(s.stack) - 1
+		current := &s.stack[index]
+		entries, err := current.handle.ReadDir(1)
+		steps++
+		s.visited++
+		if errors.Is(err, io.EOF) {
+			if closeErr := current.handle.Close(); closeErr != nil {
+				_ = s.closeLocked()
+				return filesystem.PrefixScanPage{}, fmt.Errorf("close localstorage prefix directory: %w", closeErr)
+			}
+			s.stack = s.stack[:index]
+			continue
 		}
-		relative, err := filepath.Rel(c.root, pathValue)
 		if err != nil {
-			return err
+			closeErr := s.closeLocked()
+			return filesystem.PrefixScanPage{}, errors.Join(fmt.Errorf("read localstorage prefix directory: %w", err), closeErr)
 		}
-		key := filepath.ToSlash(relative)
-		if key <= cursor {
-			return nil
+		entry := entries[0]
+		if entry.Type()&os.ModeSymlink != 0 {
+			continue
 		}
-		keys = append(keys, key)
-		if len(keys) > limit {
-			return errPrefixPageFull
+		entryPath := filepath.Join(current.path, entry.Name())
+		entryKey := filepath.ToSlash(filepath.Join(current.key, entry.Name()))
+		if entry.IsDir() {
+			handle, openErr := os.Open(entryPath)
+			if openErr != nil {
+				closeErr := s.closeLocked()
+				return filesystem.PrefixScanPage{}, errors.Join(fmt.Errorf("open localstorage prefix directory: %w", openErr), closeErr)
+			}
+			s.stack = append(s.stack, prefixScanDirectory{handle: handle, path: entryPath, key: entryKey})
+			continue
 		}
-		return nil
-	})
-	if err != nil && !errors.Is(err, errPrefixPageFull) && !errors.Is(err, os.ErrNotExist) {
-		return filesystem.PrefixPage{}, fmt.Errorf("list localstorage prefix: %w", err)
+		page.Keys = append(page.Keys, entryKey)
 	}
-	page := filesystem.PrefixPage{Keys: keys}
-	if len(keys) > limit {
-		page.Keys = keys[:limit]
-		page.NextCursor = page.Keys[len(page.Keys)-1]
+	if len(s.stack) == 0 {
+		s.done = true
+		page.Done = true
 	}
 	return page, nil
+}
+
+func (s *prefixScan) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeLocked()
+}
+
+func (s *prefixScan) closeLocked() error {
+	var result error
+	for index := len(s.stack) - 1; index >= 0; index-- {
+		result = errors.Join(result, s.stack[index].handle.Close())
+	}
+	s.stack = nil
+	s.done = true
+	return result
 }
 
 func (c *Connector) URL(
@@ -516,6 +587,7 @@ func (r *contextReader) Read(target []byte) (int, error) {
 var _ filesystem.Disk = (*Connector)(nil)
 var _ filesystem.OverwriteDisk = (*Connector)(nil)
 var _ filesystem.PrefixWalker = (*Connector)(nil)
+var _ filesystem.PrefixScannerProvider = (*Connector)(nil)
 var _ filesystem.KeyDistributionProvider = (*Connector)(nil)
 var _ filesystem.Factory = Factory{}
 var _ filesystem.TemporaryURLVerifier = (*Connector)(nil)

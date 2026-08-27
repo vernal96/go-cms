@@ -24,6 +24,7 @@ func registerFileRoutes(router chi.Router, handler *filesHTTP) {
 	router.Get("/files/disks", handler.filesystemDisks)
 	router.Get("/files/items", handler.filesystemItems)
 	router.Get("/files/folders/resolve", handler.resolveFilesystemFolder)
+	router.Post("/files/folders/ensure", handler.ensureFilesystemFolder)
 	router.Post("/files/folders", handler.createFilesystemFolder)
 	router.Patch("/files/folders/{folderID}", handler.renameFilesystemFolder)
 	router.Post("/files/uploads", handler.uploadFilesystemFile)
@@ -43,6 +44,24 @@ func (h *filesHTTP) resolveFilesystemFolder(response http.ResponseWriter, reques
 		return
 	}
 	result, err := h.files.ResolveFilesystemFolder(request.Context(), actor(request), storage, folderPath)
+	writeResult(response, http.StatusOK, result, err)
+}
+
+type filesystemEnsureFolderRequest struct {
+	Disk filesystem.Code `json:"disk"`
+	Path string          `json:"path"`
+}
+
+func (h *filesHTTP) ensureFilesystemFolder(response http.ResponseWriter, request *http.Request) {
+	var payload filesystemEnsureFolderRequest
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	if payload.Disk == "" || payload.Path == "" {
+		writeBadRequest(response, "disk and path are required")
+		return
+	}
+	result, err := h.files.EnsureFilesystemFolder(request.Context(), actor(request), payload.Disk, payload.Path)
 	writeResult(response, http.StatusOK, result, err)
 }
 

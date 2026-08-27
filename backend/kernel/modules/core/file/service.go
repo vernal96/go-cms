@@ -157,9 +157,9 @@ func (s *service) ResolveFolder(ctx context.Context, actor security.Actor, stora
 	if _, err := s.disk(storage); err != nil {
 		return Folder{}, err
 	}
-	normalized := strings.Trim(strings.TrimSpace(folderPath), "/")
-	if normalized == "" || path.IsAbs(normalized) || path.Clean(normalized) != normalized || normalized == ".." || strings.HasPrefix(normalized, "../") || strings.Contains(normalized, "\\") {
-		return Folder{}, errors.New("file folder path is invalid")
+	normalized, err := normalizeFolderPath(folderPath)
+	if err != nil {
+		return Folder{}, err
 	}
 	var parentID *FolderID
 	var current Folder
@@ -183,6 +183,78 @@ func (s *service) ResolveFolder(ctx context.Context, actor security.Actor, stora
 		}
 	}
 	return CloneFolder(current), nil
+}
+
+func (s *service) EnsureFolderPath(ctx context.Context, actor security.Actor, storage filesystem.Code, folderPath string) (Folder, error) {
+	if err := validateContext(ctx, "ensure file folder path"); err != nil {
+		return Folder{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, createPermission); err != nil {
+		return Folder{}, err
+	}
+	if _, err := s.disk(storage); err != nil {
+		return Folder{}, err
+	}
+	normalized, err := normalizeFolderPath(folderPath)
+	if err != nil {
+		return Folder{}, err
+	}
+	var parentID *FolderID
+	var current Folder
+	for _, name := range strings.Split(normalized, "/") {
+		folders, err := s.repository.ListFolders(ctx, storage, parentID)
+		if err != nil {
+			return Folder{}, fmt.Errorf("list file folders while ensuring path: %w", err)
+		}
+		if existing, exists := namedFolder(folders, name); exists {
+			current = existing
+			value := existing.ID
+			parentID = &value
+			continue
+		}
+		created, err := s.repository.CreateFolder(ctx, Folder{
+			ParentID: cloneFolderID(parentID), Storage: storage, Name: name,
+			CreatedBy: actor.AuditUserID(), UpdatedBy: actor.AuditUserID(),
+		})
+		if errors.Is(err, ErrConflict) {
+			folders, listErr := s.repository.ListFolders(ctx, storage, parentID)
+			if listErr != nil {
+				return Folder{}, fmt.Errorf("resolve concurrently ensured file folder: %w", listErr)
+			}
+			var exists bool
+			created, exists = namedFolder(folders, name)
+			if !exists {
+				return Folder{}, ErrConflict
+			}
+		} else if err != nil {
+			return Folder{}, fmt.Errorf("ensure file folder path: %w", err)
+		}
+		current = created
+		value := created.ID
+		parentID = &value
+	}
+	return CloneFolder(current), nil
+}
+
+func normalizeFolderPath(folderPath string) (string, error) {
+	raw := strings.TrimSpace(folderPath)
+	if raw == "" || path.IsAbs(raw) || strings.Contains(raw, "\\") {
+		return "", errors.New("file folder path is invalid")
+	}
+	normalized := strings.Trim(raw, "/")
+	if normalized == "" || path.Clean(normalized) != normalized || normalized == ".." || strings.HasPrefix(normalized, "../") {
+		return "", errors.New("file folder path is invalid")
+	}
+	return normalized, nil
+}
+
+func namedFolder(folders []Folder, name string) (Folder, bool) {
+	for _, folder := range folders {
+		if folder.Name == name {
+			return CloneFolder(folder), true
+		}
+	}
+	return Folder{}, false
 }
 
 func (s *service) CreateFolder(

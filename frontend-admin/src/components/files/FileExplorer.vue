@@ -157,9 +157,26 @@ async function initialize(): Promise<void> {
         const query = new URLSearchParams({ disk: disk.value, path: props.initialPath })
         const folder = await adminRequest<FilesystemItem>(`/api/files/folders/resolve?${query}`, props.accessToken)
         await loadFolder(folder.id, false)
-      } catch {
-        ElMessage.warning('Настроенная папка недоступна. Открыт корень хранилища.')
-        await loadFolder(null, false)
+      } catch (caught) {
+        const missing = caught instanceof AdminAPIError && caught.status === 404
+        if (missing && permissions.value.create) {
+          try {
+            const folder = await adminRequest<FilesystemItem>('/api/files/folders/ensure', props.accessToken, {
+              method: 'POST',
+              body: JSON.stringify({ disk: disk.value, path: props.initialPath }),
+            })
+            await loadFolder(folder.id, false)
+          } catch {
+            ElMessage.warning('Настроенную папку не удалось создать. Открыт корень хранилища.')
+            await loadFolder(null, false)
+          }
+        } else if (missing) {
+          ElMessage.warning('Настроенная папка не существует, а права на её создание отсутствуют. Открыт корень хранилища.')
+          await loadFolder(null, false)
+        } else {
+          ElMessage.warning('Настроенная папка недоступна. Открыт корень хранилища.')
+          await loadFolder(null, false)
+        }
       }
     } else if (disk.value) await loadFolder(null, false)
   } catch (caught) {

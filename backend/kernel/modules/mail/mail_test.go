@@ -14,10 +14,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/job"
@@ -288,6 +290,11 @@ type memoryRepository struct {
 	claimable bool
 	finishErr error
 	createErr error
+	activeErr error
+	active    *bool
+	createAt  chan struct{}
+	createGo  chan struct{}
+	createOne sync.Once
 }
 
 func (r *memoryRepository) ListTemplates(context.Context, site.ID, PageQuery) (TemplatePage, error) {
@@ -330,6 +337,10 @@ func (r *memoryRepository) SetTemplateEnabled(_ context.Context, siteID site.ID,
 }
 func (r *memoryRepository) DeleteTemplate(context.Context, site.ID, TemplateID) error { return nil }
 func (r *memoryRepository) CreateMessageAndJob(_ context.Context, item Message, queued eventbus.Message) (Message, error) {
+	if r.createAt != nil {
+		r.createOne.Do(func() { close(r.createAt) })
+		<-r.createGo
+	}
 	if r.createErr != nil {
 		return Message{}, r.createErr
 	}
@@ -377,6 +388,15 @@ func (r *memoryRepository) FinishAttempt(_ context.Context, _ MessageID, number 
 		item.Status, r.message.Status = AttemptAccepted, StatusAccepted
 	}
 	return nil
+}
+func (r *memoryRepository) HasActiveMessages(context.Context, site.ID) (bool, error) {
+	if r.activeErr != nil {
+		return false, r.activeErr
+	}
+	if r.active != nil {
+		return *r.active, nil
+	}
+	return r.message.Status == StatusQueued || r.message.Status == StatusSending || r.message.Status == StatusRetryable, nil
 }
 func (r *memoryRepository) Cleanup(context.Context, site.ID, time.Duration, int) (int64, error) {
 	return 0, nil
@@ -434,6 +454,180 @@ func TestPreviewAndQueueShareRendererAndPersistImmutableSnapshot(t *testing.T) {
 	}
 }
 
+func TestRendererRejectsTemplateOwnedByAnotherSite(t *testing.T) {
+	t.Parallel()
+	renderer, _ := testRenderer(t, SenderPolicy{})
+	template := mailTemplate()
+	template.SiteID = 6
+	if err := renderer.ValidateTemplate(template); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("cross-site template validation error = %v", err)
+	}
+}
+
+func TestTemplateEnableValidatesCurrentRuntimeWithoutReauthorizingStaticFile(t *testing.T) {
+	t.Parallel()
+	renderer, files := testRenderer(t, SenderPolicy{})
+	template := mailTemplate()
+	template.ID = 3
+	template.Enabled = false
+	template.Attachments = []AttachmentTemplate{{Source: AttachmentStatic, FileID: fileIDPointer(7)}}
+	repository := &memoryRepository{template: template}
+	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
+	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files.denyUsers = true
+	item, err := service.SetTemplateEnabled(context.Background(), security.User(9), 3, true)
+	if err != nil || !item.Enabled {
+		t.Fatalf("enable approved static attachment = %#v, %v", item, err)
+	}
+	repository.template.Enabled = false
+	repository.template.Subject = "{{site.field.removed}}"
+	if _, err := service.SetTemplateEnabled(context.Background(), security.User(9), 3, true); !errors.Is(err, ErrInvalid) || repository.template.Enabled {
+		t.Fatalf("removed site field enable = %v, enabled=%t", err, repository.template.Enabled)
+	}
+	if _, err := service.SetTemplateEnabled(context.Background(), security.User(9), 3, false); err != nil {
+		t.Fatalf("disable invalid template = %v", err)
+	}
+	repository.template.SiteID = 6
+	if _, err := service.SetTemplateEnabled(context.Background(), security.User(9), 3, true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-site enable error = %v", err)
+	}
+}
+
+func fileIDPointer(value file.ID) *file.ID { return &value }
+
+func TestMailRuntimeTransitionBlocksActiveStatusesAndRestoresQueueAfterAbort(t *testing.T) {
+	t.Parallel()
+	for _, status := range []MessageStatus{StatusQueued, StatusSending, StatusRetryable} {
+		status := status
+		t.Run(string(status), func(t *testing.T) {
+			for _, reason := range []kernel.RuntimeTransitionReason{kernel.RuntimeTransitionProfileChange, kernel.RuntimeTransitionSiteDelete} {
+				reason := reason
+				t.Run(string(reason), func(t *testing.T) {
+					renderer, _ := testRenderer(t, SenderPolicy{})
+					repository := &memoryRepository{template: mailTemplate(), message: Message{SiteID: 5, Status: status}}
+					transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
+					service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+					runtime := &Runtime{service: service, spoolCleanupBatch: 1}
+					_, err := runtime.PrepareRuntimeTransition(context.Background(), kernel.RuntimeTransition{Reason: reason, ScopeID: "5", FromProfile: "mail", ToProfile: "other"})
+					if !errors.Is(err, kernel.ErrRuntimeTransitionBlocked) || !errors.Is(err, ErrActiveMessages) {
+						t.Fatalf("active %s transition error = %v", status, err)
+					}
+					if _, err := service.QueueByCode(context.Background(), QueueInput{TemplateCode: "welcome", Values: map[string]any{"email": "a@example.net"}}); err != nil {
+						t.Fatalf("queue after blocked transition = %v", err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestMailRuntimeDrainRejectsNewQueueAndWorkerClaimUntilAbort(t *testing.T) {
+	t.Parallel()
+	renderer, files := testRenderer(t, SenderPolicy{})
+	active := false
+	repository := &memoryRepository{template: mailTemplate(), active: &active}
+	repository.template.ID = 3
+	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
+	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	runtime := &Runtime{service: service, spoolCleanupBatch: 1}
+	prepared, err := runtime.PrepareRuntimeTransition(context.Background(), kernel.RuntimeTransition{Reason: kernel.RuntimeTransitionSiteDelete, ScopeID: "5", FromProfile: "mail"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.QueueByCode(context.Background(), QueueInput{TemplateCode: "welcome", Values: map[string]any{"email": "a@example.net"}}); !errors.Is(err, ErrRuntimeDraining) {
+		t.Fatalf("queue while draining error = %v", err)
+	}
+	if _, err := service.QueueManual(context.Background(), security.User(9), ManualSendInput{TemplateID: repository.template.ID, Values: map[string]any{"email": "a@example.net"}}); !errors.Is(err, ErrRuntimeDraining) {
+		t.Fatalf("manual queue while draining error = %v", err)
+	}
+	repository.message = Message{ID: 12, SiteID: 5, Status: StatusQueued}
+	repository.claimable = true
+	worker, _ := newWorker(5, repository, files, nil, transports, service.lifecycle, 5, nil)
+	envelope, _ := job.NewScoped(SendJobName, 1, "5", struct {
+		MessageID MessageID `json:"message_id"`
+	}{12})
+	if err := worker.Handle(context.Background(), envelope); !errors.Is(err, ErrRuntimeDraining) || !repository.claimable {
+		t.Fatalf("worker drain error = %v, claimable=%t", err, repository.claimable)
+	}
+	prepared.Abort()
+	if _, err := service.QueueByCode(context.Background(), QueueInput{TemplateCode: "welcome", Values: map[string]any{"email": "a@example.net"}}); err != nil {
+		t.Fatalf("queue after abort = %v", err)
+	}
+}
+
+func TestMailRuntimeTransitionAllowsTerminalOnlyMessages(t *testing.T) {
+	t.Parallel()
+	for _, status := range []MessageStatus{StatusAccepted, StatusFailed} {
+		status := status
+		t.Run(string(status), func(t *testing.T) {
+			renderer, _ := testRenderer(t, SenderPolicy{})
+			repository := &memoryRepository{template: mailTemplate(), message: Message{SiteID: 5, Status: status}}
+			transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
+			service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+			runtime := &Runtime{service: service, spoolCleanupBatch: 1}
+			prepared, err := runtime.PrepareRuntimeTransition(context.Background(), kernel.RuntimeTransition{Reason: kernel.RuntimeTransitionProfileChange, ScopeID: "5", FromProfile: "mail", ToProfile: "other"})
+			if err != nil {
+				t.Fatalf("terminal status %s blocked transition: %v", status, err)
+			}
+			prepared.Abort()
+		})
+	}
+}
+
+func TestMailTransitionWaitsForConcurrentQueueThenObservesItActive(t *testing.T) {
+	renderer, _ := testRenderer(t, SenderPolicy{})
+	repository := &memoryRepository{template: mailTemplate(), createAt: make(chan struct{}), createGo: make(chan struct{})}
+	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
+	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	runtime := &Runtime{service: service, spoolCleanupBatch: 1}
+	queueResult := make(chan error, 1)
+	go func() {
+		_, err := service.QueueByCode(context.Background(), QueueInput{TemplateCode: "welcome", Values: map[string]any{"email": "a@example.net"}})
+		queueResult <- err
+	}()
+	<-repository.createAt
+	transitionResult := make(chan error, 1)
+	go func() {
+		_, err := runtime.PrepareRuntimeTransition(context.Background(), kernel.RuntimeTransition{Reason: kernel.RuntimeTransitionSiteDelete, ScopeID: "5", FromProfile: "mail"})
+		transitionResult <- err
+	}()
+	select {
+	case err := <-transitionResult:
+		t.Fatalf("transition passed an in-flight queue: %v", err)
+	default:
+	}
+	close(repository.createGo)
+	if err := <-queueResult; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-transitionResult; !errors.Is(err, kernel.ErrRuntimeTransitionBlocked) {
+		t.Fatalf("transition did not observe queued message: %v", err)
+	}
+}
+
+type uploadCatalog struct {
+	items []filesystem.DiskInfo
+	err   error
+}
+
+func (c uploadCatalog) Disks(context.Context, security.Actor) ([]filesystem.DiskInfo, error) {
+	return c.items, c.err
+}
+
+func TestMailUploadStorageMustExist(t *testing.T) {
+	t.Parallel()
+	catalog := uploadCatalog{items: []filesystem.DiskInfo{{Code: "private", Visibility: filesystem.VisibilityPrivate}}}
+	if err := validateUploadStorage(context.Background(), catalog, "private"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateUploadStorage(context.Background(), catalog, "prviate"); err == nil {
+		t.Fatal("unknown Mail upload storage was accepted")
+	}
+}
+
 func TestMailHTTPRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 	renderer, _ := testRenderer(t, SenderPolicy{})
@@ -466,6 +660,14 @@ func TestMailHTTPRequiresAuthentication(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || repository.template.Enabled || !strings.Contains(response.Body.String(), `"enabled":false`) {
 		t.Fatalf("semantic disable = %d, %s, template=%#v", response.Code, response.Body.String(), repository.template)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/sites/5/mail/templates", strings.NewReader(`{"site_id":99,"code":"manual_api","name":"Manual API","enabled":true,"transport":"default","from":{"name":"","email":"noreply@example.com"},"to":[{"name":"","email":"person@example.net"}],"cc":[],"bcc":[],"reply_to":null,"subject":"Subject","content_type":"text","text_body":"Body","html_body":"","attachments":[],"variables":[]}`))
+	request = request.WithContext(httptransport.WithActor(request.Context(), security.User(9)))
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusUnprocessableEntity || repository.template.SiteID != 5 {
+		t.Fatalf("manual API site ownership = %d, %s, template=%#v", response.Code, response.Body.String(), repository.template)
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/api/sites/5/mail/variables", nil)
@@ -661,20 +863,43 @@ func (d *memorySpoolDisk) WalkPrefix(_ context.Context, prefix string, visit fun
 	}
 	return nil
 }
-func (d *memorySpoolDisk) ListPrefix(_ context.Context, prefix string, cursor string, limit int) (filesystem.PrefixPage, error) {
+func (d *memorySpoolDisk) OpenPrefixScan(_ context.Context, prefix string) (filesystem.PrefixScan, error) {
 	keys := make([]string, 0, len(d.objects))
 	for key := range d.objects {
-		if strings.HasPrefix(key, prefix) && key > cursor {
+		if strings.HasPrefix(key, prefix) {
 			keys = append(keys, key)
 		}
 	}
 	sort.Strings(keys)
-	page := filesystem.PrefixPage{Keys: keys}
-	if len(keys) > limit {
-		page.Keys = keys[:limit]
-		page.NextCursor = page.Keys[len(page.Keys)-1]
+	return &memoryPrefixScan{keys: keys}, nil
+}
+
+type memoryPrefixScan struct {
+	keys   []string
+	offset int
+	closed bool
+}
+
+func (s *memoryPrefixScan) Next(ctx context.Context, limit int) (filesystem.PrefixScanPage, error) {
+	if err := ctx.Err(); err != nil {
+		s.closed = true
+		return filesystem.PrefixScanPage{}, err
+	}
+	end := s.offset + limit
+	if end > len(s.keys) {
+		end = len(s.keys)
+	}
+	page := filesystem.PrefixScanPage{Keys: append([]string(nil), s.keys[s.offset:end]...), Done: end == len(s.keys)}
+	s.offset = end
+	if page.Done {
+		s.closed = true
 	}
 	return page, nil
+}
+
+func (s *memoryPrefixScan) Close() error {
+	s.closed = true
+	return nil
 }
 
 func TestTransientSpoolSurvivesRetryAndIsDeletedOnTerminalSuccess(t *testing.T) {
@@ -805,9 +1030,21 @@ func TestSpoolCleanupDeletesOnlyOldInactiveObjects(t *testing.T) {
 func TestSpoolCleanupPagesPastProtectedObjects(t *testing.T) {
 	t.Parallel()
 	prefix := spoolRootPrefix + "5/"
-	activeKey := prefix + "1-00000000-0000-4000-8000-000000000001"
-	orphanKey := prefix + "2-00000000-0000-4000-8000-000000000002"
-	disk := &memorySpoolDisk{objects: map[string][]byte{activeKey: []byte("active"), orphanKey: []byte("orphan")}}
+	activeKeys := []string{
+		prefix + "1-00000000-0000-4000-8000-000000000001",
+		prefix + "2-00000000-0000-4000-8000-000000000002",
+		prefix + "3-00000000-0000-4000-8000-000000000003",
+		prefix + "4-00000000-0000-4000-8000-000000000004",
+		prefix + "5-00000000-0000-4000-8000-000000000005",
+	}
+	orphanKey := prefix + "6-00000000-0000-4000-8000-000000000006"
+	objects := map[string][]byte{orphanKey: []byte("orphan")}
+	protected := make(map[string]struct{}, len(activeKeys))
+	for _, key := range activeKeys {
+		objects[key] = []byte("active")
+		protected[key] = struct{}{}
+	}
+	disk := &memorySpoolDisk{objects: objects}
 	spool, err := NewAttachmentSpool(5, disk)
 	if err != nil {
 		t.Fatal(err)
@@ -815,17 +1052,22 @@ func TestSpoolCleanupPagesPastProtectedObjects(t *testing.T) {
 	active := func(_ context.Context, keys []string) (map[string]struct{}, error) {
 		result := map[string]struct{}{}
 		for _, key := range keys {
-			if key == activeKey {
+			if _, exists := protected[key]; exists {
 				result[key] = struct{}{}
 			}
 		}
 		return result, nil
 	}
-	if deleted, err := spool.Cleanup(context.Background(), time.Now(), 1, active); err != nil || deleted != 0 {
-		t.Fatalf("first cleanup = %d, %v", deleted, err)
+	deleted := 0
+	for step := 0; step < 8 && deleted == 0; step++ {
+		count, cleanupErr := spool.Cleanup(context.Background(), time.Now(), 2, active)
+		if cleanupErr != nil {
+			t.Fatal(cleanupErr)
+		}
+		deleted += count
 	}
-	if deleted, err := spool.Cleanup(context.Background(), time.Now(), 1, active); err != nil || deleted != 1 {
-		t.Fatalf("second cleanup = %d, %v", deleted, err)
+	if deleted != 1 {
+		t.Fatalf("orphan cleanup count = %d", deleted)
 	}
 	if _, exists := disk.objects[orphanKey]; exists {
 		t.Fatal("later orphan remained starved behind protected object")
@@ -852,6 +1094,50 @@ func TestSpoolsCannotAccessOrCleanAnotherSitePrefix(t *testing.T) {
 	}
 	if _, exists := disk.objects[key6]; !exists {
 		t.Fatal("site cleanup deleted another site's object")
+	}
+}
+
+func TestMailRuntimeTransitionPurgesOnlyOwningSiteSpool(t *testing.T) {
+	t.Parallel()
+	key5 := spoolRootPrefix + "5/1-00000000-0000-4000-8000-000000000001"
+	key6 := spoolRootPrefix + "6/1-00000000-0000-4000-8000-000000000002"
+	disk := &memorySpoolDisk{objects: map[string][]byte{key5: []byte("five"), key6: []byte("six")}}
+	spool, _ := NewAttachmentSpool(5, disk)
+	renderer, _ := testRenderer(t, SenderPolicy{})
+	active := false
+	repository := &memoryRepository{template: mailTemplate(), active: &active}
+	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
+	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	runtime := &Runtime{service: service, spool: spool, spoolCleanupBatch: 1}
+	prepared, err := runtime.PrepareRuntimeTransition(context.Background(), kernel.RuntimeTransition{Reason: kernel.RuntimeTransitionSiteDelete, ScopeID: "5", FromProfile: "mail"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := disk.objects[key5]; exists {
+		t.Fatal("owning site spool object survived transition purge")
+	}
+	if _, exists := disk.objects[key6]; !exists {
+		t.Fatal("transition purge deleted another site's spool object")
+	}
+	prepared.Abort()
+}
+
+func TestActiveMessageBlocksTransitionBeforeSpoolPurge(t *testing.T) {
+	t.Parallel()
+	key := spoolRootPrefix + "5/1-00000000-0000-4000-8000-000000000001"
+	disk := &memorySpoolDisk{objects: map[string][]byte{key: []byte("active")}}
+	spool, _ := NewAttachmentSpool(5, disk)
+	renderer, _ := testRenderer(t, SenderPolicy{})
+	active := true
+	repository := &memoryRepository{template: mailTemplate(), active: &active}
+	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
+	service, _ := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, spool, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
+	runtime := &Runtime{service: service, spool: spool, spoolCleanupBatch: 1}
+	if _, err := runtime.PrepareRuntimeTransition(context.Background(), kernel.RuntimeTransition{Reason: kernel.RuntimeTransitionSiteDelete, ScopeID: "5", FromProfile: "mail"}); !errors.Is(err, kernel.ErrRuntimeTransitionBlocked) {
+		t.Fatalf("active transition error = %v", err)
+	}
+	if _, exists := disk.objects[key]; !exists {
+		t.Fatal("active message spool object was purged")
 	}
 }
 
@@ -888,6 +1174,7 @@ func TestConfigRejectsInvalidDeliveryAndSpoolLimits(t *testing.T) {
 		"message size":    func(config *Config) { config.MaxMessageSize = -1 },
 		"attachment size": func(config *Config) { config.MaxAttachmentSize = 0 },
 		"upload path":     func(config *Config) { config.UploadPath = "../mail" },
+		"absolute path":   func(config *Config) { config.UploadPath = "/mail/uploads" },
 		"spool TTL": func(config *Config) {
 			config.SpoolEnabled = true
 			config.SpoolTTL = 0

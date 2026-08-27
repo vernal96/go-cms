@@ -27,6 +27,15 @@ func (testAuthorizer) Check(
 	return nil
 }
 
+type deniedCreateAuthorizer struct{}
+
+func (deniedCreateAuthorizer) Check(_ context.Context, _ security.Actor, code permission.Code) error {
+	if code == createPermission {
+		return security.ErrForbidden
+	}
+	return nil
+}
+
 type memoryDisk struct {
 	code       filesystem.Code
 	visibility filesystem.Visibility
@@ -243,6 +252,67 @@ func TestServiceResolvesNestedFolderPathWithinStorage(t *testing.T) {
 	}
 	if _, err := service.ResolveFolder(context.Background(), security.User(1), "private", "../mail"); err == nil {
 		t.Fatal("unsafe folder path was accepted")
+	}
+}
+
+func TestServiceEnsuresNestedFolderPathIdempotentlyAndConcurrently(t *testing.T) {
+	repository := newMemoryRepository()
+	service, err := NewService(repository, memoryDisks{"private": newMemoryDisk("private", filesystem.VisibilityPrivate)}, testAuthorizer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const workers = 8
+	results := make(chan Folder, workers)
+	errorsFound := make(chan error, workers)
+	var group sync.WaitGroup
+	for index := 0; index < workers; index++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			folder, ensureErr := service.EnsureFolderPath(context.Background(), security.User(1), "private", "mail/uploads")
+			if ensureErr != nil {
+				errorsFound <- ensureErr
+				return
+			}
+			results <- folder
+		}()
+	}
+	group.Wait()
+	close(results)
+	close(errorsFound)
+	for ensureErr := range errorsFound {
+		t.Fatal(ensureErr)
+	}
+	var expected FolderID
+	for folder := range results {
+		if expected == 0 {
+			expected = folder.ID
+		}
+		if folder.ID != expected || folder.Storage != "private" || folder.Name != "uploads" {
+			t.Fatalf("ensured folder = %#v, expected ID %d", folder, expected)
+		}
+	}
+	if len(repository.folders) != 2 {
+		t.Fatalf("concurrent ensure created %d folders", len(repository.folders))
+	}
+	again, err := service.EnsureFolderPath(context.Background(), security.User(1), "private", "mail/uploads")
+	if err != nil || again.ID != expected || len(repository.folders) != 2 {
+		t.Fatalf("repeated ensure = %#v, %v, folders=%d", again, err, len(repository.folders))
+	}
+}
+
+func TestServiceEnsureFolderPathRejectsUnsafePathsAndRequiresCreatePermission(t *testing.T) {
+	for _, unsafe := range []string{"../mail", "/mail/uploads", "mail/../../secret", `mail\\uploads`} {
+		repository := newMemoryRepository()
+		service, _ := NewService(repository, memoryDisks{"private": newMemoryDisk("private", filesystem.VisibilityPrivate)}, testAuthorizer{})
+		if _, err := service.EnsureFolderPath(context.Background(), security.User(1), "private", unsafe); err == nil || len(repository.folders) != 0 {
+			t.Fatalf("unsafe path %q = %v, folders=%d", unsafe, err, len(repository.folders))
+		}
+	}
+	repository := newMemoryRepository()
+	service, _ := NewService(repository, memoryDisks{"private": newMemoryDisk("private", filesystem.VisibilityPrivate)}, deniedCreateAuthorizer{})
+	if _, err := service.EnsureFolderPath(context.Background(), security.User(1), "private", "mail/uploads"); !errors.Is(err, security.ErrForbidden) || len(repository.folders) != 0 {
+		t.Fatalf("denied ensure = %v, folders=%d", err, len(repository.folders))
 	}
 }
 

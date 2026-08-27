@@ -12,6 +12,13 @@ function json(payload: unknown): Response {
   })
 }
 
+function jsonError(status: number): Response {
+  return new Response(JSON.stringify({ error: { code: 'not_found', message: 'not found' } }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
 function dragTransfer(initialTypes: string[] = [], files: File[] = []): DataTransfer {
   const data = new Map<string, string>()
   const types = [...initialTypes]
@@ -103,6 +110,43 @@ describe('FileExplorer', () => {
     await flushPromises()
     expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/files/folders/resolve?disk=private&path=mail%2Fuploads')
     expect(fetchMock.mock.calls[2]?.[0]).toBe('/api/files/items?disk=private&folder_id=9')
+  })
+
+  it('ensures and opens a missing configured folder when create is allowed', async () => {
+    const folder = { kind: 'folder', id: 9, parent_id: 4, storage: 'private', name: 'uploads', created_at: '', updated_at: '' }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({
+        items: [{ code: 'private', visibility: 'private' }],
+        permissions: { read: true, create: true, update: false, delete: false },
+      }))
+      .mockResolvedValueOnce(jsonError(404))
+      .mockResolvedValueOnce(json(folder))
+      .mockResolvedValueOnce(json({ ...listing, disk: { code: 'private', visibility: 'private' }, folder }))
+    vi.stubGlobal('fetch', fetchMock)
+    mount(FileExplorer, {
+      props: { accessToken: 'token', permissions: new Set(['core.file.read', 'core.file.create']), initialStorage: 'private', initialPath: 'mail/uploads' },
+    })
+    await flushPromises()
+    expect(fetchMock.mock.calls[2]?.[0]).toBe('/api/files/folders/ensure')
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual({ disk: 'private', path: 'mail/uploads' })
+    expect(fetchMock.mock.calls[3]?.[0]).toBe('/api/files/items?disk=private&folder_id=9')
+  })
+
+  it('does not ensure a missing configured folder without create permission', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({
+        items: [{ code: 'private', visibility: 'private' }],
+        permissions: { read: true, create: false, update: false, delete: false },
+      }))
+      .mockResolvedValueOnce(jsonError(404))
+      .mockResolvedValueOnce(json({ ...listing, disk: { code: 'private', visibility: 'private' }, folder: null }))
+    vi.stubGlobal('fetch', fetchMock)
+    mount(FileExplorer, {
+      props: { accessToken: 'token', permissions: new Set(['core.file.read']), initialStorage: 'private', initialPath: 'mail/uploads' },
+    })
+    await flushPromises()
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/files/folders/ensure')).toBe(false)
+    expect(fetchMock.mock.calls[2]?.[0]).toBe('/api/files/items?disk=private')
   })
 
   it('moves the right-clicked selection through the folder dialog', async () => {

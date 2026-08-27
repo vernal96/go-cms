@@ -23,11 +23,11 @@ const SpoolFilesystemAlias filesystem.Alias = "spool"
 const spoolRootPrefix = "mail-spool/"
 
 type AttachmentSpool struct {
-	disk          filesystem.Disk
-	pager         filesystem.PrefixPager
-	prefix        string
-	cleanupMu     sync.Mutex
-	cleanupCursor string
+	disk            filesystem.Disk
+	scannerProvider filesystem.PrefixScannerProvider
+	prefix          string
+	cleanupMu       sync.Mutex
+	cleanupScan     filesystem.PrefixScan
 }
 
 func NewAttachmentSpool(siteID site.ID, disk filesystem.Disk) (*AttachmentSpool, error) {
@@ -40,11 +40,11 @@ func NewAttachmentSpool(siteID site.ID, disk filesystem.Disk) (*AttachmentSpool,
 	if disk.Visibility() != filesystem.VisibilityPrivate {
 		return nil, errors.New("mail attachment spool must be private")
 	}
-	pager, ok := disk.(filesystem.PrefixPager)
+	scannerProvider, ok := disk.(filesystem.PrefixScannerProvider)
 	if !ok {
 		return nil, errors.New("mail attachment spool does not support bounded cleanup")
 	}
-	return &AttachmentSpool{disk: disk, pager: pager, prefix: spoolRootPrefix + fmt.Sprint(siteID) + "/"}, nil
+	return &AttachmentSpool{disk: disk, scannerProvider: scannerProvider, prefix: spoolRootPrefix + fmt.Sprint(siteID) + "/"}, nil
 }
 
 func (s *AttachmentSpool) Put(ctx context.Context, input TransientAttachment, maxSize int64) (Attachment, error) {
@@ -102,11 +102,24 @@ func (s *AttachmentSpool) Cleanup(ctx context.Context, olderThan time.Time, limi
 	}
 	s.cleanupMu.Lock()
 	defer s.cleanupMu.Unlock()
-	page, err := s.pager.ListPrefix(ctx, s.prefix, s.cleanupCursor, limit)
-	if err != nil {
-		return 0, err
+	if s.cleanupScan == nil {
+		var err error
+		s.cleanupScan, err = s.scannerProvider.OpenPrefixScan(ctx, s.prefix)
+		if err != nil {
+			return 0, err
+		}
 	}
-	s.cleanupCursor = page.NextCursor
+	page, err := s.cleanupScan.Next(ctx, limit)
+	if err != nil {
+		return 0, s.resetCleanupScanLocked(err)
+	}
+	if page.Done {
+		if closeErr := s.cleanupScan.Close(); closeErr != nil {
+			s.cleanupScan = nil
+			return 0, closeErr
+		}
+		s.cleanupScan = nil
+	}
 	candidates := make([]string, 0, limit)
 	for _, key := range page.Keys {
 		createdAt, ok := s.createdAt(key)
@@ -119,7 +132,7 @@ func (s *AttachmentSpool) Cleanup(ctx context.Context, olderThan time.Time, limi
 	}
 	protected, err := active(ctx, candidates)
 	if err != nil {
-		return 0, err
+		return 0, s.resetCleanupScanLocked(err)
 	}
 	deleted := 0
 	for _, key := range candidates {
@@ -127,11 +140,66 @@ func (s *AttachmentSpool) Cleanup(ctx context.Context, olderThan time.Time, limi
 			continue
 		}
 		if err := s.disk.Delete(ctx, key); err != nil && !errors.Is(err, filesystem.ErrNotFound) {
-			return deleted, err
+			return deleted, s.resetCleanupScanLocked(err)
 		}
 		deleted++
 	}
 	return deleted, nil
+}
+
+// Purge removes every object owned by this site-scoped spool. Callers must
+// first establish that no active Message can reference the prefix.
+func (s *AttachmentSpool) Purge(ctx context.Context, limit int) (_ int, resultErr error) {
+	if s == nil || s.disk == nil || limit < 1 {
+		return 0, errors.New("mail spool purge request is invalid")
+	}
+	s.cleanupMu.Lock()
+	defer s.cleanupMu.Unlock()
+	if err := s.resetCleanupScanLocked(nil); err != nil {
+		return 0, err
+	}
+	scan, err := s.scannerProvider.OpenPrefixScan(ctx, s.prefix)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, scan.Close()) }()
+	deleted := 0
+	for {
+		page, nextErr := scan.Next(ctx, limit)
+		if nextErr != nil {
+			return deleted, nextErr
+		}
+		for _, key := range page.Keys {
+			if !strings.HasPrefix(key, s.prefix) {
+				return deleted, errors.New("mail spool scan escaped its site prefix")
+			}
+			if deleteErr := s.disk.Delete(ctx, key); deleteErr != nil && !errors.Is(deleteErr, filesystem.ErrNotFound) {
+				return deleted, deleteErr
+			}
+			deleted++
+		}
+		if page.Done {
+			return deleted, nil
+		}
+	}
+}
+
+func (s *AttachmentSpool) CloseCleanupScan() error {
+	if s == nil {
+		return nil
+	}
+	s.cleanupMu.Lock()
+	defer s.cleanupMu.Unlock()
+	return s.resetCleanupScanLocked(nil)
+}
+
+func (s *AttachmentSpool) resetCleanupScanLocked(cause error) error {
+	if s.cleanupScan == nil {
+		return cause
+	}
+	closeErr := s.cleanupScan.Close()
+	s.cleanupScan = nil
+	return errors.Join(cause, closeErr)
 }
 
 type countingReader struct {

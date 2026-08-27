@@ -631,7 +631,7 @@ func writeMailError(response http.ResponseWriter, err error) {
 		httptransport.WriteJSONError(response, http.StatusForbidden, "forbidden", "mail access is forbidden")
 	case errors.Is(err, ErrNotFound):
 		httptransport.WriteJSONError(response, http.StatusNotFound, "not_found", "mail item not found")
-	case errors.Is(err, ErrConflict):
+	case errors.Is(err, ErrConflict), errors.Is(err, ErrRuntimeDraining):
 		httptransport.WriteJSONError(response, http.StatusConflict, "conflict", "mail item conflicts with its current state")
 	case errors.Is(err, ErrInvalid), errors.Is(err, ErrTemplateDisabled), errors.Is(err, ErrNoRecipients), errors.Is(err, ErrSenderNotAllowed), errors.Is(err, ErrTransportNotFound):
 		httptransport.WriteJSONError(response, http.StatusUnprocessableEntity, "validation_failed", err.Error())
