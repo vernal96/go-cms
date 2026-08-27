@@ -93,6 +93,7 @@ Use the smallest set of skills that covers the actual task. A workflow skill suc
 - `go-cms-development`: cross-package backend architecture or reusable extension/composition work.
 - `go-cms-runtime-integrity`: SiteRuntime/ProfileBlueprint/reload/publication/runtime cache-coherence work.
 - `go-cms-cache`: cache contracts, stores, module cache aliases, cache keys/tags, TTL, invalidation/coherence, Remember/result caching, cache connectors or cache maintenance.
+- `go-cms-events-jobs`: domain events, transactional outbox, EventBus publishing/consumption, application background workers/jobs, retries, delivery semantics and idempotency.
 - `go-cms-architecture-review`: architecture/refactor/PR/commit review.
 - `go-cms-admin-ui`: backend-driven admin extensibility/navigation/frontend plugin work.
 - `go-cms-administration`: global system administration reserved for the protected built-in `admin` group, including administration navigation/pages, destructive maintenance and global cleanup operations.
