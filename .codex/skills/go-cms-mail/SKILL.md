@@ -57,7 +57,7 @@ Increment `Template.Version` for every successful semantic template update. Do n
 
 Reuse the existing core `field.Definition`/field type system instead of inventing another dynamic-form schema.
 
-Mail variables become `data.<key>` placeholders.
+Mail template-owned input variables become `data.<key>` placeholders.
 
 A variable may be either required or optional. Preserve the template author's `Required` choice.
 
@@ -77,6 +77,38 @@ If a non-empty value is provided, normalize/validate it through the established 
 Keep semantic types intact long enough to resolve files/attachments correctly; do not eagerly stringify all inputs.
 
 Do not globally alter core field semantics to implement Mail behavior.
+
+## Built-in site variables
+
+Mail templates also receive site-owned variables automatically; the administrator does not redeclare them as `data.*` fields.
+
+Use the same namespace conventions as SEO so different features do not invent incompatible names.
+
+Expose template-safe built-in site properties at least as:
+
+```text
+site.id
+site.profile_code
+site.domain
+site.locale
+site.is_public
+```
+
+Expose every field declared by the current site's `Profile.Params` as:
+
+```text
+site.field.<key>
+```
+
+The values come from the current prepared SiteRuntime/Site snapshot (`Site.Settings` contains validated profile parameter values). Do not accept caller-provided values for `site.*`; they are backend-authoritative.
+
+Do not expose internal/audit/storage implementation fields merely because they exist on the Go `site.Site` struct. In particular, avoid making `CreatedBy`, `UpdatedBy`, `FileReferences` or persistence internals part of the public template contract unless explicitly requested later.
+
+The template editor/metadata API should return the available site variables for the currently selected site/profile so the frontend can present them as a separate `Сайт` group alongside user-declared `data.*` variables.
+
+Keep profile field values typed until the consuming context decides how to represent them. A profile field of file type is not generically converted to a numeric ID string. In Mail text/HTML/header scalar contexts, only convert it to an externally safe representation (for example a public URL) according to Mail policy. In attachment context it may be resolved as an attachment source when the field type is compatible.
+
+SEO and Mail should share one core/site-owned variable catalog/value-source helper where this avoids duplicated hardcoded `site.domain`, `site.locale`, `site.field.*` catalogs. The generic `kernel/templating` package itself still must not import or know the Site domain.
 
 ## Template fields
 
@@ -276,27 +308,75 @@ Never resolve manual file-variable values with `security.System()` before author
 
 A trusted backend module calling the automatic Mail API may resolve file variables under trusted/system semantics when that module intentionally supplies the file reference. Preserve automatic origin metadata.
 
+### Site file field
+
+A compatible `site.field.<key>` file value is backend-authoritative site configuration. It does not come from manual user input. Treat its authorization according to the already-validated site configuration/runtime boundary, while still applying Mail's external URL/attachment safety rules.
+
 ### Worker
 
 After queueing, the immutable Message contains only already-authorized attachment references/snapshots. The asynchronous worker has no browser actor and may use the trusted delivery/file-open path.
 
 Add negative tests proving arbitrary manual `file_id` cannot bypass file permissions.
 
+## Temporary/transient attachments from Forms and other backend modules
+
+Future Forms may supply uploaded files that are intentionally temporary and must NOT become ordinary CMS `core.File` records, must NOT appear in FileExplorer, and must NOT be retained as permanent user-managed files.
+
+Because Mail delivery is asynchronous, the bytes must outlive the original HTTP request. Therefore truly keeping the bytes nowhere is impossible. Do not work around this by rendering/sending SMTP synchronously and do not put large binary bodies into the job payload.
+
+Use a Mail-owned temporary attachment spool abstraction.
+
+Conceptually Mail accepts an automatic semantic file input such as:
+
+```text
+stored CMS file reference
+OR
+transient attachment stream + filename + MIME + size
+```
+
+Manual browser Mail APIs continue using authorized CMS file IDs for file fields; do not expose arbitrary spool object keys to clients.
+
+For a transient attachment:
+
+1. validate filename/MIME/size and Mail limits;
+2. copy the stream into a private Mail spool before queueing;
+3. persist only an opaque spool reference plus immutable metadata/checksum on the Message attachment snapshot;
+4. create Message + Outbox transaction referencing that already-prepared spool object;
+5. if the DB transaction fails, best-effort delete the newly created spool object;
+6. worker opens the spool object through the Mail attachment-store abstraction;
+7. keep it across retryable delivery failures;
+8. delete it after terminal accepted/failed state;
+9. independently TTL-clean abandoned/orphaned spool objects so process crashes do not leak data forever.
+
+The spool is internal transport storage, not the CMS file catalog. Backing it with a module-bound private filesystem/object-storage adapter is acceptable; do not insert rows into `core.files` and do not expose it in FileExplorer.
+
+Prefer a small Mail-owned contract such as a temporary `AttachmentStore`/`Spool` over teaching `core.File` about ephemeral mail/form files.
+
+Use the existing module filesystem binding mechanism (`ModuleContext.Filesystems()`) where suitable so Mail depends on a logical spool alias, not a physical local/S3 implementation. Project composition maps that alias to infrastructure.
+
+Do not store temporary attachment bytes in PostgreSQL JSON/bytea merely for convenience unless an explicit future requirement justifies that trade-off.
+
+The automatic Mail API used by Forms must be able to provide transient file inputs without forcing Forms to first create permanent CMS Files.
+
 ## File scalar interpolation
 
-A file variable used as `{{data.file}}` in text/HTML is different from an attachment.
+A file variable used in text/HTML is different from an attachment.
 
-Feature-specific Mail resolution may convert an authorized file to a safe public URL only when it is actually suitable for external recipients.
+Feature-specific Mail resolution may convert an authorized persistent/site file to a safe public URL only when it is actually suitable for external recipients.
 
 Private/admin-only URLs must not be emitted into outbound email. Private files may still be real attachments after proper authorization.
 
-Generic templating never decides how file IDs become URLs.
+A transient spool attachment has no public URL by default. Do not make `{{data.temp_file}}` emit an internal spool path/key. It may be used as an attachment but scalar interpolation must fail or be absent according to declared semantics unless an explicit safe URL policy is introduced later.
+
+Generic templating never decides how file IDs/spool references become URLs.
 
 ## File/media distinction
 
-Attachments use Files. Reuse existing file field, file picker and upload machinery.
+Persistent static/manual file selection uses Files and reuses the existing file picker/upload machinery.
 
-Do not create a parallel Mail binary upload subsystem or a Media field solely for Mail.
+Transient automatic attachments are Mail spool objects, not Files and not Media.
+
+Do not create a Media field solely for Mail.
 
 A future Media field for semantic image use cases (e.g. SEO OG image) is separate.
 
@@ -316,7 +396,8 @@ Validate configurable limits before queueing, including at least:
 
 - maximum final recipient count across To/CC/BCC;
 - maximum outgoing message/attachment size;
-- maximum delivery attempts.
+- maximum delivery attempts;
+- transient spool attachment size within the same outgoing-message policy.
 
 Do not rely on HTTP request body limits as the mail-message-size policy.
 
@@ -341,6 +422,23 @@ The admin UI provides:
 For HTML templates use existing rich HTML editor; for text use textarea.
 
 Reuse current file picker/upload UI for static attachments and manual file variables, but backend remains authoritative for file access.
+
+The template editor should show available placeholders grouped by source, at least:
+
+```text
+Сайт
+  {{site.id}}
+  {{site.profile_code}}
+  {{site.domain}}
+  {{site.locale}}
+  {{site.is_public}}
+  {{site.field.<profile-param>}}
+
+Данные шаблона
+  {{data.<declared-variable>}}
+```
+
+Do not require administrators to redeclare site profile fields in every Mail template.
 
 ## Template lifecycle
 
@@ -372,6 +470,8 @@ Support practical server-side history filters when implemented, including status
 
 Mail history can contain personal data and grow indefinitely. Provide configurable retention including an explicit retain-indefinitely mode. Cleanup is application/background work, bounded in batches, and never deletes active queued/sending/retryable messages.
 
+Mail message retention and temporary spool retention must be coordinated but are not identical: terminal messages may retain attachment metadata after spool bytes are deleted.
+
 ## SMTP result semantics
 
 Do not label SMTP `250` as guaranteed `delivered` or `read`. Use accepted/"Передано SMTP" semantics.
@@ -385,13 +485,19 @@ Add focused tests for at least:
 - required variable missing -> validation error;
 - optional variable missing -> empty/absent + warning;
 - unknown/malformed placeholders fail;
+- built-in `site.*` variables are backend-authoritative;
+- profile `site.field.*` variables are derived from the current profile params/settings;
 - HTML escaping and header injection rejection;
 - final address/no-recipient validation;
 - template version increments and stale preview/send -> conflict;
 - static attachment requires editor file permission at template save;
 - a send-only actor may send an already-approved static attachment without global file-read permission;
 - manual file variable cannot bypass current actor file permission by posting an arbitrary ID;
-- automatic trusted file variable follows explicit system semantics;
+- automatic trusted persistent file variable follows explicit system semantics;
+- transient automatic attachment queues without creating `core.File`/FileExplorer entries;
+- transient spool bytes survive until worker delivery/retry and are removed after terminal state;
+- failed Message/outbox creation cleans newly spooled data best-effort and TTL cleanup handles orphan leftovers;
+- transient spool key/path is never exposed as a public template scalar or browser-controlled reference;
 - immutable Message unaffected by later template edits;
 - queued Message + outbox atomicity;
 - stable RFC Message-ID;
@@ -408,6 +514,7 @@ Add focused tests for at least:
 
 Do not add unless explicitly requested:
 
+- Forms module itself;
 - newsletters/bulk campaigns/subscriber lists;
 - SMS/Telegram/WhatsApp;
 - conditional/loop template language;
@@ -415,5 +522,7 @@ Do not add unless explicitly requested:
 - provider bounce/delivery webhooks;
 - inline CID images;
 - generic notification workflow engine.
+
+Mail should expose the automatic transient-attachment contract needed by future Forms, but do not implement Forms in a Mail task.
 
 Build Mail as a clean consumer of generic templating + jobs/outbox so future Forms and other channels can reuse generic infrastructure without depending on Mail internals.
