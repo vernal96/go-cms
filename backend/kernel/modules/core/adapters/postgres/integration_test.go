@@ -754,6 +754,10 @@ WHERE id = $1;
 	if err := connector.Pool().QueryRow(ctx, `SELECT id FROM core.users WHERE login='admin';`).Scan(&adminID); err != nil {
 		t.Fatalf("load revision author: %v", err)
 	}
+	delayedValidateImageMedia := func(ctx context.Context, id media.ID) error {
+		time.Sleep(20 * time.Millisecond)
+		return validateImageMedia(ctx, id)
+	}
 	root, err := resourceRepository.Create(ctx, &adminID, resource.Resource{
 		SiteID:       siteIDs["localhost"],
 		Type:         resourcetype.Page,
@@ -767,17 +771,18 @@ WHERE id = $1;
 		InMenu:       true,
 		InSitemap:    true,
 		Fields:       map[string]any{"headline": "Home"},
-	}, validateImageMedia)
+	}, delayedValidateImageMedia)
 
 	if err != nil {
 		t.Fatalf("create root resource: %v", err)
 	}
 	var createdEventTopic string
 	var createdEventKey, createdEventBody []byte
+	var outboxCreatedAt, outboxAvailableAt time.Time
 	if err := connector.Pool().QueryRow(ctx, `
-SELECT topic,message_key,body FROM core.outbox_messages
+SELECT topic,message_key,body,created_at,available_at FROM core.outbox_messages
 WHERE topic=$1 AND message_key=$2 ORDER BY created_at LIMIT 1;`, resource.EventCreated, strconv.FormatInt(int64(root.ID), 10)).Scan(
-		&createdEventTopic, &createdEventKey, &createdEventBody,
+		&createdEventTopic, &createdEventKey, &createdEventBody, &outboxCreatedAt, &outboxAvailableAt,
 	); err != nil {
 		t.Fatalf("load created resource event: %v", err)
 	}
@@ -794,6 +799,9 @@ WHERE topic=$1 AND message_key=$2 ORDER BY created_at LIMIT 1;`, resource.EventC
 		createdPayload.SiteID != root.SiteID || createdPayload.StorageKind != resource.StorageTree ||
 		createdPayload.Version != root.Version || createdPayload.ActorID == nil || *createdPayload.ActorID != adminID {
 		t.Fatalf("created event = %#v, payload = %#v", createdEnvelope, createdPayload)
+	}
+	if !outboxCreatedAt.Equal(outboxAvailableAt) || createdEnvelope.OccurredAt.Sub(outboxCreatedAt) < 10*time.Millisecond {
+		t.Fatalf("outbox operational timestamps copied event occurrence time: occurred_at=%s created_at=%s available_at=%s", createdEnvelope.OccurredAt, outboxCreatedAt, outboxAvailableAt)
 	}
 	revisionRepository, ok := resourceRepository.(resource.RevisionRepository)
 	if !ok {

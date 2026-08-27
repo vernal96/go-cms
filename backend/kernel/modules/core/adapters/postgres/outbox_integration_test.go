@@ -24,8 +24,21 @@ func TestPostgresOutboxClaimRetryPublishAndCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := database.OutboxSources()[0]
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	firstID := insertOutboxTestRecord(t, ctx, connector.Pool(), "test.first", now)
+	firstID := insertOutboxTestRecord(t, ctx, connector.Pool(), "test.first")
+	clockSkewID := insertOutboxTestRecord(t, ctx, connector.Pool(), "test.future")
+	if _, err := connector.Pool().Exec(ctx, `UPDATE core.outbox_messages SET available_at=clock_timestamp()+interval '1 hour' WHERE message_id=$1;`, clockSkewID); err != nil {
+		t.Fatal(err)
+	}
+	var defaultsMatch, defaultsUseDatabaseClock bool
+	if err := connector.Pool().QueryRow(ctx, `
+SELECT created_at=available_at,
+       created_at BETWEEN clock_timestamp()-interval '5 seconds' AND clock_timestamp()+interval '1 second'
+FROM core.outbox_messages WHERE message_id=$1;`, firstID).Scan(&defaultsMatch, &defaultsUseDatabaseClock); err != nil {
+		t.Fatal(err)
+	}
+	if !defaultsMatch || !defaultsUseDatabaseClock {
+		t.Fatalf("initial operational timestamps did not use PostgreSQL defaults: match=%t database_clock=%t", defaultsMatch, defaultsUseDatabaseClock)
+	}
 
 	start := make(chan struct{})
 	type result struct {
@@ -37,7 +50,7 @@ func TestPostgresOutboxClaimRetryPublishAndCleanup(t *testing.T) {
 	for _, owner := range []string{"publisher-a", "publisher-b"} {
 		go func(owner string) {
 			<-start
-			records, err := source.Claim(ctx, outbox.Claim{Owner: owner, Now: now, LeaseDuration: time.Minute, Limit: 1})
+			records, err := source.Claim(ctx, outbox.Claim{Owner: owner, LeaseDuration: time.Minute, Limit: 1})
 			results <- result{owner: owner, records: records, err: err}
 		}(owner)
 	}
@@ -55,31 +68,66 @@ func TestPostgresOutboxClaimRetryPublishAndCleanup(t *testing.T) {
 	if winner == "" {
 		t.Fatal("concurrent claimers did not claim the available message")
 	}
-	reclaimed, err := source.Claim(ctx, outbox.Claim{Owner: "publisher-c", Now: now.Add(time.Minute + time.Microsecond), LeaseDuration: time.Minute, Limit: 1})
+	var leaseUsesDatabaseClock bool
+	if err := connector.Pool().QueryRow(ctx, `
+SELECT lease_until BETWEEN clock_timestamp()+interval '50 seconds' AND clock_timestamp()+interval '61 seconds'
+FROM core.outbox_messages WHERE message_id=$1;`, firstID).Scan(&leaseUsesDatabaseClock); err != nil {
+		t.Fatal(err)
+	}
+	if !leaseUsesDatabaseClock {
+		t.Fatal("lease expiration was not based on PostgreSQL current time")
+	}
+	if _, err := connector.Pool().Exec(ctx, `UPDATE core.outbox_messages SET lease_until=clock_timestamp()-interval '1 microsecond' WHERE message_id=$1;`, firstID); err != nil {
+		t.Fatal(err)
+	}
+	reclaimed, err := source.Claim(ctx, outbox.Claim{Owner: "publisher-c", LeaseDuration: time.Minute, Limit: 1})
 	if err != nil || len(reclaimed) != 1 || reclaimed[0].MessageID != firstID {
 		t.Fatalf("expired lease reclaim = %#v, %v", reclaimed, err)
 	}
-	retryAt := now.Add(2 * time.Minute)
-	if err := source.MarkFailed(ctx, firstID, "publisher-c", "temporary broker failure", retryAt); err != nil {
+	if err := source.MarkFailed(ctx, firstID, "publisher-c", "temporary broker failure", 2*time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	tooEarly, err := source.Claim(ctx, outbox.Claim{Owner: "publisher-d", Now: retryAt.Add(-time.Microsecond), LeaseDuration: time.Minute, Limit: 1})
+	var retryUsesDatabaseClock bool
+	if err := connector.Pool().QueryRow(ctx, `
+SELECT available_at BETWEEN clock_timestamp()+interval '110 seconds' AND clock_timestamp()+interval '121 seconds'
+FROM core.outbox_messages WHERE message_id=$1;`, firstID).Scan(&retryUsesDatabaseClock); err != nil {
+		t.Fatal(err)
+	}
+	if !retryUsesDatabaseClock {
+		t.Fatal("retry availability was not based on PostgreSQL current time plus the retry duration")
+	}
+	tooEarly, err := source.Claim(ctx, outbox.Claim{Owner: "publisher-d", LeaseDuration: time.Minute, Limit: 1})
 	if err != nil || len(tooEarly) != 0 {
 		t.Fatalf("early retry claim = %#v, %v", tooEarly, err)
 	}
-	retry, err := source.Claim(ctx, outbox.Claim{Owner: "publisher-d", Now: retryAt, LeaseDuration: time.Minute, Limit: 1})
+	if _, err := connector.Pool().Exec(ctx, `UPDATE core.outbox_messages SET available_at=clock_timestamp()-interval '1 microsecond' WHERE message_id=$1;`, firstID); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := source.Claim(ctx, outbox.Claim{Owner: "publisher-d", LeaseDuration: time.Minute, Limit: 1})
 	if err != nil || len(retry) != 1 || retry[0].AttemptCount != 1 || retry[0].LastError != "temporary broker failure" {
 		t.Fatalf("retry claim = %#v, %v", retry, err)
 	}
-	if err := source.MarkPublished(ctx, firstID, "publisher-d", retryAt); err != nil {
+	if err := source.MarkPublished(ctx, firstID, "publisher-d"); err != nil {
 		t.Fatal(err)
 	}
-	normalClaim, err := source.Claim(ctx, outbox.Claim{Owner: "publisher-e", Now: retryAt.Add(time.Hour), LeaseDuration: time.Minute, Limit: 10})
+	var publishedUsesDatabaseClock bool
+	if err := connector.Pool().QueryRow(ctx, `
+SELECT published_at BETWEEN clock_timestamp()-interval '5 seconds' AND clock_timestamp()+interval '1 second'
+FROM core.outbox_messages WHERE message_id=$1;`, firstID).Scan(&publishedUsesDatabaseClock); err != nil {
+		t.Fatal(err)
+	}
+	if !publishedUsesDatabaseClock {
+		t.Fatal("published_at was not assigned by PostgreSQL")
+	}
+	normalClaim, err := source.Claim(ctx, outbox.Claim{Owner: "publisher-e", LeaseDuration: time.Minute, Limit: 10})
 	if err != nil || len(normalClaim) != 0 {
-		t.Fatalf("published message was reclaimed: %#v, %v", normalClaim, err)
+		t.Fatalf("published or PostgreSQL-future message was claimed: %#v, %v", normalClaim, err)
 	}
 
-	secondID := insertOutboxTestRecord(t, ctx, connector.Pool(), "test.publisher", now)
+	secondID := clockSkewID
+	if _, err := connector.Pool().Exec(ctx, `UPDATE core.outbox_messages SET topic='test.publisher',available_at=clock_timestamp()-interval '1 microsecond' WHERE message_id=$1;`, secondID); err != nil {
+		t.Fatal(err)
+	}
 	bus := &lockingProbeBus{pool: connector.Pool(), published: make(chan error, 1)}
 	publisher, err := outbox.NewPublisher(bus, []outbox.Source{source}, slog.New(slog.NewTextHandler(io.Discard, nil)), outbox.PublisherConfig{PollInterval: 5 * time.Millisecond, BatchSize: 1, LeaseDuration: time.Second})
 	if err != nil {
@@ -120,16 +168,15 @@ func TestPostgresOutboxClaimRetryPublishAndCleanup(t *testing.T) {
 		t.Fatal("publisher cancellation timed out")
 	}
 
-	old := now.Add(-8 * 24 * time.Hour)
-	if _, err := connector.Pool().Exec(ctx, `UPDATE core.outbox_messages SET published_at=$2 WHERE message_id=$1;`, firstID, old); err != nil {
+	if _, err := connector.Pool().Exec(ctx, `UPDATE core.outbox_messages SET published_at=clock_timestamp()-interval '8 days' WHERE message_id=$1;`, firstID); err != nil {
 		t.Fatal(err)
 	}
-	recentID := insertOutboxTestRecord(t, ctx, connector.Pool(), "test.recent", now)
-	if _, err := connector.Pool().Exec(ctx, `UPDATE core.outbox_messages SET published_at=$2 WHERE message_id=$1;`, recentID, now); err != nil {
+	recentID := insertOutboxTestRecord(t, ctx, connector.Pool(), "test.recent")
+	if _, err := connector.Pool().Exec(ctx, `UPDATE core.outbox_messages SET published_at=clock_timestamp() WHERE message_id=$1;`, recentID); err != nil {
 		t.Fatal(err)
 	}
-	unpublishedID := insertOutboxTestRecord(t, ctx, connector.Pool(), "test.unpublished", now)
-	deleted, err := source.CleanupPublished(ctx, now.Add(-7*24*time.Hour), 10)
+	unpublishedID := insertOutboxTestRecord(t, ctx, connector.Pool(), "test.unpublished")
+	deleted, err := source.CleanupPublished(ctx, 7*24*time.Hour, 10)
 	if err != nil || deleted != 1 {
 		t.Fatalf("cleanup deleted %d: %v", deleted, err)
 	}
@@ -160,13 +207,13 @@ func (*lockingProbeBus) Consume(context.Context, eventbus.Subscription, eventbus
 	return nil
 }
 
-func insertOutboxTestRecord(t *testing.T, ctx context.Context, pool *pgxpool.Pool, topic string, availableAt time.Time) messageid.ID {
+func insertOutboxTestRecord(t *testing.T, ctx context.Context, pool *pgxpool.Pool, topic string) messageid.ID {
 	t.Helper()
 	id, err := messageid.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO core.outbox_messages(message_id,topic,message_key,body,headers,created_at,available_at) VALUES($1,$2,'probe','{}','{}',$3,$3);`, id, topic, availableAt); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO core.outbox_messages(message_id,topic,message_key,body,headers) VALUES($1,$2,'probe','{}','{}');`, id, topic); err != nil {
 		t.Fatal(err)
 	}
 	return id

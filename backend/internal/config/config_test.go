@@ -49,6 +49,7 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	t.Setenv("JWT_ACCESS_TTL", "10m")
 	t.Setenv("JWT_CLOCK_SKEW", "5s")
 	t.Setenv("OUTBOX_BATCH_SIZE", "25")
+	t.Setenv("OUTBOX_CLEANUP_MAX_BATCHES", "40")
 
 	config, err := configloader.Load[projectconfig.Config]("")
 	if err != nil {
@@ -84,7 +85,8 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		t.Fatal("JWT configuration was not loaded correctly")
 	}
 	if config.Outbox.BatchSize != 25 || config.Outbox.PollInterval != 500*time.Millisecond ||
-		config.Outbox.LeaseDuration != 30*time.Second || config.Outbox.PublishedRetention != 7*24*time.Hour {
+		config.Outbox.LeaseDuration != 30*time.Second || config.Outbox.PublishedRetention != 7*24*time.Hour ||
+		config.Outbox.CleanupMaxBatches != 40 {
 		t.Fatalf("outbox configuration = %#v", config.Outbox)
 	}
 
@@ -116,7 +118,8 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		definition.Caches[1].Code() != projectcache.RedisCode {
 		t.Fatalf("cache factories = %#v", definition.Caches)
 	}
-	if definition.OutboxPublisher.BatchSize != 25 || definition.OutboxPublisher.CleanupInterval != time.Hour {
+	if definition.OutboxPublisher.BatchSize != 25 || definition.OutboxPublisher.CleanupInterval != time.Hour ||
+		definition.OutboxPublisher.CleanupMaxBatches != 40 {
 		t.Fatalf("outbox publisher definition = %#v", definition.OutboxPublisher)
 	}
 	if len(definition.Profiles[0].Modules) != 3 ||

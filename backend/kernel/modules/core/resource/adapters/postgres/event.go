@@ -31,8 +31,8 @@ func appendResourceEvent(ctx context.Context, tx pgx.Tx, name string, resourceID
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO core.outbox_messages
-    (message_id,topic,message_key,body,headers,created_at,available_at)
-VALUES ($1,$2,$3,$4,$5::jsonb,$6,$6);`, event.ID, message.Topic, message.Key, message.Body, string(headers), event.OccurredAt); err != nil {
+    (message_id,topic,message_key,body,headers)
+VALUES ($1,$2,$3,$4,$5::jsonb);`, event.ID, message.Topic, message.Key, message.Body, string(headers)); err != nil {
 		return fmt.Errorf("append %s outbox message: %w", name, translateError(err))
 	}
 	return nil

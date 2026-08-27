@@ -666,13 +666,13 @@ func (s *blockingOutboxSource) Claim(ctx context.Context, _ outbox.Claim) ([]out
 	}
 	return nil, ctx.Err()
 }
-func (*blockingOutboxSource) MarkPublished(context.Context, messageid.ID, string, time.Time) error {
+func (*blockingOutboxSource) MarkPublished(context.Context, messageid.ID, string) error {
 	return nil
 }
-func (*blockingOutboxSource) MarkFailed(context.Context, messageid.ID, string, string, time.Time) error {
+func (*blockingOutboxSource) MarkFailed(context.Context, messageid.ID, string, string, time.Duration) error {
 	return nil
 }
-func (*blockingOutboxSource) CleanupPublished(context.Context, time.Time, int) (int64, error) {
+func (*blockingOutboxSource) CleanupPublished(context.Context, time.Duration, int) (int64, error) {
 	return 0, nil
 }
 

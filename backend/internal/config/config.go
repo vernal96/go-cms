@@ -40,6 +40,7 @@ type OutboxConfig struct {
 	MaximumRetryDelay  time.Duration `envconfig:"MAXIMUM_RETRY_DELAY" default:"1h"`
 	PublishedRetention time.Duration `envconfig:"PUBLISHED_RETENTION" default:"168h"`
 	CleanupInterval    time.Duration `envconfig:"CLEANUP_INTERVAL" default:"1h"`
+	CleanupMaxBatches  int           `envconfig:"CLEANUP_MAX_BATCHES" default:"100"`
 }
 
 func (c OutboxConfig) PublisherConfig() outbox.PublisherConfig {
@@ -47,6 +48,7 @@ func (c OutboxConfig) PublisherConfig() outbox.PublisherConfig {
 		PollInterval: c.PollInterval, BatchSize: c.BatchSize, LeaseDuration: c.LeaseDuration,
 		InitialRetryDelay: c.InitialRetryDelay, MaximumRetryDelay: c.MaximumRetryDelay,
 		PublishedRetention: c.PublishedRetention, CleanupInterval: c.CleanupInterval,
+		CleanupMaxBatches: c.CleanupMaxBatches,
 	}
 }
 
