@@ -342,26 +342,64 @@ func TestSchemaRequiredAndStrictValidation(t *testing.T) {
 	}
 }
 
-func TestSchemaValidatePartialAllowsOmittedRequiredValues(t *testing.T) {
+func TestSchemaValidatePartialDistinguishesOmittedAndEmptyRequiredValues(t *testing.T) {
 	required := true
 	schema, err := field.Compile([]field.Definition{
 		{Key: "catalog_id", Type: field.TypeString, Label: "Catalog", Required: &required},
 		{Key: "limit", Type: field.TypeInteger, Label: "Limit"},
+		{Key: "note", Type: field.TypeString, Label: "Note"},
 	}, standardResolver())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	partial, err := schema.ValidatePartial(map[string]any{"limit": json.Number("7")})
-	if err != nil || partial["limit"] != int64(7) {
-		t.Fatalf("partial values = %#v, %v", partial, err)
+	t.Run("omitted required", func(t *testing.T) {
+		partial, err := schema.ValidatePartial(map[string]any{"limit": json.Number("7")})
+		if err != nil || partial["limit"] != int64(7) {
+			t.Fatalf("partial values = %#v, %v", partial, err)
+		}
+	})
+
+	for name, value := range map[string]any{"empty": "", "nil": nil} {
+		t.Run(name+" required", func(t *testing.T) {
+			_, err := schema.ValidatePartial(map[string]any{"catalog_id": value})
+			assertValidationError(t, err, "catalog_id", "required")
+		})
 	}
+
+	t.Run("optional empty", func(t *testing.T) {
+		partial, err := schema.ValidatePartial(map[string]any{"note": ""})
+		if err != nil || len(partial) != 0 {
+			t.Fatalf("partial values = %#v, %v", partial, err)
+		}
+	})
+
+	t.Run("invalid supplied type", func(t *testing.T) {
+		_, err := schema.ValidatePartial(map[string]any{"limit": "invalid"})
+		assertValidationError(t, err, "limit", "type")
+	})
+
 	if _, err := schema.Validate(map[string]any{"limit": int64(7)}); err == nil {
 		t.Fatal("full validation accepted an omitted required value")
 	}
 	if _, err := schema.ValidatePartial(map[string]any{"unknown": true}); err == nil {
 		t.Fatal("partial validation accepted an unknown value")
 	}
+}
+
+func assertValidationError(t *testing.T, err error, key, rule string) {
+	t.Helper()
+
+	var validationErrors field.ValidationErrors
+	if !errors.As(err, &validationErrors) {
+		t.Fatalf("validation error = %T %v", err, err)
+	}
+	for _, item := range validationErrors {
+		if item.Key == key && item.Rule == rule {
+			return
+		}
+	}
+	t.Fatalf("missing error %s/%s in %#v", key, rule, validationErrors)
 }
 
 func TestSchemaPhonePatternAndStepMetadata(t *testing.T) {

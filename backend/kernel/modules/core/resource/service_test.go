@@ -180,7 +180,7 @@ func (genericPayloadType) Metadata() resourcetype.Metadata {
 }
 func (genericPayloadType) Normalize(payload resourcetype.Payload) (resourcetype.Payload, error) {
 	if payload.Template == nil || *payload.Template != "article" ||
-		payload.ContentType == nil || *payload.ContentType != "markdown" ||
+		payload.ContentType == nil ||
 		payload.Content != "generic body" ||
 		payload.TargetResourceID == nil || *payload.TargetResourceID <= 0 ||
 		payload.ExternalURL == nil || *payload.ExternalURL != "https://example.com/generic" ||
@@ -1061,7 +1061,7 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 }
 
 func TestServiceTransportsGenericRegisteredTypePayload(t *testing.T) {
-	service, _, _ := newTestService(t)
+	service, repository, _ := newTestService(t)
 	target, err := service.Create(context.Background(), security.System(), CreateInput{
 		SiteID: 1,
 		Title:  "Target",
@@ -1092,6 +1092,28 @@ func TestServiceTransportsGenericRegisteredTypePayload(t *testing.T) {
 		*created.ContentType != contentType || created.TargetResourceID == nil ||
 		*created.TargetResourceID != target.ID || created.TypeSettings["custom_option"] != "preserved" {
 		t.Fatalf("created generic resource = %#v", created)
+	}
+
+	persisted := len(repository.items)
+	unsupportedContentType := "xml"
+	_, err = service.Create(context.Background(), security.System(), CreateInput{
+		SiteID:           1,
+		Type:             "generic_payload",
+		Template:         &templateCode,
+		ContentType:      &unsupportedContentType,
+		Content:          "generic body",
+		TargetResourceID: &target.ID,
+		ExternalURL:      &externalURL,
+		Title:            "Unsupported content",
+		Slug:             "unsupported-content",
+		Fields:           map[string]any{"headline": "Generic headline"},
+		TypeSettings:     map[string]any{"custom_option": "preserved"},
+	})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "content_type") {
+		t.Fatalf("unsupported content type error = %v", err)
+	}
+	if len(repository.items) != persisted {
+		t.Fatalf("unsupported content type was persisted: %#v", repository.items)
 	}
 }
 

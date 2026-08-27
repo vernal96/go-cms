@@ -327,8 +327,20 @@ func (s *Schema) validate(
 		compiled := s.fields[definition.Key]
 		value, exists := values[definition.Key]
 
-		if !exists || inputEmpty(value) {
+		if !exists {
 			if requireAll && compiled.required {
+				validationErrors = append(
+					validationErrors,
+					ValidationError{
+						Key:  definition.Key,
+						Rule: "required",
+					},
+				)
+			}
+			continue
+		}
+		if inputEmpty(value) {
+			if compiled.required {
 				validationErrors = append(
 					validationErrors,
 					ValidationError{

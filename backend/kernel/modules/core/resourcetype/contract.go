@@ -16,6 +16,7 @@ type compiledType struct {
 	base           Type
 	metadata       Metadata
 	settingsSchema *field.Schema
+	contentTypes   map[string]struct{}
 }
 
 // Compile freezes ResourceType metadata and compiles its TypeSettings
@@ -55,11 +56,16 @@ func Compile(resourceType Type, resolver field.TypeResolver) (Type, error) {
 	if err != nil {
 		return nil, fmt.Errorf("settings defaults: %w", err)
 	}
+	contentTypes := make(map[string]struct{}, len(metadata.ContentTypes))
+	for _, option := range metadata.ContentTypes {
+		contentTypes[option.Code] = struct{}{}
+	}
 
 	return &compiledType{
 		base:           resourceType,
 		metadata:       metadata,
 		settingsSchema: settingsSchema,
+		contentTypes:   contentTypes,
 	}, nil
 }
 
@@ -82,12 +88,32 @@ func (t *compiledType) Normalize(payload Payload) (Payload, error) {
 		return Payload{}, fmt.Errorf("type settings: %w", err)
 	}
 	payload.TypeSettings = normalized
+	if err := t.validateContentType(payload.ContentType); err != nil {
+		return Payload{}, err
+	}
 
 	payload, err = t.base.Normalize(payload)
 	if err != nil {
 		return Payload{}, err
 	}
+	payload.TypeSettings, err = t.settingsSchema.Validate(payload.TypeSettings)
+	if err != nil {
+		return Payload{}, fmt.Errorf("type settings: %w", err)
+	}
+	if err := t.validateContentType(payload.ContentType); err != nil {
+		return Payload{}, err
+	}
 	return clonePayload(payload), nil
+}
+
+func (t *compiledType) validateContentType(contentType *string) error {
+	if !t.metadata.Capabilities.SupportsContent || contentType == nil || *contentType == "" {
+		return nil
+	}
+	if _, exists := t.contentTypes[*contentType]; !exists {
+		return fmt.Errorf("unsupported content_type %q", *contentType)
+	}
+	return nil
 }
 
 func CloneMetadata(source Metadata) Metadata {

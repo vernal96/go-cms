@@ -1219,6 +1219,7 @@ func TestProfileRuntimeRejectsInvalidResourceTypeRegistrations(
 	if err != nil {
 		t.Fatal(err)
 	}
+	required := true
 
 	testCases := []struct {
 		name     string
@@ -1272,6 +1273,20 @@ func TestProfileRuntimeRejectsInvalidResourceTypeRegistrations(
 					Label:            "Custom",
 					SettingsFields:   []field.Definition{{Key: "mode", Type: field.TypeString, Label: "Mode"}},
 					SettingsDefaults: map[string]any{"mode": int64(1)},
+				},
+			}},
+			contains: "settings defaults",
+		},
+		{
+			name: "explicit empty required settings default",
+			types: []resourcetype.Type{customResourceType{
+				code: "custom", pathMode: resourcetype.PathRoute,
+				metadata: &resourcetype.Metadata{
+					Label: "Custom",
+					SettingsFields: []field.Definition{{
+						Key: "catalog_id", Type: field.TypeString, Label: "Catalog", Required: &required,
+					}},
+					SettingsDefaults: map[string]any{"catalog_id": ""},
 				},
 			}},
 			contains: "settings defaults",
