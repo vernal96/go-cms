@@ -132,6 +132,27 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 	if err := repository.FinishAttempt(ctx, stored.ID, secondAttempt.AttemptNumber, mail.DeliveryResult{Driver: "smtp", ResponseCode: "250", RemoteMessageID: "provider-1"}, nil, true); err != nil {
 		t.Fatal(err)
 	}
+	otherMessage := message
+	otherMessage.SiteID, otherMessage.TemplateID = siteIDs[1], nil
+	otherMessage.RFCMessageID = fmt.Sprintf("<mail-other-%d@example.test>", suffix)
+	otherJob, err := job.NewScoped(mail.SendJobName, 1, fmt.Sprint(siteIDs[1]), struct {
+		MessageID mail.MessageID `json:"message_id"`
+	}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherBody, _ := json.Marshal(otherJob)
+	otherStored, err := repository.CreateMessageAndJob(ctx, otherMessage, eventbus.Message{Topic: job.Topic(mail.SendJobName), Key: []byte(otherJob.ID), Body: otherBody})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, otherAttempt, ok, err := repository.ClaimMessage(ctx, siteIDs[1], otherStored.ID, 5)
+	if err != nil || !ok {
+		t.Fatalf("other-site claim = %#v %t %v", otherAttempt, ok, err)
+	}
+	if err := repository.FinishAttempt(ctx, otherStored.ID, otherAttempt.AttemptNumber, mail.DeliveryResult{Driver: "smtp"}, nil, true); err != nil {
+		t.Fatal(err)
+	}
 	page, err := repository.ListMessages(ctx, siteIDs[0], mail.MessageQuery{PageQuery: mail.PageQuery{Page: 1, PerPage: 20}})
 	if err != nil || len(page.Items) != 1 || page.Items[0].AttemptCount != 2 || page.Items[0].LatestAttempt == nil || page.Items[0].LatestAttempt.Status != mail.AttemptAccepted {
 		t.Fatalf("message list = %#v, %v", page, err)
@@ -143,15 +164,18 @@ func TestPostgresMailCRUDOutboxAttemptsRetentionAndSiteIsolation(t *testing.T) {
 	if err != nil || detail.Message.TemplateID != nil || detail.Message.TemplateCode != "invoice" || len(detail.Attempts) != 2 {
 		t.Fatalf("historical snapshot = %#v, %v", detail, err)
 	}
-	if _, err := connector.Pool().Exec(ctx, `UPDATE mail.messages SET updated_at=clock_timestamp()-interval '48 hours' WHERE id=$1;`, stored.ID); err != nil {
+	if _, err := connector.Pool().Exec(ctx, `UPDATE mail.messages SET updated_at=clock_timestamp()-interval '48 hours' WHERE id=ANY($1::bigint[]);`, []int64{int64(stored.ID), int64(otherStored.ID)}); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := repository.Cleanup(ctx, 24*time.Hour, 100)
+	removed, err := repository.Cleanup(ctx, siteIDs[0], 24*time.Hour, 100)
 	if err != nil || removed != 1 {
 		t.Fatalf("cleanup removed = %d, %v", removed, err)
 	}
 	if _, err := repository.MessageDetail(ctx, siteIDs[0], stored.ID); !errors.Is(err, mail.ErrNotFound) {
 		t.Fatalf("message after retention = %v", err)
+	}
+	if _, err := repository.MessageDetail(ctx, siteIDs[1], otherStored.ID); err != nil {
+		t.Fatalf("other site's terminal message was removed: %v", err)
 	}
 }
 

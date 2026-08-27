@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/stub"
 	"github.com/vernal96/go-cms/kernel"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
+	"github.com/vernal96/go-cms/kernel/background"
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/console"
 	"github.com/vernal96/go-cms/kernel/eventbus"
@@ -1143,6 +1145,29 @@ type featureRuntime struct{}
 
 func (featureRuntime) ModuleCode() kernel.ModuleCode { return featureModuleCode }
 
+type backgroundLifecycleModule struct{ events chan string }
+type backgroundLifecycleRuntime struct {
+	scope      string
+	generation string
+	events     chan string
+}
+
+func (backgroundLifecycleModule) Code() kernel.ModuleCode { return "background_lifecycle" }
+func (m backgroundLifecycleModule) Build(_ context.Context, ctx kernel.ModuleContext) (kernel.ModuleRuntime, error) {
+	return backgroundLifecycleRuntime{
+		scope: ctx.Scope().SiteID(), generation: fmt.Sprint(ctx.Scope().Settings()["generation"]), events: m.events,
+	}, nil
+}
+func (backgroundLifecycleRuntime) ModuleCode() kernel.ModuleCode { return "background_lifecycle" }
+func (r backgroundLifecycleRuntime) BackgroundTasks() []background.Task {
+	return []background.Task{{Name: "shared_task", Run: func(ctx context.Context) error {
+		r.events <- r.scope + ":" + r.generation + ":start"
+		<-ctx.Done()
+		r.events <- r.scope + ":" + r.generation + ":stop"
+		return nil
+	}}}
+}
+
 type testCommand struct{ name string }
 
 func (c testCommand) Name() string      { return c.name }
@@ -2081,6 +2106,68 @@ func TestAppNewBootConsoleAndRuntimeLifecycle(t *testing.T) {
 			mainConnector.closes.Load(),
 			logsConnector.closes.Load(),
 		)
+	}
+}
+
+func TestAppRunsBackgroundTasksPerSiteAndReplacesStaleRuntimeTasks(t *testing.T) {
+	ctx := context.Background()
+	events := make(chan string, 32)
+	repository := &fakeSiteRepository{sites: []site.Site{
+		{ID: 1, ProfileCode: "dev", Domain: "one.example.com", Locale: "en-US", Settings: map[string]any{"generation": "a1"}},
+		{ID: 2, ProfileCode: "dev", Domain: "two.example.com", Locale: "en-US", Settings: map[string]any{"generation": "b1"}},
+	}}
+	application, err := appkernel.New(ctx, appkernel.Definition{
+		Logger: fakeLoggerFactory{}, PasswordHasher: argon2id.Factory{}, SiteAccessPolicy: admin.AllowAllSitesPolicy{}, EventBus: fakeEventBusFactory{},
+		MainDatabase: appkernel.DatabaseDefinition{Connector: &fakeConnectorFactory{connector: newFakeConnector("main")}, Adapters: []kernel.ModuleDatabaseFactory{&fakeDatabaseFactory{
+			code: core.ModuleCode, database: &fakeCoreDatabase{repository: repository},
+		}}},
+		Profiles: []kernel.Profile{{Code: "dev", Params: []field.Definition{{Key: "generation", Type: field.TypeString, Label: "Generation"}}, Modules: []kernel.ProfileModule{{Module: core.Module{}}, {Module: admin.Module{}}, {Module: backgroundLifecycleModule{events: events}}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = application.Close() }()
+	if err := application.Boot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitBackgroundEvents(t, events, "1:a1:start", "2:b1:start")
+
+	if _, err := application.Sites().Update(ctx, security.System(), site.UpdateInput{
+		ID: 1, ProfileCode: "dev", Domain: "one.example.com", Locale: "en-US", Settings: map[string]any{"generation": "a2"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitBackgroundEvents(t, events, "1:a1:stop", "1:a2:start")
+	select {
+	case event := <-events:
+		t.Fatalf("unrelated site task was restarted: %s", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := application.Sites().Delete(ctx, security.System(), 2); err != nil {
+		t.Fatal(err)
+	}
+	waitBackgroundEvents(t, events, "2:b1:stop")
+}
+
+func waitBackgroundEvents(t *testing.T, events <-chan string, expected ...string) {
+	t.Helper()
+	remaining := make(map[string]struct{}, len(expected))
+	for _, event := range expected {
+		remaining[event] = struct{}{}
+	}
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for len(remaining) > 0 {
+		select {
+		case event := <-events:
+			if _, exists := remaining[event]; !exists {
+				t.Fatalf("unexpected background event %q; waiting for %#v", event, remaining)
+			}
+			delete(remaining, event)
+		case <-deadline.C:
+			t.Fatalf("timed out waiting for background events %#v", remaining)
+		}
 	}
 }
 

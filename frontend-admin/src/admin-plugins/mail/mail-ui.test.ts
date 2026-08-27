@@ -11,6 +11,7 @@ import MailMessageDetailView from './MailMessageDetailView.vue'
 import MailSendView from './MailSendView.vue'
 import MailTemplateFormView from './MailTemplateFormView.vue'
 import MailVariablesEditor from './MailVariablesEditor.vue'
+import { setMailTemplateEnabled } from './api'
 
 const permissions = new Set([
   'mail.template.read', 'mail.template.create', 'mail.template.update', 'mail.template.delete',
@@ -57,7 +58,7 @@ describe('Mail admin UI', () => {
     vi.stubGlobal('fetch', vi.fn(async () => response({ items: [
       { variable: 'site.id', label: 'ID сайта', type: 'int', source: 'site' },
       { variable: 'site.field.contract', label: 'Договор', type: 'file', source: 'site' },
-    ] })))
+    ], upload_storage: 'private', upload_path: 'mail/uploads' })))
     const instanceRouter = router()
     await instanceRouter.push({ name: 'mail.templates.create' })
     await instanceRouter.isReady()
@@ -67,6 +68,7 @@ describe('Mail admin UI', () => {
     })
     await flushPromises()
     expect(wrapper.findComponent({ name: 'RichTextEditor' }).exists()).toBe(false)
+    expect(wrapper.findComponent(MailAttachmentsEditor).props()).toEqual(expect.objectContaining({ uploadStorage: 'private', uploadPath: 'mail/uploads' }))
     const contentType = wrapper.findAllComponents({ name: 'ElSelect' }).at(-1)
     contentType?.vm.$emit('update:modelValue', 'html')
     await wrapper.vm.$nextTick()
@@ -77,6 +79,18 @@ describe('Mail admin UI', () => {
     expect(variables.emitted('update:modelValue')?.[0]?.[0]).toEqual([
       expect.objectContaining({ type: 'string', required: false }),
     ])
+  })
+
+  it('uses the semantic enable endpoint', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/templates/3/enabled')) return response({ id: 3, enabled: false, updated_at: '2026-01-02T00:00:00Z' })
+      throw new Error(`unexpected request ${url} ${init?.method ?? 'GET'}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(setMailTemplateEnabled('token', 5, 3, false)).resolves.toEqual({ id: 3, enabled: false, updated_at: '2026-01-02T00:00:00Z' })
+    const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/templates/3/enabled'))
+    expect(call?.[1]).toEqual(expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ enabled: false }) }))
   })
 
   it('renders an access-denied route instead of an unauthorized template form', async () => {

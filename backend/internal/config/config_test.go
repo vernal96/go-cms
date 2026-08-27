@@ -53,6 +53,8 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	t.Setenv("OUTBOX_CLEANUP_MAX_BATCHES", "40")
 	t.Setenv("MAIL_TRANSPORT_DEFAULT_DRIVER", "null")
 	t.Setenv("MAIL_HISTORY_RETENTION", "240h")
+	t.Setenv("MAIL_UPLOAD_STORAGE", "private-mail")
+	t.Setenv("MAIL_UPLOAD_PATH", "mail/uploads")
 
 	config, err := configloader.Load[projectconfig.Config]("")
 	if err != nil {
@@ -92,7 +94,7 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		config.Outbox.CleanupMaxBatches != 40 {
 		t.Fatalf("outbox configuration = %#v", config.Outbox)
 	}
-	if config.Mail.DefaultDriver != "null" || config.Mail.HistoryRetention != 240*time.Hour {
+	if config.Mail.DefaultDriver != "null" || config.Mail.HistoryRetention != 240*time.Hour || config.Mail.UploadStorage != "private-mail" || config.Mail.UploadPath != "mail/uploads" {
 		t.Fatalf("mail configuration = %#v", config.Mail)
 	}
 

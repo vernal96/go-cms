@@ -23,6 +23,7 @@ type filesHTTP struct {
 func registerFileRoutes(router chi.Router, handler *filesHTTP) {
 	router.Get("/files/disks", handler.filesystemDisks)
 	router.Get("/files/items", handler.filesystemItems)
+	router.Get("/files/folders/resolve", handler.resolveFilesystemFolder)
 	router.Post("/files/folders", handler.createFilesystemFolder)
 	router.Patch("/files/folders/{folderID}", handler.renameFilesystemFolder)
 	router.Post("/files/uploads", handler.uploadFilesystemFile)
@@ -32,6 +33,17 @@ func registerFileRoutes(router chi.Router, handler *filesHTTP) {
 	router.Get("/files/{fileID}/download", handler.downloadFilesystemFile)
 	router.Post("/files/move", handler.moveFilesystemItems)
 	router.Post("/files/delete", handler.deleteFilesystemItems)
+}
+
+func (h *filesHTTP) resolveFilesystemFolder(response http.ResponseWriter, request *http.Request) {
+	storage := filesystem.Code(request.URL.Query().Get("disk"))
+	folderPath := request.URL.Query().Get("path")
+	if storage == "" || folderPath == "" {
+		writeBadRequest(response, "disk and path are required")
+		return
+	}
+	result, err := h.files.ResolveFilesystemFolder(request.Context(), actor(request), storage, folderPath)
+	writeResult(response, http.StatusOK, result, err)
 }
 
 func (h *filesHTTP) filesystemDisks(response http.ResponseWriter, request *http.Request) {

@@ -74,6 +74,13 @@ export function deleteMailTemplate(
   return adminRequestVoid(`${root(siteID)}/templates/${templateID}`, accessToken, { method: 'DELETE' })
 }
 
+export function setMailTemplateEnabled(accessToken: string, siteID: number, templateID: number, enabled: boolean): Promise<Pick<MailTemplate, 'id' | 'enabled' | 'updated_at'>> {
+  return adminRequest(`${root(siteID)}/templates/${templateID}/enabled`, accessToken, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  })
+}
+
 export function previewMail(
   accessToken: string,
   siteID: number,

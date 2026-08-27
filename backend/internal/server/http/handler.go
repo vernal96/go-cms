@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -34,13 +35,15 @@ type Handler struct {
 }
 
 type siteHandlerSnapshot struct {
-	byDomain  map[string]compiledSiteRuntime
-	byRuntime map[*site.Runtime]http.Handler
+	byDomain       map[string]compiledSiteRuntime
+	byRuntime      map[*site.Runtime]compiledSiteRuntime
+	managementPath map[string]struct{}
 }
 
 type compiledSiteRuntime struct {
-	runtime *site.Runtime
-	handler http.Handler
+	runtime    *site.Runtime
+	handler    http.Handler
+	management map[string]http.Handler
 }
 
 type Option func(*handlerOptions) error
@@ -114,8 +117,9 @@ func NewHandler(
 
 	handler := &Handler{app: application}
 	handler.siteHandlers.Store(&siteHandlerSnapshot{
-		byDomain:  make(map[string]compiledSiteRuntime),
-		byRuntime: make(map[*site.Runtime]http.Handler),
+		byDomain:       make(map[string]compiledSiteRuntime),
+		byRuntime:      make(map[*site.Runtime]compiledSiteRuntime),
+		managementPath: make(map[string]struct{}),
 	})
 	if application.Sites() == nil {
 		return nil, errors.New("site runtime catalog is unavailable; app must be booted")
@@ -143,7 +147,7 @@ func NewHandler(
 	if err != nil {
 		return nil, err
 	}
-	cmsHandler, err := newCMSHandler(application)
+	cmsHandler, err := newCMSHandler(application, handler)
 	if err != nil {
 		return nil, err
 	}
@@ -180,32 +184,40 @@ func (h *Handler) prepareRuntimes(
 		)
 	}
 	nextHandlers := make(
-		map[*site.Runtime]http.Handler,
+		map[*site.Runtime]compiledSiteRuntime,
 		len(plan.Next()),
 	)
 	nextDomains := make(
 		map[string]compiledSiteRuntime,
 		len(plan.Next()),
 	)
+	nextManagementPaths := make(map[string]struct{})
 	for _, runtime := range plan.Next() {
 		compiled, exists := current.byRuntime[runtime]
 		if !exists {
-			var err error
-			compiled, err = CompileSite(ctx, runtime)
+			publicHandler, err := CompileSite(ctx, runtime)
 			if err != nil {
 				return site.RuntimePreparation{}, err
+			}
+			management, err := compileSiteManagement(runtime)
+			if err != nil {
+				return site.RuntimePreparation{}, err
+			}
+			compiled = compiledSiteRuntime{
+				runtime: runtime, handler: publicHandler, management: management,
 			}
 		}
 		nextHandlers[runtime] = compiled
 		item := runtime.Site()
-		nextDomains[item.Domain] = compiledSiteRuntime{
-			runtime: runtime,
-			handler: compiled,
+		nextDomains[item.Domain] = compiled
+		for path := range compiled.management {
+			nextManagementPaths[path] = struct{}{}
 		}
 	}
 	next := &siteHandlerSnapshot{
-		byDomain:  nextDomains,
-		byRuntime: nextHandlers,
+		byDomain:       nextDomains,
+		byRuntime:      nextHandlers,
+		managementPath: nextManagementPaths,
 	}
 	return site.RuntimePreparation{
 		Publish: func() { h.siteHandlers.Store(next) },
@@ -229,7 +241,7 @@ func newAdminHandler(
 	return adminRuntime.AdminHandler(management)
 }
 
-func newCMSHandler(application *app.App) (http.Handler, error) {
+func newCMSHandler(application *app.App, handler *Handler) (http.Handler, error) {
 	sites, resources, files, err := application.CMSManagement()
 	if err != nil {
 		return nil, err
@@ -244,38 +256,18 @@ func newCMSHandler(application *app.App) (http.Handler, error) {
 		return nil, err
 	}
 	router := chi.NewRouter()
-	optional := &siteManagementHTTP{app: application}
-	router.Handle("/sites/{siteID}/{feature}", optional)
-	router.Handle("/sites/{siteID}/{feature}/*", optional)
+	optional := &siteManagementHTTP{app: application, snapshots: &handler.siteHandlers}
+	router.Use(optional.middleware)
 	router.Mount("/", coreHandler)
 	return router, nil
 }
 
-type siteManagementHTTP struct{ app *app.App }
-
-func (h *siteManagementHTTP) ServeHTTP(response http.ResponseWriter, request *http.Request) {
-	actor, exists := httptransport.ActorFromContext(request.Context())
-	if !exists || !actor.IsUser() {
-		httptransport.WriteJSONError(response, http.StatusUnauthorized, "unauthenticated", "authentication required")
-		return
+func compileSiteManagement(runtime *site.Runtime) (map[string]http.Handler, error) {
+	reserved := make(map[string]struct{})
+	for _, path := range coremanagement.SiteManagementRoutePrefixes() {
+		reserved[path] = struct{}{}
 	}
-	siteIDValue, err := strconv.ParseInt(chi.URLParam(request, "siteID"), 10, 64)
-	if err != nil || siteIDValue <= 0 {
-		http.NotFound(response, request)
-		return
-	}
-	action := group.SiteAccessEdit
-	if request.Method == http.MethodGet || request.Method == http.MethodHead {
-		action = group.SiteAccessView
-	}
-	runtime, err := h.app.ManagementSiteRuntime(request.Context(), actor, site.ID(siteIDValue), action)
-	if err != nil {
-		writeSiteManagementError(response, err)
-		return
-	}
-	feature := chi.URLParam(request, "feature")
-	seen := make(map[string]struct{})
-	var handler http.Handler
+	result := make(map[string]http.Handler)
 	for _, moduleRuntime := range runtime.Profile().Modules() {
 		provider, ok := moduleRuntime.(httptransport.SiteManagementProvider)
 		if !ok {
@@ -283,27 +275,92 @@ func (h *siteManagementHTTP) ServeHTTP(response http.ResponseWriter, request *ht
 		}
 		contribution := provider.SiteManagementHTTP()
 		if err := contribution.Validate(); err != nil {
-			httptransport.WriteJSONError(response, http.StatusInternalServerError, "internal_error", "site management contribution is invalid")
-			return
+			return nil, fmt.Errorf("site management contribution: %w", err)
 		}
-		if _, duplicate := seen[contribution.Path]; duplicate {
-			httptransport.WriteJSONError(response, http.StatusInternalServerError, "internal_error", "site management contribution is duplicated")
-			return
+		if _, collision := reserved[contribution.Path]; collision {
+			return nil, fmt.Errorf("site management contribution path %q is owned by Core", contribution.Path)
 		}
-		seen[contribution.Path] = struct{}{}
-		if contribution.Path != feature {
-			continue
+		if _, duplicate := result[contribution.Path]; duplicate {
+			return nil, fmt.Errorf("site management contribution path %q is duplicated", contribution.Path)
 		}
-		handler = contribution.Handler
+		result[contribution.Path] = contribution.Handler
 	}
-	if handler != nil {
+	return result, nil
+}
+
+type siteManagementHTTP struct {
+	app       *app.App
+	snapshots *atomic.Pointer[siteHandlerSnapshot]
+}
+
+func (h *siteManagementHTTP) middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		siteIDValue, feature, remainder, ok := siteManagementPath(request.URL.Path)
+		if !ok {
+			next.ServeHTTP(response, request)
+			return
+		}
+		snapshot := h.snapshots.Load()
+		if snapshot == nil {
+			httptransport.WriteJSONError(response, http.StatusServiceUnavailable, "unavailable", "site management runtime is unavailable")
+			return
+		}
+		if _, optional := snapshot.managementPath[feature]; !optional {
+			next.ServeHTTP(response, request)
+			return
+		}
+		h.serve(response, request, next, snapshot, siteIDValue, feature, remainder)
+	})
+}
+
+func siteManagementPath(path string) (site.ID, string, string, bool) {
+	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	offset := 0
+	if len(segments) > 0 && segments[0] == "api" {
+		offset = 1
+	}
+	if len(segments) < offset+3 || segments[offset] != "sites" || segments[offset+2] == "" {
+		return 0, "", "", false
+	}
+	value, err := strconv.ParseInt(segments[offset+1], 10, 64)
+	if err != nil || value <= 0 {
+		return 0, "", "", false
+	}
+	remainder := "/"
+	if len(segments) > offset+3 {
+		remainder += strings.Join(segments[offset+3:], "/")
+	}
+	return site.ID(value), segments[offset+2], remainder, true
+}
+
+func (h *siteManagementHTTP) serve(response http.ResponseWriter, request *http.Request, next http.Handler, snapshot *siteHandlerSnapshot, siteID site.ID, feature string, remainder string) {
+	actor, exists := httptransport.ActorFromContext(request.Context())
+	if !exists || !actor.IsUser() {
+		httptransport.WriteJSONError(response, http.StatusUnauthorized, "unauthenticated", "authentication required")
+		return
+	}
+	action := group.SiteAccessEdit
+	if request.Method == http.MethodGet || request.Method == http.MethodHead {
+		action = group.SiteAccessView
+	}
+	runtime, err := h.app.ManagementSiteRuntime(request.Context(), actor, siteID, action)
+	if err != nil {
+		writeSiteManagementError(response, err)
+		return
+	}
+	compiled, current := snapshot.byRuntime[runtime]
+	if !current {
+		httptransport.WriteJSONError(response, http.StatusServiceUnavailable, "unavailable", "site management runtime is changing")
+		return
+	}
+	if handler := compiled.management[feature]; handler != nil {
 		next := request.Clone(request.Context())
-		remainder := strings.TrimPrefix(chi.URLParam(request, "*"), "/")
-		next.URL.Path = "/" + remainder
+		next.URL.Path = remainder
+		next.URL.RawPath = ""
 		handler.ServeHTTP(response, next)
 		return
 	}
-	http.NotFound(response, request)
+	next.ServeHTTP(response, request)
 }
 
 func writeSiteManagementError(response http.ResponseWriter, err error) {

@@ -7,10 +7,8 @@ import (
 	"log/slog"
 	"slices"
 	"sort"
-	"time"
 
 	"github.com/vernal96/go-cms/kernel"
-	"github.com/vernal96/go-cms/kernel/background"
 	"github.com/vernal96/go-cms/kernel/job"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
@@ -226,10 +224,6 @@ func (a *App) boot(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	backgroundTasks, err := backgroundTasksFromProfiles(a.definition.Profiles, catalog)
-	if err != nil {
-		return err
-	}
 	var publisher *outbox.Publisher
 	if len(a.outboxSources) > 0 {
 		publisher, err = outbox.NewPublisher(a.eventBus, a.outboxSources, a.logger, a.definition.OutboxPublisher)
@@ -237,11 +231,18 @@ func (a *App) boot(ctx context.Context) error {
 			return err
 		}
 	}
-	var workerContext context.Context
-	if len(a.outboxSources) > 0 || jobRunner != nil || len(backgroundTasks) > 0 {
-		var cancel context.CancelFunc
-		workerContext, cancel = context.WithCancel(context.Background())
-		a.workerCancel = cancel
+	workerContext, cancelWorkers := context.WithCancel(context.Background())
+	a.workerCancel = cancelWorkers
+	backgroundTasks := newRuntimeBackgroundTasks(workerContext, a.logger)
+	a.workers.Add(1)
+	go func() {
+		defer a.workers.Done()
+		backgroundTasks.run()
+	}()
+	if err := catalog.AddRuntimePreparer(ctx, backgroundTasks.prepare); err != nil {
+		cancelWorkers()
+		a.workers.Wait()
+		return fmt.Errorf("prepare runtime background tasks: %w", err)
 	}
 	if len(a.outboxSources) > 0 {
 		a.outboxPublisher = publisher
@@ -262,80 +263,8 @@ func (a *App) boot(ctx context.Context) error {
 			}
 		}()
 	}
-	for _, task := range backgroundTasks {
-		task := task
-		a.workers.Add(1)
-		go func() {
-			defer a.workers.Done()
-			for workerContext.Err() == nil {
-				err := task.Run(workerContext)
-				if workerContext.Err() != nil {
-					return
-				}
-				if err != nil && a.logger != nil {
-					a.logger.Error("background task exited", slog.String("event", "background.task.failed"), slog.String("task", task.Name), slog.Any("error", err))
-				}
-				timer := time.NewTimer(5 * time.Second)
-				select {
-				case <-workerContext.Done():
-					timer.Stop()
-					return
-				case <-timer.C:
-				}
-			}
-		}()
-	}
 	a.booted.Store(true)
 	return nil
-}
-
-func backgroundTasksFromProfiles(profiles []kernel.Profile, catalog *site.Catalog) ([]background.Task, error) {
-	names, err := declaredNames(profiles, func(module kernel.Module) ([]string, bool) {
-		provider, ok := module.(background.NamesProvider)
-		if !ok {
-			return nil, false
-		}
-		return provider.BackgroundTaskNames(), true
-	})
-	if err != nil {
-		return nil, fmt.Errorf("collect background task declarations: %w", err)
-	}
-	result := make([]background.Task, len(names))
-	for index, name := range names {
-		name := name
-		result[index] = background.Task{Name: name, Run: func(ctx context.Context) error {
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
-			for {
-				if task, exists := runtimeBackgroundTask(catalog, name); exists {
-					return task.Run(ctx)
-				}
-				select {
-				case <-ctx.Done():
-					return nil
-				case <-ticker.C:
-				}
-			}
-		}}
-	}
-	return result, nil
-}
-
-func runtimeBackgroundTask(catalog *site.Catalog, name string) (background.Task, bool) {
-	for _, runtime := range catalog.Runtimes() {
-		for _, moduleRuntime := range runtime.Profile().Modules() {
-			provider, ok := moduleRuntime.(background.Provider)
-			if !ok {
-				continue
-			}
-			for _, task := range provider.BackgroundTasks() {
-				if task.Name == name && task.Run != nil {
-					return task, true
-				}
-			}
-		}
-	}
-	return background.Task{}, false
 }
 
 func jobRunnerFromProfiles(profiles []kernel.Profile, catalog *site.Catalog) (*job.Runner, error) {

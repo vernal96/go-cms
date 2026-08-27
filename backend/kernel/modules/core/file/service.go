@@ -147,6 +147,44 @@ func (s *service) Browse(
 	}, nil
 }
 
+func (s *service) ResolveFolder(ctx context.Context, actor security.Actor, storage filesystem.Code, folderPath string) (Folder, error) {
+	if err := validateContext(ctx, "resolve file folder path"); err != nil {
+		return Folder{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, readPermission); err != nil {
+		return Folder{}, err
+	}
+	if _, err := s.disk(storage); err != nil {
+		return Folder{}, err
+	}
+	normalized := strings.Trim(strings.TrimSpace(folderPath), "/")
+	if normalized == "" || path.IsAbs(normalized) || path.Clean(normalized) != normalized || normalized == ".." || strings.HasPrefix(normalized, "../") || strings.Contains(normalized, "\\") {
+		return Folder{}, errors.New("file folder path is invalid")
+	}
+	var parentID *FolderID
+	var current Folder
+	for _, name := range strings.Split(normalized, "/") {
+		folders, err := s.repository.ListFolders(ctx, storage, parentID)
+		if err != nil {
+			return Folder{}, fmt.Errorf("list file folders while resolving path: %w", err)
+		}
+		found := false
+		for _, folder := range folders {
+			if folder.Name == name {
+				current = folder
+				value := folder.ID
+				parentID = &value
+				found = true
+				break
+			}
+		}
+		if !found {
+			return Folder{}, ErrNotFound
+		}
+	}
+	return CloneFolder(current), nil
+}
+
 func (s *service) CreateFolder(
 	ctx context.Context,
 	actor security.Actor,

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vernal96/go-cms/kernel/eventbus"
+	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/job"
 	"github.com/vernal96/go-cms/kernel/messageid"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
@@ -46,7 +47,18 @@ type Service struct {
 	limits           Limits
 	defaultTransport TransportAlias
 	messageIDDomain  string
+	uploadStorage    filesystem.Code
+	uploadPath       string
 	logger           *slog.Logger
+}
+
+type EditorConfig struct {
+	UploadStorage filesystem.Code
+	UploadPath    string
+}
+
+func (s *Service) EditorConfig() EditorConfig {
+	return EditorConfig{UploadStorage: s.uploadStorage, UploadPath: s.uploadPath}
 }
 
 func NewService(siteID site.ID, repository Repository, renderer *Renderer, authorizer security.Authorizer, users interface {
@@ -156,6 +168,16 @@ func (s *Service) DeleteTemplate(ctx context.Context, actor security.Actor, id T
 		return err
 	}
 	return s.repository.DeleteTemplate(ctx, s.siteID, id)
+}
+
+func (s *Service) SetTemplateEnabled(ctx context.Context, actor security.Actor, id TemplateID, enabled bool) (Template, error) {
+	if err := s.authorizer.Check(ctx, actor, TemplateUpdatePermission); err != nil {
+		return Template{}, err
+	}
+	if id <= 0 {
+		return Template{}, fmt.Errorf("%w: template ID is invalid", ErrInvalid)
+	}
+	return s.repository.SetTemplateEnabled(ctx, s.siteID, id, enabled, actor.AuditUserID())
 }
 
 func (s *Service) Preview(ctx context.Context, actor security.Actor, templateID TemplateID, values map[string]any) (RenderedMessage, error) {

@@ -316,6 +316,62 @@ func (c *Connector) WalkPrefix(
 	return nil
 }
 
+var errPrefixPageFull = errors.New("localstorage prefix page is full")
+
+func (c *Connector) ListPrefix(ctx context.Context, prefix string, cursor string, limit int) (filesystem.PrefixPage, error) {
+	if ctx == nil {
+		return filesystem.PrefixPage{}, errors.New("localstorage list-prefix context is nil")
+	}
+	if limit < 1 {
+		return filesystem.PrefixPage{}, errors.New("localstorage list-prefix limit is invalid")
+	}
+	normalizedPrefix := strings.Trim(prefix, "/")
+	if cursor != "" && cursor != normalizedPrefix && !strings.HasPrefix(cursor, normalizedPrefix+"/") {
+		return filesystem.PrefixPage{}, errors.New("localstorage list-prefix cursor is outside prefix")
+	}
+	root, err := c.resolve(normalizedPrefix)
+	if err != nil {
+		return filesystem.PrefixPage{}, err
+	}
+	keys := make([]string, 0, limit+1)
+	err = filepath.WalkDir(root, func(pathValue string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if errors.Is(walkErr, os.ErrNotExist) {
+				return nil
+			}
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(c.root, pathValue)
+		if err != nil {
+			return err
+		}
+		key := filepath.ToSlash(relative)
+		if key <= cursor {
+			return nil
+		}
+		keys = append(keys, key)
+		if len(keys) > limit {
+			return errPrefixPageFull
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errPrefixPageFull) && !errors.Is(err, os.ErrNotExist) {
+		return filesystem.PrefixPage{}, fmt.Errorf("list localstorage prefix: %w", err)
+	}
+	page := filesystem.PrefixPage{Keys: keys}
+	if len(keys) > limit {
+		page.Keys = keys[:limit]
+		page.NextCursor = page.Keys[len(page.Keys)-1]
+	}
+	return page, nil
+}
+
 func (c *Connector) URL(
 	_ context.Context,
 	reference filesystem.Reference,

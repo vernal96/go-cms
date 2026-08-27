@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/adminui"
 	"github.com/vernal96/go-cms/kernel/background"
+	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/job"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
@@ -36,6 +39,8 @@ type Config struct {
 	MaxRecipients        int
 	MaxMessageSize       int64
 	MaxAttachmentSize    int64
+	UploadStorage        filesystem.Code
+	UploadPath           string
 	SpoolEnabled         bool
 	SpoolTTL             time.Duration
 	SpoolCleanupInterval time.Duration
@@ -73,10 +78,6 @@ func (Module) Registry() kernel.ModuleRegistry {
 
 func (Module) JobNames() []string { return []string{SendJobName} }
 
-func (Module) BackgroundTaskNames() []string {
-	return []string{"mail.history_retention", "mail.spool_cleanup"}
-}
-
 func (Module) Build(_ context.Context, ctx kernel.ModuleContext) (kernel.ModuleRuntime, error) {
 	database, err := kernel.ModuleDatabaseFrom[Database](ctx, "", ModuleCode)
 	if err != nil {
@@ -104,20 +105,20 @@ func (Module) Build(_ context.Context, ctx kernel.ModuleContext) (kernel.ModuleR
 	if _, exists := transports.Transport(config.DefaultTransport); !exists {
 		return nil, fmt.Errorf("default mail transport %q is unavailable", config.DefaultTransport)
 	}
+	siteIDValue, err := strconv.ParseInt(ctx.Scope().SiteID(), 10, 64)
+	if err != nil || siteIDValue <= 0 {
+		return nil, errors.New("mail runtime site scope is invalid")
+	}
 	var spool *AttachmentSpool
 	if config.SpoolEnabled {
 		disk, exists := ctx.Filesystems().Disk(SpoolFilesystemAlias)
 		if !exists {
 			return nil, errors.New("mail spool filesystem binding is unavailable")
 		}
-		spool, err = NewAttachmentSpool(disk)
+		spool, err = NewAttachmentSpool(site.ID(siteIDValue), disk)
 		if err != nil {
 			return nil, err
 		}
-	}
-	siteIDValue, err := strconv.ParseInt(ctx.Scope().SiteID(), 10, 64)
-	if err != nil || siteIDValue <= 0 {
-		return nil, errors.New("mail runtime site scope is invalid")
 	}
 	scope := ctx.Scope()
 	renderer, err := NewRenderer(ctx.Registry(), coreRuntime.Files(), site.Site{
@@ -135,6 +136,8 @@ func (Module) Build(_ context.Context, ctx kernel.ModuleContext) (kernel.ModuleR
 		return nil, err
 	}
 	service.logger = ctx.Logger()
+	service.uploadStorage = config.UploadStorage
+	service.uploadPath = config.UploadPath
 	worker, err := NewWorker(site.ID(siteIDValue), database.Mail(), coreRuntime.Files(), spool, transports, config.SendMaxAttempts, ctx.Logger())
 	if err != nil {
 		return nil, err
@@ -184,7 +187,9 @@ func (r *Runtime) BackgroundTasks() []background.Task {
 
 func (r *Runtime) runSpoolCleanup(ctx context.Context) error {
 	cleanup := func() error {
-		_, err := r.spool.Cleanup(ctx, time.Now().UTC().Add(-r.spoolTTL), r.spoolCleanupBatch, r.service.repository.ActiveSpoolKeys)
+		_, err := r.spool.Cleanup(ctx, time.Now().UTC().Add(-r.spoolTTL), r.spoolCleanupBatch, func(ctx context.Context, keys []string) (map[string]struct{}, error) {
+			return r.service.repository.ActiveSpoolKeys(ctx, r.service.siteID, keys)
+		})
 		if err != nil && r.logger != nil {
 			r.logger.ErrorContext(ctx, "mail spool cleanup failed", slog.String("event", "mail.spool.cleanup.failed"), slog.Any("error", err))
 		}
@@ -209,7 +214,7 @@ func (r *Runtime) runSpoolCleanup(ctx context.Context) error {
 
 func (r *Runtime) runRetention(ctx context.Context) error {
 	cleanup := func() error {
-		_, err := r.service.repository.Cleanup(ctx, r.retention, r.cleanupBatchSize)
+		_, err := r.service.repository.Cleanup(ctx, r.service.siteID, r.retention, r.cleanupBatchSize)
 		return err
 	}
 	if err := cleanup(); err != nil && ctx.Err() == nil {
@@ -259,6 +264,16 @@ func normalizeConfig(config Config) (Config, error) {
 	if config.MaxRecipients < 1 || config.MaxMessageSize < 1 || config.MaxAttachmentSize < 1 {
 		return Config{}, errors.New("mail delivery limits are invalid")
 	}
+	if strings.TrimSpace(string(config.UploadStorage)) == "" {
+		config.UploadStorage = "private"
+	}
+	config.UploadPath = strings.Trim(strings.TrimSpace(config.UploadPath), "/")
+	if config.UploadPath == "" {
+		config.UploadPath = "mail"
+	}
+	if path.IsAbs(config.UploadPath) || path.Clean(config.UploadPath) != config.UploadPath || config.UploadPath == ".." || strings.HasPrefix(config.UploadPath, "../") || strings.Contains(config.UploadPath, "\\") {
+		return Config{}, errors.New("mail upload path is invalid")
+	}
 	if config.SpoolEnabled {
 		if config.SpoolTTL < time.Minute || config.SpoolCleanupInterval < time.Second || config.SpoolCleanupBatch < 1 {
 			return Config{}, errors.New("mail spool configuration is invalid")
@@ -272,7 +287,6 @@ var _ kernel.DependencyProvider = Module{}
 var _ kernel.ModuleDescriptorProvider = Module{}
 var _ kernel.RegistryProvider = Module{}
 var _ job.NamesProvider = Module{}
-var _ background.NamesProvider = Module{}
 var _ kernel.ModuleRuntime = (*Runtime)(nil)
 var _ job.Provider = (*Runtime)(nil)
 var _ background.Provider = (*Runtime)(nil)

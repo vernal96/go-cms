@@ -23,6 +23,8 @@ const saving = ref(false)
 const error = ref<string | null>(null)
 const replyToEnabled = ref(false)
 const siteVariables = ref<MailSiteVariable[]>([])
+const uploadStorage = ref('')
+const uploadPath = ref('')
 const selectedPlaceholder = ref('')
 const form = reactive<MailTemplatePayload>(emptyTemplate())
 const templateID = computed(() => Number(route.params.templateId ?? 0))
@@ -64,7 +66,10 @@ async function load(): Promise<void> {
   if (!siteID) return
   loading.value = true
   try {
-    siteVariables.value = (await listMailSiteVariables(props.accessToken, siteID)).items
+    const editor = await listMailSiteVariables(props.accessToken, siteID)
+    siteVariables.value = editor.items
+    uploadStorage.value = editor.upload_storage
+    uploadPath.value = editor.upload_path
     if (editing.value) assignTemplate(await getMailTemplate(props.accessToken, siteID, templateID.value))
     else assignTemplate({ ...emptyTemplate(), id: 0, site_id: siteID, created_at: '', updated_at: '' })
   } catch (caught) {
@@ -197,7 +202,7 @@ onMounted(() => void load())
       </el-card>
 
       <el-card shadow="never" header="Вложения">
-        <mail-attachments-editor v-model="form.attachments" :variables="form.variables" :site-variables="siteVariables" :access-token="accessToken" :permissions="permissions" />
+        <mail-attachments-editor v-model="form.attachments" :variables="form.variables" :site-variables="siteVariables" :access-token="accessToken" :permissions="permissions" :upload-storage="uploadStorage" :upload-path="uploadPath" />
       </el-card>
     </el-form>
   </section>

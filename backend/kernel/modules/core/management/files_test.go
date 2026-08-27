@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +19,12 @@ import (
 
 type filesystemManagementService struct {
 	file.ManagementService
-	listing file.BrowserListing
+	listing  file.BrowserListing
+	resolved file.Folder
+}
+
+func (s filesystemManagementService) ResolveFolder(context.Context, security.Actor, filesystem.Code, string) (file.Folder, error) {
+	return s.resolved, nil
 }
 
 func (s filesystemManagementService) Disks(context.Context, security.Actor) ([]filesystem.DiskInfo, error) {
@@ -89,5 +95,22 @@ func TestFilesRoutesUseUniversalNamespace(t *testing.T) {
 	router.ServeHTTP(legacy, httptest.NewRequest(http.MethodGet, "/filesystem/disks", nil))
 	if legacy.Code != http.StatusNotFound {
 		t.Fatalf("legacy route status = %d", legacy.Code)
+	}
+}
+
+func TestFilesRouteResolvesConfiguredFolderPath(t *testing.T) {
+	now := time.Now().UTC()
+	handler := &filesHTTP{files: &Files{
+		files:      filesystemManagementService{resolved: file.Folder{ID: 7, Storage: "private", Name: "mail", CreatedAt: now, UpdatedAt: now}},
+		authorizer: managementAuthorizer{denied: map[permission.Code]error{}},
+	}}
+	router := chi.NewRouter()
+	registerFileRoutes(router, handler)
+	request := httptest.NewRequest(http.MethodGet, "/files/folders/resolve?disk=private&path=mail", nil)
+	request = request.WithContext(httptransport.WithActor(request.Context(), security.User(1)))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":7`) {
+		t.Fatalf("resolve route = %d, %s", response.Code, response.Body.String())
 	}
 }

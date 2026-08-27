@@ -11,30 +11,40 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/messageid"
+	"github.com/vernal96/go-cms/kernel/modules/core/site"
 )
 
 const SpoolFilesystemAlias filesystem.Alias = "spool"
-const spoolPrefix = "mail-spool/"
+const spoolRootPrefix = "mail-spool/"
 
-var errSpoolCleanupLimit = errors.New("mail spool cleanup scan limit reached")
+type AttachmentSpool struct {
+	disk          filesystem.Disk
+	pager         filesystem.PrefixPager
+	prefix        string
+	cleanupMu     sync.Mutex
+	cleanupCursor string
+}
 
-type AttachmentSpool struct{ disk filesystem.Disk }
-
-func NewAttachmentSpool(disk filesystem.Disk) (*AttachmentSpool, error) {
+func NewAttachmentSpool(siteID site.ID, disk filesystem.Disk) (*AttachmentSpool, error) {
+	if siteID <= 0 {
+		return nil, errors.New("mail attachment spool site is invalid")
+	}
 	if disk == nil {
 		return nil, errors.New("mail attachment spool disk is nil")
 	}
 	if disk.Visibility() != filesystem.VisibilityPrivate {
 		return nil, errors.New("mail attachment spool must be private")
 	}
-	if _, ok := disk.(filesystem.PrefixWalker); !ok {
+	pager, ok := disk.(filesystem.PrefixPager)
+	if !ok {
 		return nil, errors.New("mail attachment spool does not support bounded cleanup")
 	}
-	return &AttachmentSpool{disk: disk}, nil
+	return &AttachmentSpool{disk: disk, pager: pager, prefix: spoolRootPrefix + fmt.Sprint(siteID) + "/"}, nil
 }
 
 func (s *AttachmentSpool) Put(ctx context.Context, input TransientAttachment, maxSize int64) (Attachment, error) {
@@ -56,7 +66,7 @@ func (s *AttachmentSpool) Put(ctx context.Context, input TransientAttachment, ma
 	if err != nil {
 		return Attachment{}, err
 	}
-	key := spoolPrefix + strconv.FormatInt(time.Now().UTC().Unix(), 10) + "-" + string(id)
+	key := s.prefix + strconv.FormatInt(time.Now().UTC().Unix(), 10) + "-" + string(id)
 	hash := sha256.New()
 	counter := &countingReader{reader: io.TeeReader(io.LimitReader(input.Body, input.Size+1), hash)}
 	if err := s.disk.PutNew(ctx, key, counter, mediaType); err != nil {
@@ -70,7 +80,7 @@ func (s *AttachmentSpool) Put(ctx context.Context, input TransientAttachment, ma
 }
 
 func (s *AttachmentSpool) Open(ctx context.Context, attachment Attachment) (io.ReadCloser, error) {
-	if s == nil || s.disk == nil || attachment.Source != AttachmentTransient || !validSpoolKey(attachment.spoolKey) {
+	if s == nil || s.disk == nil || attachment.Source != AttachmentTransient || !s.validKey(attachment.spoolKey) {
 		return nil, errors.New("mail transient attachment reference is invalid")
 	}
 	return s.disk.Open(ctx, attachment.spoolKey)
@@ -80,7 +90,7 @@ func (s *AttachmentSpool) Delete(ctx context.Context, attachment Attachment) err
 	if attachment.Source != AttachmentTransient {
 		return nil
 	}
-	if s == nil || s.disk == nil || !validSpoolKey(attachment.spoolKey) {
+	if s == nil || s.disk == nil || !s.validKey(attachment.spoolKey) {
 		return errors.New("mail transient attachment reference is invalid")
 	}
 	return s.disk.Delete(ctx, attachment.spoolKey)
@@ -90,26 +100,22 @@ func (s *AttachmentSpool) Cleanup(ctx context.Context, olderThan time.Time, limi
 	if s == nil || s.disk == nil || limit < 1 || active == nil {
 		return 0, errors.New("mail spool cleanup request is invalid")
 	}
-	walker := s.disk.(filesystem.PrefixWalker)
+	s.cleanupMu.Lock()
+	defer s.cleanupMu.Unlock()
+	page, err := s.pager.ListPrefix(ctx, s.prefix, s.cleanupCursor, limit)
+	if err != nil {
+		return 0, err
+	}
+	s.cleanupCursor = page.NextCursor
 	candidates := make([]string, 0, limit)
-	err := walker.WalkPrefix(ctx, spoolPrefix, func(key string) error {
-		if len(candidates) >= limit {
-			return errSpoolCleanupLimit
-		}
-		if !validSpoolKey(key) {
-			return nil
-		}
-		createdAt, ok := spoolCreatedAt(key)
+	for _, key := range page.Keys {
+		createdAt, ok := s.createdAt(key)
 		if ok && createdAt.Before(olderThan) {
 			candidates = append(candidates, key)
 		}
-		return nil
-	})
-	if errors.Is(err, errSpoolCleanupLimit) {
-		err = nil
 	}
-	if err != nil || len(candidates) == 0 {
-		return 0, err
+	if len(candidates) == 0 {
+		return 0, nil
 	}
 	protected, err := active(ctx, candidates)
 	if err != nil {
@@ -139,16 +145,36 @@ func (r *countingReader) Read(buffer []byte) (int, error) {
 	return n, err
 }
 
+func (s *AttachmentSpool) validKey(key string) bool {
+	return s != nil && strings.HasPrefix(key, s.prefix) && validSpoolKey(key)
+}
+
+func (s *AttachmentSpool) createdAt(key string) (time.Time, bool) {
+	if !s.validKey(key) {
+		return time.Time{}, false
+	}
+	raw := strings.TrimPrefix(key, s.prefix)
+	return parseSpoolFilename(raw)
+}
+
 func validSpoolKey(key string) bool {
-	_, ok := spoolCreatedAt(key)
+	if !strings.HasPrefix(key, spoolRootPrefix) || filepath.Clean(key) != key {
+		return false
+	}
+	remainder := strings.TrimPrefix(key, spoolRootPrefix)
+	siteValue, filename, ok := strings.Cut(remainder, "/")
+	if !ok || siteValue == "" || filename == "" || strings.Contains(filename, "/") {
+		return false
+	}
+	parsedSite, err := strconv.ParseInt(siteValue, 10, 64)
+	if err != nil || parsedSite <= 0 {
+		return false
+	}
+	_, ok = parseSpoolFilename(filename)
 	return ok
 }
 
-func spoolCreatedAt(key string) (time.Time, bool) {
-	if !strings.HasPrefix(key, spoolPrefix) || filepath.Clean(key) != key || strings.Contains(strings.TrimPrefix(key, spoolPrefix), "/") {
-		return time.Time{}, false
-	}
-	raw := strings.TrimPrefix(key, spoolPrefix)
+func parseSpoolFilename(raw string) (time.Time, bool) {
 	seconds, opaqueID, ok := strings.Cut(raw, "-")
 	if !ok {
 		return time.Time{}, false

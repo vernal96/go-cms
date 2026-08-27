@@ -105,6 +105,40 @@ func TestRendererRejectsUnknownVariablesAndLongResults(t *testing.T) {
 	}
 }
 
+func TestRendererExcludesFileFieldsButKeepsScalarFields(t *testing.T) {
+	t.Parallel()
+	renderer, err := NewRenderer(kernel.Profile{
+		Params: []field.Definition{
+			{Key: "company", Type: field.TypeString},
+			{Key: "logo", Type: field.TypeFile},
+		},
+		Templates: []template.Definition{{Fields: []field.Definition{
+			{Key: "summary", Type: field.TypeString},
+			{Key: "hero", Type: field.TypeFile},
+		}}},
+	}, 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, variable := range []string{"site.field.logo", "resource.field.hero"} {
+		if err := renderer.Validate(Settings{TitleTemplate: "{{ " + variable + " }}"}); err == nil {
+			t.Fatalf("file variable %q was accepted", variable)
+		}
+		for _, available := range renderer.Variables() {
+			if available == variable {
+				t.Fatalf("file variable %q was advertised", variable)
+			}
+		}
+	}
+	result, err := renderer.Render(Settings{TitleTemplate: "{{ site.field.company }} {{ resource.field.summary }}"}, RenderInput{
+		Site: site.Site{Settings: map[string]any{"company": "Acme", "logo": int64(42)}},
+		Resource: resource.Resource{Fields: map[string]any{"summary": "About", "hero": int64(43)}},
+	})
+	if err != nil || result.Title != "Acme About" {
+		t.Fatalf("scalar rendering = %#v, %v", result, err)
+	}
+}
+
 type memoryRepository struct {
 	metadata seoMetadataHolder
 }

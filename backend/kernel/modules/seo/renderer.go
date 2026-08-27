@@ -80,11 +80,15 @@ func NewRenderer(
 		"resource.slug":       {},
 		"resource.path":       {},
 	}
-	for variable := range site.NewTemplateVariables(site.Site{}, profile.Params).Allowed() {
+	siteParams := scalarDefinitions(profile.Params)
+	for variable := range site.NewTemplateVariables(site.Site{}, siteParams).Allowed() {
 		allowed[variable] = struct{}{}
 	}
 	for _, template := range profile.Templates {
 		for _, definition := range template.Fields {
+			if definition.Type == field.TypeFile {
+				continue
+			}
 			allowed["resource.field."+definition.Key] = struct{}{}
 		}
 	}
@@ -96,10 +100,20 @@ func NewRenderer(
 	return &Renderer{
 		allowed:           allowed,
 		variables:         variables,
-		siteParams:        field.CloneDefinitions(profile.Params),
+		siteParams:        siteParams,
 		maxTemplateLength: maxTemplateLength,
 		maxResultLength:   maxResultLength,
 	}, nil
+}
+
+func scalarDefinitions(definitions []field.Definition) []field.Definition {
+	result := make([]field.Definition, 0, len(definitions))
+	for _, definition := range definitions {
+		if definition.Type != field.TypeFile {
+			result = append(result, definition)
+		}
+	}
+	return field.CloneDefinitions(result)
 }
 
 func (r *Renderer) Variables() []string {

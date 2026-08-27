@@ -448,18 +448,30 @@ type staticAccessTokens struct {
 	verifyErr error
 }
 
-type siteManagementTestModule struct{}
-type siteManagementTestRuntime struct{}
+type siteManagementTestModule struct{ path string }
+type siteManagementDuplicateModule struct{}
+type siteManagementTestRuntime struct {
+	moduleCode kernel.ModuleCode
+	path       string
+}
 
 func (siteManagementTestModule) Code() kernel.ModuleCode { return "site_management_test" }
-func (siteManagementTestModule) Build(context.Context, kernel.ModuleContext) (kernel.ModuleRuntime, error) {
-	return siteManagementTestRuntime{}, nil
+func (m siteManagementTestModule) Build(context.Context, kernel.ModuleContext) (kernel.ModuleRuntime, error) {
+	path := m.path
+	if path == "" {
+		path = "feature"
+	}
+	return siteManagementTestRuntime{moduleCode: "site_management_test", path: path}, nil
 }
-func (siteManagementTestRuntime) ModuleCode() kernel.ModuleCode { return "site_management_test" }
-func (siteManagementTestRuntime) SiteManagementHTTP() httptransport.SiteManagementContribution {
+func (siteManagementDuplicateModule) Code() kernel.ModuleCode { return "site_management_duplicate" }
+func (siteManagementDuplicateModule) Build(context.Context, kernel.ModuleContext) (kernel.ModuleRuntime, error) {
+	return siteManagementTestRuntime{moduleCode: "site_management_duplicate", path: "feature"}, nil
+}
+func (r siteManagementTestRuntime) ModuleCode() kernel.ModuleCode { return r.moduleCode }
+func (r siteManagementTestRuntime) SiteManagementHTTP() httptransport.SiteManagementContribution {
 	router := http.NewServeMux()
 	router.HandleFunc("/ping", func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(http.StatusNoContent) })
-	return httptransport.SiteManagementContribution{Path: "feature", Handler: router}
+	return httptransport.SiteManagementContribution{Path: r.path, Handler: router}
 }
 
 func TestOptionalSiteManagementHTTPIsRuntimeContributed(t *testing.T) {
@@ -469,7 +481,7 @@ func TestOptionalSiteManagementHTTPIsRuntimeContributed(t *testing.T) {
 	}}
 	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
 		Logger: loggerFactory{}, PasswordHasher: argon2id.Factory{}, SiteAccessPolicy: admin.AllowAllSitesPolicy{}, EventBus: eventBusFactory{},
-		MainDatabase: appkernel.DatabaseDefinition{Connector: connectorFactory{}, Adapters: []kernel.ModuleDatabaseFactory{databaseFactory{sites: sites, access: knownUserAccessRepository{}}}},
+		MainDatabase: appkernel.DatabaseDefinition{Connector: connectorFactory{}, Adapters: []kernel.ModuleDatabaseFactory{databaseFactory{sites: sites, access: privilegedUserAccessRepository{}}}},
 		Profiles: []kernel.Profile{
 			{Code: "with_feature", Modules: []kernel.ProfileModule{{Module: core.Module{}}, {Module: admin.Module{}}, {Module: siteManagementTestModule{}}}},
 			{Code: "plain", Modules: []kernel.ProfileModule{{Module: core.Module{}}, {Module: admin.Module{}}}},
@@ -497,6 +509,59 @@ func TestOptionalSiteManagementHTTPIsRuntimeContributed(t *testing.T) {
 		if response.Code != test.status {
 			t.Fatalf("%s = %d, %s", test.path, response.Code, response.Body.String())
 		}
+	}
+	for _, test := range []struct {
+		path   string
+		status int
+	}{{"/api/sites/1/resources", http.StatusOK}, {"/api/sites/1/menu", http.StatusOK}, {"/api/sites/1/resources/999", http.StatusNotFound}, {"/api/sites/1/library-items/999", http.StatusInternalServerError}} {
+		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		request.Header.Set("Authorization", "Bearer signed")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != test.status {
+			t.Fatalf("Core route %s = %d, %s", test.path, response.Code, response.Body.String())
+		}
+		if response.Body.String() == "404 page not found\n" {
+			t.Fatalf("Core route %s was shadowed by optional dispatch", test.path)
+		}
+	}
+}
+
+func TestOptionalSiteManagementHTTPRejectsCorePathCollisionAtCompileTime(t *testing.T) {
+	sites := &publicationSiteRepository{items: []site.Site{{ID: 1, ProfileCode: "collision", Domain: "collision.example.test", Locale: "ru-RU", IsPublic: true}}}
+	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
+		Logger: loggerFactory{}, PasswordHasher: argon2id.Factory{}, SiteAccessPolicy: admin.AllowAllSitesPolicy{}, EventBus: eventBusFactory{},
+		MainDatabase: appkernel.DatabaseDefinition{Connector: connectorFactory{}, Adapters: []kernel.ModuleDatabaseFactory{databaseFactory{sites: sites, access: privilegedUserAccessRepository{}}}},
+		Profiles:     []kernel.Profile{{Code: "collision", Modules: []kernel.ProfileModule{{Module: core.Module{}}, {Module: admin.Module{}}, {Module: siteManagementTestModule{path: "resources"}}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runtimeApp.Close() }()
+	if err := runtimeApp.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newTestHandler(runtimeApp); err == nil || !strings.Contains(err.Error(), "owned by Core") {
+		t.Fatalf("Core route collision = %v", err)
+	}
+}
+
+func TestOptionalSiteManagementHTTPRejectsDuplicatePathAtCompileTime(t *testing.T) {
+	sites := &publicationSiteRepository{items: []site.Site{{ID: 1, ProfileCode: "duplicate", Domain: "duplicate.example.test", Locale: "ru-RU", IsPublic: true}}}
+	runtimeApp, err := appkernel.New(context.Background(), appkernel.Definition{
+		Logger: loggerFactory{}, PasswordHasher: argon2id.Factory{}, SiteAccessPolicy: admin.AllowAllSitesPolicy{}, EventBus: eventBusFactory{},
+		MainDatabase: appkernel.DatabaseDefinition{Connector: connectorFactory{}, Adapters: []kernel.ModuleDatabaseFactory{databaseFactory{sites: sites, access: privilegedUserAccessRepository{}}}},
+		Profiles:     []kernel.Profile{{Code: "duplicate", Modules: []kernel.ProfileModule{{Module: core.Module{}}, {Module: admin.Module{}}, {Module: siteManagementTestModule{}}, {Module: siteManagementDuplicateModule{}}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = runtimeApp.Close() }()
+	if err := runtimeApp.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newTestHandler(runtimeApp); err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("duplicate optional route = %v", err)
 	}
 }
 

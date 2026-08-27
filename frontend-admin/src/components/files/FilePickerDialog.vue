@@ -8,6 +8,8 @@ defineProps<{
   permissions: ReadonlySet<string>
   storages?: string[]
   mimeTypes?: string[]
+  initialStorage?: string
+  initialPath?: string
 }>()
 const visible = defineModel<boolean>({ required: true })
 const emit = defineEmits<{ select: [item: FilesystemItem] }>()
@@ -25,6 +27,8 @@ function select(item: FilesystemItem): void {
       :permissions="permissions"
       :allowed-storages="storages"
       :allowed-m-i-m-e-types="mimeTypes"
+      :initial-storage="initialStorage"
+      :initial-path="initialPath"
       picker
       @select="select"
     />

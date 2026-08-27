@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
-import { ElAlert, ElButton, ElMessage, ElMessageBox, ElPagination, ElTable, ElTableColumn, ElTag } from 'element-plus'
+import { ElAlert, ElButton, ElMessage, ElMessageBox, ElPagination, ElSwitch, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import { useRouter } from 'vue-router'
 import { AdminAPIError } from '../../api/admin-api'
 import AccessDeniedView from '../../components/AccessDeniedView.vue'
 import { useSelectedSite } from '../../composables/use-selected-site'
-import { deleteMailTemplate, listMailTemplates } from './api'
+import { deleteMailTemplate, listMailTemplates, setMailTemplateEnabled } from './api'
 import type { MailTemplate } from './types'
 
 const props = defineProps<{ accessToken: string; permissions: ReadonlySet<string> }>()
@@ -19,6 +19,7 @@ const error = ref<string | null>(null)
 const page = ref(1)
 const perPage = 20
 const total = ref(0)
+const changingEnabled = ref(new Set<number>())
 
 async function load(): Promise<void> {
   if (!props.permissions.has('mail.template.read')) return
@@ -32,6 +33,23 @@ async function load(): Promise<void> {
     total.value = response.pagination.total
   } catch (caught) { handleError(caught) }
   finally { loading.value = false }
+}
+
+async function setEnabled(row: unknown, enabled: boolean): Promise<void> {
+  const item = row as MailTemplate
+  const siteID = selected.selectedSite.value?.id
+  if (!siteID || !props.permissions.has('mail.template.update') || changingEnabled.value.has(item.id)) return
+  changingEnabled.value = new Set(changingEnabled.value).add(item.id)
+  try {
+    const updated = await setMailTemplateEnabled(props.accessToken, siteID, item.id, enabled)
+    items.value = items.value.map((item) => item.id === updated.id ? { ...item, ...updated } : item)
+    ElMessage.success(enabled ? 'Шаблон включён' : 'Шаблон выключен')
+  } catch (caught) { handleError(caught) }
+  finally {
+    const next = new Set(changingEnabled.value)
+    next.delete(item.id)
+    changingEnabled.value = next
+  }
 }
 
 async function remove(row: unknown): Promise<void> {
@@ -70,7 +88,10 @@ onMounted(() => void load())
       <el-table-column prop="name" label="Название" min-width="220" />
       <el-table-column prop="code" label="Код" min-width="190" />
       <el-table-column prop="transport" label="Транспорт" min-width="130" />
-      <el-table-column label="Состояние" width="130"><template #default="{ row }"><el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? 'Включён' : 'Выключен' }}</el-tag></template></el-table-column>
+      <el-table-column label="Состояние" width="180"><template #default="{ row }">
+        <el-switch v-if="permissions.has('mail.template.update')" :model-value="row.enabled" :loading="changingEnabled.has(row.id)" inline-prompt active-text="Включён" inactive-text="Выключен" @update:model-value="setEnabled(row, Boolean($event))" />
+        <el-tag v-else :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? 'Включён' : 'Выключен' }}</el-tag>
+      </template></el-table-column>
       <el-table-column label="Изменён" width="180"><template #default="{ row }">{{ new Date(row.updated_at).toLocaleString() }}</template></el-table-column>
       <el-table-column label="Действия" width="190" align="right"><template #default="{ row }">
         <el-button v-if="permissions.has('mail.template.update')" text type="primary" @click="router.push({ name: 'mail.templates.edit', params: { templateId: row.id } })">Изменить</el-button>

@@ -15,6 +15,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/job"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/mail"
+	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type Repository struct{ connector *connectorpostgres.Connector }
@@ -90,6 +91,11 @@ func (r *Repository) UpdateTemplate(ctx context.Context, item mail.Template) (ma
 	updated, err := scanTemplate(r.connector.Pool().QueryRow(ctx, `
 UPDATE mail.templates SET code=$3,name=$4,enabled=$5,transport_alias=$6,from_address=$7,to_addresses=$8,cc_addresses=$9,bcc_addresses=$10,reply_to=$11,subject=$12,content_type=$13,text_body=$14,html_body=$15,attachments=$16,variables=$17,updated_at=clock_timestamp(),updated_by=$18
 WHERE site_id=$1 AND id=$2 RETURNING `+templateColumns+`;`, item.SiteID, item.ID, item.Code, item.Name, item.Enabled, item.Transport, values.from, values.to, values.cc, values.bcc, values.replyTo, item.Subject, item.ContentType, item.TextBody, item.HTMLBody, values.attachments, values.variables, item.UpdatedBy))
+	return updated, mapWriteError(err)
+}
+
+func (r *Repository) SetTemplateEnabled(ctx context.Context, siteID site.ID, id mail.TemplateID, enabled bool, updatedBy *security.UserID) (mail.Template, error) {
+	updated, err := scanTemplate(r.connector.Pool().QueryRow(ctx, `UPDATE mail.templates SET enabled=$3,updated_at=clock_timestamp(),updated_by=$4 WHERE site_id=$1 AND id=$2 RETURNING `+templateColumns+`;`, siteID, id, enabled, updatedBy))
 	return updated, mapWriteError(err)
 }
 
@@ -464,26 +470,29 @@ func (r *Repository) FinishAttempt(ctx context.Context, id mail.MessageID, numbe
 	return tx.Commit(ctx)
 }
 
-func (r *Repository) Cleanup(ctx context.Context, retention time.Duration, limit int) (int64, error) {
+func (r *Repository) Cleanup(ctx context.Context, siteID site.ID, retention time.Duration, limit int) (int64, error) {
+	if siteID <= 0 || retention < 0 || limit < 1 {
+		return 0, errors.New("mail cleanup request is invalid")
+	}
 	if retention == 0 {
 		return 0, nil
 	}
-	if retention < 0 || limit < 1 {
-		return 0, errors.New("mail cleanup request is invalid")
-	}
-	command, err := r.connector.Pool().Exec(ctx, `WITH candidates AS (SELECT id FROM mail.messages WHERE status IN ('accepted','failed') AND updated_at <= clock_timestamp()-($1::bigint*interval '1 microsecond') ORDER BY updated_at,id LIMIT $2) DELETE FROM mail.messages USING candidates WHERE mail.messages.id=candidates.id;`, int64((retention+time.Microsecond-1)/time.Microsecond), limit)
+	command, err := r.connector.Pool().Exec(ctx, `WITH candidates AS (SELECT id FROM mail.messages WHERE site_id=$1 AND status IN ('accepted','failed') AND updated_at <= clock_timestamp()-($2::bigint*interval '1 microsecond') ORDER BY updated_at,id LIMIT $3) DELETE FROM mail.messages USING candidates WHERE mail.messages.id=candidates.id;`, siteID, int64((retention+time.Microsecond-1)/time.Microsecond), limit)
 	if err != nil {
 		return 0, err
 	}
 	return command.RowsAffected(), nil
 }
 
-func (r *Repository) ActiveSpoolKeys(ctx context.Context, keys []string) (map[string]struct{}, error) {
+func (r *Repository) ActiveSpoolKeys(ctx context.Context, siteID site.ID, keys []string) (map[string]struct{}, error) {
+	if siteID <= 0 {
+		return nil, errors.New("mail active spool-key request is invalid")
+	}
 	result := make(map[string]struct{})
 	if len(keys) == 0 {
 		return result, nil
 	}
-	rows, err := r.connector.Pool().Query(ctx, `SELECT DISTINCT attachment->>'spool_key' FROM mail.messages CROSS JOIN LATERAL jsonb_array_elements(attachments) attachment WHERE status IN ('queued','sending','retryable') AND attachment->>'spool_key'=ANY($1);`, keys)
+	rows, err := r.connector.Pool().Query(ctx, `SELECT DISTINCT attachment->>'spool_key' FROM mail.messages CROSS JOIN LATERAL jsonb_array_elements(attachments) attachment WHERE site_id=$1 AND status IN ('queued','sending','retryable') AND attachment->>'spool_key'=ANY($2);`, siteID, keys)
 	if err != nil {
 		return nil, err
 	}

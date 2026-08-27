@@ -7,13 +7,9 @@ type Task struct {
 	Run  func(context.Context) error
 }
 
-// Provider is an optional module-runtime capability for application-scoped
-// lifecycle work. App starts one provider per module and cancels it before
-// closing databases, filesystems, or the event bus.
+// Provider is an optional module-runtime capability for site-scoped lifecycle
+// work. App starts every task for every current site runtime and cancels stale
+// tasks before replacing or removing that runtime.
 type Provider interface {
 	BackgroundTasks() []Task
-}
-
-type NamesProvider interface {
-	BackgroundTaskNames() []string
 }

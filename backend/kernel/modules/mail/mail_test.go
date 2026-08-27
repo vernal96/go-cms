@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -319,6 +320,14 @@ func (r *memoryRepository) UpdateTemplate(_ context.Context, item Template) (Tem
 	r.template = item
 	return item, nil
 }
+func (r *memoryRepository) SetTemplateEnabled(_ context.Context, siteID site.ID, id TemplateID, enabled bool, updatedBy *security.UserID) (Template, error) {
+	if r.template.SiteID != 0 && (r.template.SiteID != siteID || r.template.ID != id) {
+		return Template{}, ErrNotFound
+	}
+	r.template.Enabled = enabled
+	r.template.UpdatedBy = updatedBy
+	return r.template, nil
+}
 func (r *memoryRepository) DeleteTemplate(context.Context, site.ID, TemplateID) error { return nil }
 func (r *memoryRepository) CreateMessageAndJob(_ context.Context, item Message, queued eventbus.Message) (Message, error) {
 	if r.createErr != nil {
@@ -369,8 +378,10 @@ func (r *memoryRepository) FinishAttempt(_ context.Context, _ MessageID, number 
 	}
 	return nil
 }
-func (r *memoryRepository) Cleanup(context.Context, time.Duration, int) (int64, error) { return 0, nil }
-func (r *memoryRepository) ActiveSpoolKeys(context.Context, []string) (map[string]struct{}, error) {
+func (r *memoryRepository) Cleanup(context.Context, site.ID, time.Duration, int) (int64, error) {
+	return 0, nil
+}
+func (r *memoryRepository) ActiveSpoolKeys(context.Context, site.ID, []string) (map[string]struct{}, error) {
 	return map[string]struct{}{}, nil
 }
 
@@ -427,6 +438,7 @@ func TestMailHTTPRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 	renderer, _ := testRenderer(t, SenderPolicy{})
 	repository := &memoryRepository{template: mailTemplate()}
+	repository.template.ID = 3
 	transports, _ := NewTransportRegistry(map[TransportAlias]Transport{"default": NullTransport{}})
 	service, err := NewService(5, repository, renderer, allowAuthorizer{}, testUsers{}, transports, nil, Limits{MaxRecipients: 100, MaxMessageSize: 1 << 20, MaxAttachmentSize: 1 << 20}, "default", "example.com")
 	if err != nil {
@@ -445,6 +457,23 @@ func TestMailHTTPRequiresAuthentication(t *testing.T) {
 	router.ServeHTTP(unauthenticated, guestRequest)
 	if unauthenticated.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated status = %d", unauthenticated.Code)
+	}
+
+	service.uploadStorage, service.uploadPath = "private", "mail/uploads"
+	request := httptest.NewRequest(http.MethodPatch, "/api/sites/5/mail/templates/3/enabled", strings.NewReader(`{"enabled":false}`))
+	request = request.WithContext(httptransport.WithActor(request.Context(), security.User(9)))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || repository.template.Enabled || !strings.Contains(response.Body.String(), `"enabled":false`) {
+		t.Fatalf("semantic disable = %d, %s, template=%#v", response.Code, response.Body.String(), repository.template)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/sites/5/mail/variables", nil)
+	request = request.WithContext(httptransport.WithActor(request.Context(), security.User(9)))
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"upload_storage":"private"`) || !strings.Contains(response.Body.String(), `"upload_path":"mail/uploads"`) {
+		t.Fatalf("editor config = %d, %s", response.Code, response.Body.String())
 	}
 
 }
@@ -632,11 +661,26 @@ func (d *memorySpoolDisk) WalkPrefix(_ context.Context, prefix string, visit fun
 	}
 	return nil
 }
+func (d *memorySpoolDisk) ListPrefix(_ context.Context, prefix string, cursor string, limit int) (filesystem.PrefixPage, error) {
+	keys := make([]string, 0, len(d.objects))
+	for key := range d.objects {
+		if strings.HasPrefix(key, prefix) && key > cursor {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	page := filesystem.PrefixPage{Keys: keys}
+	if len(keys) > limit {
+		page.Keys = keys[:limit]
+		page.NextCursor = page.Keys[len(page.Keys)-1]
+	}
+	return page, nil
+}
 
 func TestTransientSpoolSurvivesRetryAndIsDeletedOnTerminalSuccess(t *testing.T) {
 	t.Parallel()
 	disk := &memorySpoolDisk{objects: map[string][]byte{}}
-	spool, err := NewAttachmentSpool(disk)
+	spool, err := NewAttachmentSpool(5, disk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -680,7 +724,7 @@ func TestTransientSpoolSurvivesRetryAndIsDeletedOnTerminalSuccess(t *testing.T) 
 func TestQueueFailureBestEffortDeletesNewTransientSpoolObjects(t *testing.T) {
 	t.Parallel()
 	disk := &memorySpoolDisk{objects: map[string][]byte{}}
-	spool, err := NewAttachmentSpool(disk)
+	spool, err := NewAttachmentSpool(5, disk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -706,7 +750,7 @@ func TestQueueFailureBestEffortDeletesNewTransientSpoolObjects(t *testing.T) {
 func TestTerminalDeliveryFailureDeletesTransientSpoolObjects(t *testing.T) {
 	t.Parallel()
 	disk := &memorySpoolDisk{objects: map[string][]byte{}}
-	spool, _ := NewAttachmentSpool(disk)
+	spool, _ := NewAttachmentSpool(5, disk)
 	renderer, files := testRenderer(t, SenderPolicy{})
 	repository := &memoryRepository{template: mailTemplate()}
 	transport := &countingTransport{failure: &DeliveryError{Code: "550", Err: errors.New("rejected")}}
@@ -734,15 +778,16 @@ func TestTerminalDeliveryFailureDeletesTransientSpoolObjects(t *testing.T) {
 
 func TestSpoolCleanupDeletesOnlyOldInactiveObjects(t *testing.T) {
 	t.Parallel()
-	activeKey := spoolPrefix + "1-00000000-0000-4000-8000-000000000001"
-	orphanKey := spoolPrefix + "2-00000000-0000-4000-8000-000000000002"
-	newKey := spoolPrefix + strconv.FormatInt(time.Now().UTC().Unix(), 10) + "-00000000-0000-4000-8000-000000000003"
+	prefix := spoolRootPrefix + "5/"
+	activeKey := prefix + "1-00000000-0000-4000-8000-000000000001"
+	orphanKey := prefix + "2-00000000-0000-4000-8000-000000000002"
+	newKey := prefix + strconv.FormatInt(time.Now().UTC().Unix(), 10) + "-00000000-0000-4000-8000-000000000003"
 	disk := &memorySpoolDisk{objects: map[string][]byte{
 		activeKey: []byte("active"),
 		orphanKey: []byte("orphan"),
 		newKey:    []byte("new"),
 	}}
-	spool, _ := NewAttachmentSpool(disk)
+	spool, _ := NewAttachmentSpool(5, disk)
 	deleted, err := spool.Cleanup(context.Background(), time.Now().Add(-time.Hour), 10, func(_ context.Context, _ []string) (map[string]struct{}, error) {
 		return map[string]struct{}{activeKey: {}}, nil
 	})
@@ -757,13 +802,66 @@ func TestSpoolCleanupDeletesOnlyOldInactiveObjects(t *testing.T) {
 	}
 }
 
+func TestSpoolCleanupPagesPastProtectedObjects(t *testing.T) {
+	t.Parallel()
+	prefix := spoolRootPrefix + "5/"
+	activeKey := prefix + "1-00000000-0000-4000-8000-000000000001"
+	orphanKey := prefix + "2-00000000-0000-4000-8000-000000000002"
+	disk := &memorySpoolDisk{objects: map[string][]byte{activeKey: []byte("active"), orphanKey: []byte("orphan")}}
+	spool, err := NewAttachmentSpool(5, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := func(_ context.Context, keys []string) (map[string]struct{}, error) {
+		result := map[string]struct{}{}
+		for _, key := range keys {
+			if key == activeKey {
+				result[key] = struct{}{}
+			}
+		}
+		return result, nil
+	}
+	if deleted, err := spool.Cleanup(context.Background(), time.Now(), 1, active); err != nil || deleted != 0 {
+		t.Fatalf("first cleanup = %d, %v", deleted, err)
+	}
+	if deleted, err := spool.Cleanup(context.Background(), time.Now(), 1, active); err != nil || deleted != 1 {
+		t.Fatalf("second cleanup = %d, %v", deleted, err)
+	}
+	if _, exists := disk.objects[orphanKey]; exists {
+		t.Fatal("later orphan remained starved behind protected object")
+	}
+}
+
+func TestSpoolsCannotAccessOrCleanAnotherSitePrefix(t *testing.T) {
+	t.Parallel()
+	key5 := spoolRootPrefix + "5/1-00000000-0000-4000-8000-000000000001"
+	key6 := spoolRootPrefix + "6/1-00000000-0000-4000-8000-000000000002"
+	disk := &memorySpoolDisk{objects: map[string][]byte{key5: []byte("five"), key6: []byte("six")}}
+	spool5, _ := NewAttachmentSpool(5, disk)
+	foreign := newStoredAttachment(AttachmentTransient, nil, key6, "foreign.txt", "text/plain", 3, "")
+	if _, err := spool5.Open(context.Background(), foreign); err == nil {
+		t.Fatal("cross-site spool open succeeded")
+	}
+	if err := spool5.Delete(context.Background(), foreign); err == nil {
+		t.Fatal("cross-site spool delete succeeded")
+	}
+	if deleted, err := spool5.Cleanup(context.Background(), time.Now(), 10, func(context.Context, []string) (map[string]struct{}, error) {
+		return map[string]struct{}{}, nil
+	}); err != nil || deleted != 1 {
+		t.Fatalf("site cleanup = %d, %v", deleted, err)
+	}
+	if _, exists := disk.objects[key6]; !exists {
+		t.Fatal("site cleanup deleted another site's object")
+	}
+}
+
 func TestSpoolRejectsInjectedOrMalformedInternalKeys(t *testing.T) {
 	t.Parallel()
 	for _, key := range []string{
 		"../secret",
-		spoolPrefix + "secret",
-		spoolPrefix + "1-../../secret",
-		spoolPrefix + "1-not-a-message-id",
+		spoolRootPrefix + "secret",
+		spoolRootPrefix + "5/1-../../secret",
+		spoolRootPrefix + "5/1-not-a-message-id",
 	} {
 		if validSpoolKey(key) {
 			t.Fatalf("unsafe spool key %q accepted", key)
@@ -789,6 +887,7 @@ func TestConfigRejectsInvalidDeliveryAndSpoolLimits(t *testing.T) {
 		"recipients":      func(config *Config) { config.MaxRecipients = 0 },
 		"message size":    func(config *Config) { config.MaxMessageSize = -1 },
 		"attachment size": func(config *Config) { config.MaxAttachmentSize = 0 },
+		"upload path":     func(config *Config) { config.UploadPath = "../mail" },
 		"spool TTL": func(config *Config) {
 			config.SpoolEnabled = true
 			config.SpoolTTL = 0

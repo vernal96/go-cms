@@ -88,6 +88,23 @@ describe('FileExplorer', () => {
     expect(wrapper.find('.file-status-text').text()).toContain('text/plain')
   })
 
+  it('opens the configured initial storage and resolved folder', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({
+        items: [{ code: 'public', visibility: 'public' }, { code: 'private', visibility: 'private' }],
+        permissions: { read: true, create: true, update: true, delete: true },
+      }))
+      .mockResolvedValueOnce(json({ kind: 'folder', id: 9, parent_id: null, storage: 'private', name: 'mail', created_at: '', updated_at: '' }))
+      .mockResolvedValueOnce(json({ ...listing, disk: { code: 'private', visibility: 'private' }, folder: { kind: 'folder', id: 9, parent_id: null, storage: 'private', name: 'mail', created_at: '', updated_at: '' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    mount(FileExplorer, {
+      props: { accessToken: 'token', permissions: new Set(['core.file.read']), initialStorage: 'private', initialPath: 'mail/uploads' },
+    })
+    await flushPromises()
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/files/folders/resolve?disk=private&path=mail%2Fuploads')
+    expect(fetchMock.mock.calls[2]?.[0]).toBe('/api/files/items?disk=private&folder_id=9')
+  })
+
   it('moves the right-clicked selection through the folder dialog', async () => {
     const listing = {
       disk: { code: 'public', visibility: 'public' }, folder: null, breadcrumbs: [],

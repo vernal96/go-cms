@@ -117,6 +117,26 @@ func TestConnectorStoresWithoutOverwriteAndDeletesIdempotently(t *testing.T) {
 	}
 }
 
+func TestConnectorListsPrefixInBoundedCursorPages(t *testing.T) {
+	connector, err := New(context.Background(), Config{Code: "private", Visibility: filesystem.VisibilityPrivate, Root: t.TempDir(), BaseURL: "https://files.example.test", SigningKey: "0123456789abcdef0123456789abcdef"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"spool/site/a", "spool/site/b", "spool/site/c", "spool/other/d"} {
+		if err := connector.PutNew(context.Background(), key, strings.NewReader(key), "text/plain"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := connector.ListPrefix(context.Background(), "spool/site/", "", 2)
+	if err != nil || len(first.Keys) != 2 || first.Keys[0] != "spool/site/a" || first.Keys[1] != "spool/site/b" || first.NextCursor != "spool/site/b" {
+		t.Fatalf("first page = %#v, %v", first, err)
+	}
+	second, err := connector.ListPrefix(context.Background(), "spool/site/", first.NextCursor, 2)
+	if err != nil || len(second.Keys) != 1 || second.Keys[0] != "spool/site/c" || second.NextCursor != "" {
+		t.Fatalf("second page = %#v, %v", second, err)
+	}
+}
+
 func TestPrivateConnectorSignsAndVerifiesTemporaryURL(t *testing.T) {
 	connector, err := New(context.Background(), Config{
 		Code:       "private",

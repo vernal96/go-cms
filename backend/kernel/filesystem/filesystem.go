@@ -61,6 +61,18 @@ type PrefixWalker interface {
 	WalkPrefix(context.Context, string, func(string) error) error
 }
 
+type PrefixPage struct {
+	Keys       []string
+	NextCursor string
+}
+
+// PrefixPager is an optional maintenance capability for bounded, resumable
+// scans. A non-empty NextCursor resumes strictly after the final returned key;
+// an empty cursor marks the end of the current scan.
+type PrefixPager interface {
+	ListPrefix(context.Context, string, string, int) (PrefixPage, error)
+}
+
 type KeyDistribution string
 
 const (

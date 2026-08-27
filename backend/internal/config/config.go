@@ -55,6 +55,8 @@ type MailConfig struct {
 	MaxRecipients          int                       `envconfig:"MAX_RECIPIENTS" default:"100"`
 	MaxMessageSize         int64                     `envconfig:"MAX_MESSAGE_SIZE" default:"26214400"`
 	MaxAttachmentSize      int64                     `envconfig:"MAX_ATTACHMENT_SIZE" default:"20971520"`
+	UploadStorage          filesystem.Code           `envconfig:"UPLOAD_STORAGE" default:"private"`
+	UploadPath             string                    `envconfig:"UPLOAD_PATH" default:"mail"`
 	SpoolEnabled           bool                      `envconfig:"SPOOL_ENABLED" default:"true"`
 	SpoolTTL               time.Duration             `envconfig:"SPOOL_TTL" default:"24h"`
 	SpoolCleanupInterval   time.Duration             `envconfig:"SPOOL_CLEANUP_INTERVAL" default:"1h"`
@@ -87,6 +89,7 @@ func (c MailConfig) ModuleConfig() mailmodule.Config {
 		CleanupInterval: c.HistoryCleanupInterval, CleanupBatchSize: c.HistoryCleanupBatch,
 		SendMaxAttempts: c.SendMaxAttempts, MaxRecipients: c.MaxRecipients,
 		MaxMessageSize: c.MaxMessageSize, MaxAttachmentSize: c.MaxAttachmentSize,
+		UploadStorage: c.UploadStorage, UploadPath: c.UploadPath,
 		SpoolEnabled: c.SpoolEnabled, SpoolTTL: c.SpoolTTL,
 		SpoolCleanupInterval: c.SpoolCleanupInterval, SpoolCleanupBatch: c.SpoolCleanupBatch,
 	}

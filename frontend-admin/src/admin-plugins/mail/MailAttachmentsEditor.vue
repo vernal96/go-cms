@@ -12,7 +12,9 @@ const props = withDefaults(defineProps<{
   siteVariables?: MailSiteVariable[]
   accessToken: string
   permissions: ReadonlySet<string>
-}>(), { siteVariables: () => [] })
+  uploadStorage?: string
+  uploadPath?: string
+}>(), { siteVariables: () => [], uploadStorage: '', uploadPath: '' })
 const emit = defineEmits<{ 'update:modelValue': [value: MailAttachmentTemplate[]] }>()
 const pickerVisible = ref(false)
 const pickerIndex = ref<number | null>(null)
@@ -92,6 +94,8 @@ function selectFile(item: FilesystemItem): void {
       v-model="pickerVisible"
       :access-token="accessToken"
       :permissions="permissions"
+      :initial-storage="uploadStorage"
+      :initial-path="uploadPath"
       @select="selectFile"
     />
   </div>

@@ -223,6 +223,29 @@ func (r *memoryRepository) ListFolders(
 	return result, nil
 }
 
+func TestServiceResolvesNestedFolderPathWithinStorage(t *testing.T) {
+	repository := newMemoryRepository()
+	service, err := NewService(repository, memoryDisks{"private": newMemoryDisk("private", filesystem.VisibilityPrivate)}, testAuthorizer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailFolder, err := service.CreateFolder(context.Background(), security.User(1), CreateFolderInput{Storage: "private", Name: "mail"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploads, err := service.CreateFolder(context.Background(), security.User(1), CreateFolderInput{Storage: "private", ParentID: &mailFolder.ID, Name: "uploads"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := service.ResolveFolder(context.Background(), security.User(1), "private", "mail/uploads")
+	if err != nil || resolved.ID != uploads.ID {
+		t.Fatalf("resolved folder = %#v, %v", resolved, err)
+	}
+	if _, err := service.ResolveFolder(context.Background(), security.User(1), "private", "../mail"); err == nil {
+		t.Fatal("unsafe folder path was accepted")
+	}
+}
+
 func (r *memoryRepository) CreateFile(
 	_ context.Context,
 	item File,

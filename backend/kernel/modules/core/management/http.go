@@ -27,6 +27,13 @@ type contentHTTP struct {
 	resources *Resources
 }
 
+// SiteManagementRoutePrefixes returns the first path segments owned by the
+// mandatory Core site-management API. Optional module contributions must not
+// claim any of these prefixes.
+func SiteManagementRoutePrefixes() []string {
+	return []string{"resources", "library-items", "menu"}
+}
+
 func registerContentRoutes(router chi.Router, sites *Sites, resources *Resources) {
 	handler := &contentHTTP{sites: sites, resources: resources}
 	router.Get("/administration/resource-revisions", handler.administrationRevisionCount)

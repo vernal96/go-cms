@@ -127,6 +127,14 @@ func (m *Files) BrowseFilesystem(
 	}, nil
 }
 
+func (m *Files) ResolveFilesystemFolder(ctx context.Context, actor security.Actor, storage filesystem.Code, folderPath string) (FilesystemItemDTO, error) {
+	item, err := m.files.ResolveFolder(ctx, actor, storage, folderPath)
+	if err != nil {
+		return FilesystemItemDTO{}, err
+	}
+	return folderItemDTO(item, nil), nil
+}
+
 func (m *Files) CreateFilesystemFolder(
 	ctx context.Context,
 	actor security.Actor,

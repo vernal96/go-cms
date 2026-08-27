@@ -82,6 +82,7 @@ func NewHTTPHandler(service *Service) (http.Handler, error) {
 	router.Post("/templates", handler.createTemplate)
 	router.Get("/templates/{templateID}", handler.getTemplate)
 	router.Patch("/templates/{templateID}", handler.updateTemplate)
+	router.Patch("/templates/{templateID}/enabled", handler.setTemplateEnabled)
 	router.Delete("/templates/{templateID}", handler.deleteTemplate)
 	router.Post("/preview", handler.preview)
 	router.Post("/send", handler.send)
@@ -90,6 +91,35 @@ func NewHTTPHandler(service *Service) (http.Handler, error) {
 	router.Get("/messages/{messageID}", handler.getMessage)
 	router.Delete("/messages/{messageID}", handler.deleteMessage)
 	return httptransport.RequireAuthenticated(router), nil
+}
+
+func (h *mailHTTP) setTemplateEnabled(response http.ResponseWriter, request *http.Request) {
+	actor, service, ok := h.request(response, request)
+	if !ok {
+		return
+	}
+	id, err := pathID[TemplateID](request, "templateID")
+	if err != nil {
+		writeMailError(response, err)
+		return
+	}
+	var payload struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := decodeJSONRequest(request, &payload); err != nil {
+		writeMailError(response, err)
+		return
+	}
+	item, err := service.SetTemplateEnabled(request.Context(), actor, id, payload.Enabled)
+	if err != nil {
+		writeMailError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, struct {
+		ID        TemplateID `json:"id"`
+		Enabled   bool       `json:"enabled"`
+		UpdatedAt time.Time  `json:"updated_at"`
+	}{ID: item.ID, Enabled: item.Enabled, UpdatedAt: item.UpdatedAt})
 }
 
 type mailHTTP struct{ service *Service }
@@ -326,8 +356,10 @@ func (h *mailHTTP) siteVariables(response http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(response, http.StatusOK, struct {
-		Items []site.TemplateVariable `json:"items"`
-	}{Items: items})
+		Items         []site.TemplateVariable `json:"items"`
+		UploadStorage filesystem.Code         `json:"upload_storage"`
+		UploadPath    string                  `json:"upload_path"`
+	}{Items: items, UploadStorage: service.EditorConfig().UploadStorage, UploadPath: service.EditorConfig().UploadPath})
 }
 
 func (h *mailHTTP) getMessage(response http.ResponseWriter, request *http.Request) {

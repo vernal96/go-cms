@@ -69,7 +69,11 @@ export interface MailSiteVariable {
   source: 'site'
 }
 
-export interface MailSiteVariablesResponse { items: MailSiteVariable[] }
+export interface MailSiteVariablesResponse {
+  items: MailSiteVariable[]
+  upload_storage: string
+  upload_path: string
+}
 
 export interface MailWarning {
   field: string

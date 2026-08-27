@@ -49,10 +49,14 @@ const props = withDefaults(defineProps<{
   picker?: boolean
   allowedStorages?: string[]
   allowedMIMETypes?: string[]
+  initialStorage?: string
+  initialPath?: string
 }>(), {
   picker: false,
   allowedStorages: () => [],
   allowedMIMETypes: () => [],
+  initialStorage: '',
+  initialPath: '',
 })
 const emit = defineEmits<{ select: [item: FilesystemItem] }>()
 
@@ -145,8 +149,19 @@ async function initialize(): Promise<void> {
     const response = await adminRequest<FilesystemDisksResponse>('/api/files/disks', props.accessToken)
     disks.value = response.items
     permissions.value = response.permissions
-    disk.value = visibleDisks.value[0]?.code ?? ''
-    if (disk.value) await loadFolder(null, false)
+    disk.value = visibleDisks.value.some((item) => item.code === props.initialStorage)
+      ? props.initialStorage
+      : (visibleDisks.value[0]?.code ?? '')
+    if (disk.value && props.initialPath.trim()) {
+      try {
+        const query = new URLSearchParams({ disk: disk.value, path: props.initialPath })
+        const folder = await adminRequest<FilesystemItem>(`/api/files/folders/resolve?${query}`, props.accessToken)
+        await loadFolder(folder.id, false)
+      } catch {
+        ElMessage.warning('Настроенная папка недоступна. Открыт корень хранилища.')
+        await loadFolder(null, false)
+      }
+    } else if (disk.value) await loadFolder(null, false)
   } catch (caught) {
     error.value = message(caught, 'Не удалось загрузить диски.')
   } finally {

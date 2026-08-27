@@ -6,6 +6,7 @@ import (
 
 	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	"github.com/vernal96/go-cms/kernel/security"
 )
 
 type Repository interface {
@@ -15,6 +16,7 @@ type Repository interface {
 	TemplateByCode(context.Context, site.ID, string) (Template, error)
 	CreateTemplate(context.Context, Template) (Template, error)
 	UpdateTemplate(context.Context, Template) (Template, error)
+	SetTemplateEnabled(context.Context, site.ID, TemplateID, bool, *security.UserID) (Template, error)
 	DeleteTemplate(context.Context, site.ID, TemplateID) error
 
 	CreateMessageAndJob(context.Context, Message, eventbus.Message) (Message, error)
@@ -23,6 +25,6 @@ type Repository interface {
 	DeleteMessage(context.Context, site.ID, MessageID) error
 	ClaimMessage(context.Context, site.ID, MessageID, int) (Message, DeliveryAttempt, bool, error)
 	FinishAttempt(context.Context, MessageID, int, DeliveryResult, *DeliveryError, bool) error
-	Cleanup(context.Context, time.Duration, int) (int64, error)
-	ActiveSpoolKeys(context.Context, []string) (map[string]struct{}, error)
+	Cleanup(context.Context, site.ID, time.Duration, int) (int64, error)
+	ActiveSpoolKeys(context.Context, site.ID, []string) (map[string]struct{}, error)
 }
