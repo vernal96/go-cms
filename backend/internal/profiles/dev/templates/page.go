@@ -53,5 +53,9 @@ func Page() template.Definition {
 				}},
 			},
 		},
+		EditorTabs: []field.EditorTab{
+			{Code: "content", Label: "Контент", Fields: []string{"page_title", "page_text", "show_title"}},
+			{Code: "layout", Label: "Макет", Fields: []string{"layout"}},
+		},
 	}
 }

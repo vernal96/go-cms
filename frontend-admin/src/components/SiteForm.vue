@@ -14,6 +14,7 @@ import {
 
 import { AdminAPIError, adminRequest } from '../api/admin-api'
 import DynamicFieldsForm from './fields/DynamicFieldsForm.vue'
+import TabbedDynamicFieldsForm from './fields/TabbedDynamicFieldsForm.vue'
 import {
   createFieldValues,
   fieldErrorMessage,
@@ -165,8 +166,16 @@ function submit(): void {
     <el-form-item label="Публичный сайт">
       <el-switch v-model="form.is_public" />
     </el-form-item>
+    <tabbed-dynamic-fields-form
+      v-if="selectedProfile && editing"
+      :fields="selectedProfile.fields"
+      :editor-tabs="selectedProfile.editor_tabs"
+      :model-value="form.settings"
+      :errors="displayedFieldErrors"
+      @update:model-value="form.settings = $event"
+    />
     <dynamic-fields-form
-      v-if="selectedProfile"
+      v-else-if="selectedProfile"
       :fields="selectedProfile.fields"
       :model-value="form.settings"
       :errors="displayedFieldErrors"

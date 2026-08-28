@@ -980,6 +980,41 @@ func TestProfileRuntimeCollectsFieldTypesBeforeModuleBuild(t *testing.T) {
 	}
 }
 
+func TestProfileBlueprintValidatesAndClonesEditorTabs(t *testing.T) {
+	factory, err := kernel.NewProfileRuntimeFactory(
+		emptyDatabaseResolver{},
+		testRuntimeServices(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := kernel.Profile{
+		Code: "editor-tabs",
+		Modules: []kernel.ProfileModule{{Module: registryModule{
+			code: "fields", fieldTypes: field.StandardTypes(),
+		}}},
+		Params: []field.Definition{{Key: "title", Type: field.TypeString, Label: "Title"}},
+		EditorTabs: []field.EditorTab{{
+			Code: "main", Label: "Main", Fields: []string{"title"},
+		}},
+	}
+	blueprint, err := factory.Compile(context.Background(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile.EditorTabs[0].Fields[0] = "changed"
+	exposed := blueprint.Profile()
+	exposed.EditorTabs[0].Fields[0] = "mutated"
+	if frozen := blueprint.Profile(); frozen.EditorTabs[0].Fields[0] != "title" {
+		t.Fatalf("profile editor tabs share mutable state: %#v", frozen.EditorTabs)
+	}
+
+	profile.EditorTabs = []field.EditorTab{{Code: "main", Label: "Main"}}
+	if _, err := factory.Compile(context.Background(), profile); err == nil || !strings.Contains(err.Error(), "not assigned") {
+		t.Fatalf("invalid profile editor tabs error = %v", err)
+	}
+}
+
 func TestProfileRuntimeCollectsDeclaredPermissionsBeforeBuild(
 	t *testing.T,
 ) {

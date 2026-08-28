@@ -1,6 +1,7 @@
 package dev_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/vernal96/go-cms/internal/profiles/dev"
@@ -54,12 +55,36 @@ func TestProfileExposesDynamicParamsAndTemplateFields(t *testing.T) {
 			t.Fatalf("field type %q is missing", code)
 		}
 	}
+	wantProfileTabs := []field.EditorTab{
+		{Code: "main", Label: "Основные", Fields: []string{"string_value", "integer_value", "float_value", "checkbox_value"}},
+		{Code: "selection", Label: "Выбор", Fields: []string{"radio_value", "select_value", "multi_select_value"}},
+		{Code: "text", Label: "Текст", Fields: []string{"textarea_value"}},
+		{Code: "contacts", Label: "Контакты", Fields: []string{"email_value", "phone_value"}},
+	}
+	if !reflect.DeepEqual(dev.Profile.EditorTabs, wantProfileTabs) {
+		t.Fatalf("profile editor tabs = %#v", dev.Profile.EditorTabs)
+	}
 	if len(dev.Profile.Templates) != 2 ||
 		dev.Profile.Templates[0].Code != "page" || len(dev.Profile.Templates[0].Fields) != 4 ||
 		dev.Profile.Templates[1].Code != "landing" || len(dev.Profile.Templates[1].Fields) != 5 {
 		t.Fatalf("templates = %#v", dev.Profile.Templates)
 	}
 	page := dev.Profile.Templates[0]
+	wantPageTabs := []field.EditorTab{
+		{Code: "content", Label: "Контент", Fields: []string{"page_title", "page_text", "show_title"}},
+		{Code: "layout", Label: "Макет", Fields: []string{"layout"}},
+	}
+	if !reflect.DeepEqual(page.EditorTabs, wantPageTabs) {
+		t.Fatalf("page editor tabs = %#v", page.EditorTabs)
+	}
+	wantLandingTabs := []field.EditorTab{
+		{Code: "content", Label: "Первый экран", Fields: []string{"hero_title", "hero_text"}},
+		{Code: "layout", Label: "Макет", Fields: []string{"columns", "content_width"}},
+		{Code: "audience", Label: "Аудитория", Fields: []string{"audiences"}},
+	}
+	if !reflect.DeepEqual(dev.Profile.Templates[1].EditorTabs, wantLandingTabs) {
+		t.Fatalf("landing editor tabs = %#v", dev.Profile.Templates[1].EditorTabs)
+	}
 	if len(page.Layout.Body) != 2 || len(page.Layout.Sidebar) != 1 {
 		t.Fatalf("page widget layout = %#v", page.Layout)
 	}

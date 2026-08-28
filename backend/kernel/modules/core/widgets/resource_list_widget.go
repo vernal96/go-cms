@@ -86,7 +86,7 @@ func (w resourceListWidget) Definition() widget.Definition {
 			{Key: "filters", Type: field.TypeJSON, Label: "Фильтры", Editor: "filter-builder"},
 			{Key: "sorting", Type: field.TypeJSON, Label: "Сортировка", Editor: "sort-builder"},
 		},
-		EditorTabs:    []widget.EditorTab{{Code: "selection", Label: "Выборка", Fields: []string{"parent_mode", "parent_resource", "resources", "exclude", "resource_types", "exclude_current", "limit", "pagination_enabled", "per_page"}}, {Code: "output", Label: "Вывод", Fields: []string{"fields", "filters", "sorting"}}},
+		EditorTabs:    []field.EditorTab{{Code: "selection", Label: "Выборка", Fields: []string{"parent_mode", "parent_resource", "resources", "exclude", "resource_types", "exclude_current", "limit", "pagination_enabled", "per_page"}}, {Code: "output", Label: "Вывод", Fields: []string{"fields", "filters", "sorting"}}},
 		SummaryFields: []string{"parent_mode", "limit", "resource_types"},
 	}
 }

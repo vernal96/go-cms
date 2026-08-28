@@ -83,6 +83,31 @@ func Params() []field.Definition {
 	}
 }
 
+func ParamEditorTabs() []field.EditorTab {
+	return []field.EditorTab{
+		{
+			Code:   "main",
+			Label:  "Основные",
+			Fields: []string{"string_value", "integer_value", "float_value", "checkbox_value"},
+		},
+		{
+			Code:   "selection",
+			Label:  "Выбор",
+			Fields: []string{"radio_value", "select_value", "multi_select_value"},
+		},
+		{
+			Code:   "text",
+			Label:  "Текст",
+			Fields: []string{"textarea_value"},
+		},
+		{
+			Code:   "contacts",
+			Label:  "Контакты",
+			Fields: []string{"email_value", "phone_value"},
+		},
+	}
+}
+
 func commonChoices() []field.Choice {
 	return []field.Choice{
 		{Value: "alpha", Label: "Альфа"},

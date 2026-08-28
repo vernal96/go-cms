@@ -252,7 +252,7 @@ func TestCatalogRejectsInvalidAndDuplicateWidgets(t *testing.T) {
 				Module: testModule("content"),
 				Widgets: []Widget{&testWidget{definition: Definition{
 					Reference: NewRef("summary"), Label: "Summary", Description: "Description",
-					EditorTabs: []EditorTab{{Code: "main", Label: "Main", Fields: []string{"missing"}}},
+					EditorTabs: []field.EditorTab{{Code: "main", Label: "Main", Fields: []string{"missing"}}},
 				}}},
 			}},
 			match: "unknown field",
@@ -264,7 +264,7 @@ func TestCatalogRejectsInvalidAndDuplicateWidgets(t *testing.T) {
 				Widgets: []Widget{&testWidget{definition: Definition{
 					Reference: NewRef("summary"), Label: "Summary", Description: "Description",
 					Fields:     []field.Definition{{Key: "title", Type: field.TypeString, Label: "Title"}},
-					EditorTabs: []EditorTab{{Code: "main", Label: "Main"}},
+					EditorTabs: []field.EditorTab{{Code: "main", Label: "Main"}},
 				}}},
 			}},
 			match: "not assigned",

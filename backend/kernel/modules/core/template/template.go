@@ -42,11 +42,12 @@ type Layout struct {
 }
 
 type Definition struct {
-	Code   Code
-	Label  string
-	Icon   string
-	Fields []field.Definition
-	Layout Layout
+	Code       Code
+	Label      string
+	Icon       string
+	Fields     []field.Definition
+	EditorTabs []field.EditorTab
+	Layout     Layout
 }
 
 type compiledItemKind uint8
@@ -126,6 +127,9 @@ func Compile(definitions []Definition, resolver field.TypeResolver) (*Catalog, e
 		schema, err := field.CompilePersistent(definition.Fields, resolver)
 		if err != nil {
 			return nil, fmt.Errorf("compile template %q fields: %w", definition.Code, err)
+		}
+		if err := field.ValidateEditorTabs(definition.Fields, definition.EditorTabs); err != nil {
+			return nil, fmt.Errorf("compile template %q editor tabs: %w", definition.Code, err)
 		}
 
 		catalog.order = append(catalog.order, definition.Code)
@@ -391,6 +395,7 @@ func (c *Catalog) Definitions() []Definition {
 
 func CloneDefinition(definition Definition) Definition {
 	definition.Fields = field.CloneDefinitions(definition.Fields)
+	definition.EditorTabs = field.CloneEditorTabs(definition.EditorTabs)
 	definition.Layout = Layout{
 		Body:    cloneItems(definition.Layout.Body),
 		Sidebar: cloneItems(definition.Layout.Sidebar),

@@ -27,6 +27,7 @@ type Profile struct {
 	Name        string
 	Modules     []ProfileModule
 	Params      []field.Definition
+	EditorTabs  []field.EditorTab
 	Templates   []template.Definition
 	WidgetViews []widget.View
 }
@@ -916,6 +917,13 @@ func (f *ProfileRuntimeFactory) Compile(
 			err,
 		)
 	}
+	if err := field.ValidateEditorTabs(profile.Params, profile.EditorTabs); err != nil {
+		return nil, fmt.Errorf(
+			"compile editor tabs for profile %q: %w",
+			profile.Code,
+			err,
+		)
+	}
 
 	templates, err := template.Compile(
 		profile.Templates,
@@ -1183,6 +1191,7 @@ func cloneProfile(profile Profile) Profile {
 		)
 	}
 	profile.Params = field.CloneDefinitions(profile.Params)
+	profile.EditorTabs = field.CloneEditorTabs(profile.EditorTabs)
 	profile.Templates = template.CloneDefinitions(profile.Templates)
 	profile.WidgetViews = widget.CloneViews(profile.WidgetViews)
 

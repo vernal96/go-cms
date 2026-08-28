@@ -75,6 +75,7 @@ describe('LibraryItemEditView', () => {
         templates: [{
           code: 'article', label: 'Article', supports_resource_widgets: true,
           fields: [{ key: 'subtitle', type: 'string', label: 'Subtitle', required: false, rules: [] }],
+			editor_tabs: [{ code: 'content', label: 'Контент', fields: ['subtitle'] }],
         }],
         widgets: [],
         extensions: [{ code: 'seo', title: 'SEO', applies_to: ['page'], fields: [], variables: [] }],
@@ -92,6 +93,8 @@ describe('LibraryItemEditView', () => {
     await flushPromises()
 
     expect(wrapper.getComponent({ name: 'ElTabs' }).props('modelValue')).toBe('main')
+		expect(wrapper.findComponent({ name: 'TabbedDynamicFieldsForm' }).exists()).toBe(false)
+		expect(wrapper.findComponent({ name: 'DynamicFieldsForm' }).exists()).toBe(true)
     expect(wrapper.findAllComponents({ name: 'ElTabPane' }).map((tab) => tab.props('label'))).toEqual([
       'Основное', 'Виджеты', 'Настройки', 'Параметры полей', 'История', 'SEO',
     ])

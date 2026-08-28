@@ -57,5 +57,10 @@ func Landing() template.Definition {
 				},
 			},
 		},
+		EditorTabs: []field.EditorTab{
+			{Code: "content", Label: "Первый экран", Fields: []string{"hero_title", "hero_text"}},
+			{Code: "layout", Label: "Макет", Fields: []string{"columns", "content_width"}},
+			{Code: "audience", Label: "Аудитория", Fields: []string{"audiences"}},
+		},
 	}
 }

@@ -23,6 +23,7 @@ import { useRoute } from 'vue-router'
 
 import { AdminAPIError, adminRequest, adminRequestVoid } from '../api/admin-api'
 import DynamicFieldsForm from '../components/fields/DynamicFieldsForm.vue'
+import TabbedDynamicFieldsForm from '../components/fields/TabbedDynamicFieldsForm.vue'
 import RichTextEditor from '../components/RichTextEditor.vue'
 import ResourceExtensionEditor from '../components/resource-extensions/ResourceExtensionEditor.vue'
 import ResourceWidgetsEditor from '../components/resource-widgets/ResourceWidgetsEditor.vue'
@@ -569,7 +570,14 @@ watch(() => [route.params.siteId, route.params.resourceId], () => void load())
 
         <el-tab-pane v-if="showFieldsTab" label="Параметры полей" name="fields">
           <div :class="{ 'dynamic-fields-readonly': !canUpdate }">
-            <dynamic-fields-form v-model="form.fields" :fields="selectedTemplate!.fields" :errors="displayedFieldErrors" />
+            <tabbed-dynamic-fields-form
+              v-model="form.fields"
+              :fields="selectedTemplate!.fields"
+              :editor-tabs="selectedTemplate!.editor_tabs"
+              :errors="displayedFieldErrors"
+              :site-id="siteId"
+              :access-token="accessToken"
+            />
           </div>
         </el-tab-pane>
 

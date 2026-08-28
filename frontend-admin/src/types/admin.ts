@@ -68,6 +68,7 @@ export interface SiteProfile {
   code: string
   name: string
   fields: FieldDefinition[]
+	editor_tabs: FieldEditorTab[]
 }
 
 export type FieldType =
@@ -163,6 +164,12 @@ export interface FieldDefinition {
   options?: FieldOptions
 	editor?: string
 	visible_when?: { field: string; value: unknown }
+}
+
+export interface FieldEditorTab {
+	code: string
+	label: string
+	fields: string[]
 }
 
 export interface SiteProfilesResponse {
@@ -267,6 +274,7 @@ export interface ResourceTemplate {
   label: string
   icon: string
   fields: FieldDefinition[]
+	editor_tabs: FieldEditorTab[]
   supports_resource_widgets: boolean
   widget_areas: WidgetArea[]
 }
@@ -279,7 +287,7 @@ export interface WidgetDefinition {
   label: string
   description: string
   fields: FieldDefinition[]
-  editor_tabs: Array<{ code: string; label: string; fields: string[] }>
+  editor_tabs: FieldEditorTab[]
   summary_fields: string[]
   views: Array<{ code: string; label: string }>
 }

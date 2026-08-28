@@ -20,10 +20,11 @@ import (
 const ProfileCode kernel.ProfileCode = "dev"
 
 var Profile = kernel.Profile{
-	Code:      ProfileCode,
-	Name:      "Разработка",
-	Params:    Params(),
-	Templates: devtemplates.All(),
+	Code:       ProfileCode,
+	Name:       "Разработка",
+	Params:     Params(),
+	EditorTabs: ParamEditorTabs(),
+	Templates:  devtemplates.All(),
 	WidgetViews: []widget.View{
 		widgetviews.ContentCompact,
 		widgetviews.ContentArticle,

@@ -244,9 +244,10 @@ type SiteDetails struct {
 }
 
 type SiteProfile struct {
-	Code   kernel.ProfileCode `json:"code"`
-	Name   string             `json:"name"`
-	Fields []FieldDefinition  `json:"fields"`
+	Code       kernel.ProfileCode `json:"code"`
+	Name       string             `json:"name"`
+	Fields     []FieldDefinition  `json:"fields"`
+	EditorTabs []FieldEditorTab   `json:"editor_tabs"`
 }
 
 type SiteProfiles struct {
@@ -480,9 +481,10 @@ func (m *Sites) Profiles(
 			return SiteProfiles{}, err
 		}
 		items = append(items, SiteProfile{
-			Code:   profile.Code,
-			Name:   profile.Name,
-			Fields: fields,
+			Code:       profile.Code,
+			Name:       profile.Name,
+			Fields:     fields,
+			EditorTabs: editorTabs(blueprint.Profile().EditorTabs),
 		})
 	}
 	return SiteProfiles{Items: items}, nil
@@ -547,14 +549,27 @@ type ResourceTemplate struct {
 	Label                   string            `json:"label"`
 	Icon                    string            `json:"icon"`
 	Fields                  []FieldDefinition `json:"fields"`
+	EditorTabs              []FieldEditorTab  `json:"editor_tabs"`
 	SupportsResourceWidgets bool              `json:"supports_resource_widgets"`
 	WidgetAreas             []widget.AreaCode `json:"widget_areas"`
 }
 
-type WidgetEditorTab struct {
+type FieldEditorTab struct {
 	Code   string   `json:"code"`
 	Label  string   `json:"label"`
 	Fields []string `json:"fields"`
+}
+
+func editorTabs(source []field.EditorTab) []FieldEditorTab {
+	result := make([]FieldEditorTab, len(source))
+	for index, tab := range source {
+		result[index] = FieldEditorTab{
+			Code:   tab.Code,
+			Label:  tab.Label,
+			Fields: append([]string(nil), tab.Fields...),
+		}
+	}
+	return result
 }
 
 type WidgetView struct {
@@ -570,7 +585,7 @@ type WidgetDefinition struct {
 	Label             string            `json:"label"`
 	Description       string            `json:"description"`
 	Fields            []FieldDefinition `json:"fields"`
-	EditorTabs        []WidgetEditorTab `json:"editor_tabs"`
+	EditorTabs        []FieldEditorTab  `json:"editor_tabs"`
 	SummaryFields     []string          `json:"summary_fields"`
 	Views             []WidgetView      `json:"views"`
 }
@@ -634,6 +649,7 @@ func (m *Resources) ResourceMetadata(
 			Label:                   definition.Label,
 			Icon:                    iconOrDefault(definition.Icon),
 			Fields:                  fields,
+			EditorTabs:              editorTabs(definition.EditorTabs),
 			SupportsResourceWidgets: templateRuntime.SupportsResourceWidgets(),
 			WidgetAreas:             templateRuntime.ResourceAreas(),
 		}
@@ -645,10 +661,6 @@ func (m *Resources) ResourceMetadata(
 		if err != nil {
 			return ResourceMetadata{}, err
 		}
-		tabs := make([]WidgetEditorTab, len(definition.EditorTabs))
-		for tabIndex, tab := range definition.EditorTabs {
-			tabs[tabIndex] = WidgetEditorTab{Code: tab.Code, Label: tab.Label, Fields: append([]string(nil), tab.Fields...)}
-		}
 		views := make([]WidgetView, len(definition.Views))
 		for viewIndex, view := range definition.Views {
 			views[viewIndex] = WidgetView{Code: view.Code(), Label: view.Label()}
@@ -657,7 +669,7 @@ func (m *Resources) ResourceMetadata(
 			Code: definition.Code, ModuleCode: definition.Module.Code,
 			ModuleLabel: definition.Module.Label, ModuleDescription: definition.Module.Description,
 			Label: definition.Label, Description: definition.Description, Fields: fields,
-			EditorTabs: tabs, SummaryFields: append([]string{}, definition.SummaryFields...), Views: views,
+			EditorTabs: editorTabs(definition.EditorTabs), SummaryFields: append([]string{}, definition.SummaryFields...), Views: views,
 		}
 	}
 	typeCodes := runtime.Profile().Registry().ResourceTypes()

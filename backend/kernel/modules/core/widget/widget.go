@@ -63,12 +63,6 @@ type ModuleDescriptor struct {
 	Description string
 }
 
-type EditorTab struct {
-	Code   string
-	Label  string
-	Fields []string
-}
-
 // View is a typed profile declaration associated with one widget reference.
 // The zero value means the implicit default view in template declarations.
 type View struct {
@@ -104,7 +98,7 @@ type Definition struct {
 	Label         string
 	Description   string
 	Fields        []field.Definition
-	EditorTabs    []EditorTab
+	EditorTabs    []field.EditorTab
 	SummaryFields []string
 	Views         []View
 }
@@ -430,36 +424,12 @@ func validateModuleDescriptor(descriptor ModuleDescriptor) error {
 }
 
 func validateEditorMetadata(definition Definition) error {
+	if err := field.ValidateEditorTabs(definition.Fields, definition.EditorTabs); err != nil {
+		return err
+	}
 	fields := make(map[string]struct{}, len(definition.Fields))
 	for _, current := range definition.Fields {
 		fields[current.Key] = struct{}{}
-	}
-	tabs := make(map[string]struct{}, len(definition.EditorTabs))
-	assigned := make(map[string]string)
-	for index, tab := range definition.EditorTabs {
-		if tab.Code == "" || strings.TrimSpace(tab.Code) != tab.Code || tab.Label == "" || strings.TrimSpace(tab.Label) != tab.Label {
-			return fmt.Errorf("tab at index %d is invalid", index)
-		}
-		if _, exists := tabs[tab.Code]; exists {
-			return fmt.Errorf("duplicate tab code %q", tab.Code)
-		}
-		tabs[tab.Code] = struct{}{}
-		for _, fieldCode := range tab.Fields {
-			if _, exists := fields[fieldCode]; !exists {
-				return fmt.Errorf("tab %q references unknown field %q", tab.Code, fieldCode)
-			}
-			if previous, exists := assigned[fieldCode]; exists {
-				return fmt.Errorf("field %q is assigned to tabs %q and %q", fieldCode, previous, tab.Code)
-			}
-			assigned[fieldCode] = tab.Code
-		}
-	}
-	if len(definition.EditorTabs) > 0 {
-		for fieldCode := range fields {
-			if _, exists := assigned[fieldCode]; !exists {
-				return fmt.Errorf("field %q is not assigned to an editor tab", fieldCode)
-			}
-		}
 	}
 	seenSummary := make(map[string]struct{}, len(definition.SummaryFields))
 	for _, fieldCode := range definition.SummaryFields {
@@ -541,7 +511,7 @@ func (c *Catalog) Definitions() []Definition {
 
 func CloneDefinition(definition Definition) Definition {
 	definition.Fields = field.CloneDefinitions(definition.Fields)
-	definition.EditorTabs = cloneEditorTabs(definition.EditorTabs)
+	definition.EditorTabs = field.CloneEditorTabs(definition.EditorTabs)
 	definition.SummaryFields = append([]string(nil), definition.SummaryFields...)
 	definition.Views = append([]View(nil), definition.Views...)
 	return definition
@@ -560,18 +530,6 @@ func CloneDefinitions(source []Definition) []Definition {
 
 func CloneViews(source []View) []View {
 	return append([]View(nil), source...)
-}
-
-func cloneEditorTabs(source []EditorTab) []EditorTab {
-	if source == nil {
-		return nil
-	}
-	result := make([]EditorTab, len(source))
-	for index, tab := range source {
-		result[index] = tab
-		result[index].Fields = append([]string(nil), tab.Fields...)
-	}
-	return result
 }
 
 func cloneMap(source map[string]any) map[string]any {

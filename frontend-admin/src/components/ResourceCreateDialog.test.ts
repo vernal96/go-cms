@@ -45,6 +45,7 @@ describe('ResourceCreateDialog', () => {
             code: 'page',
             label: 'Страница',
             icon: 'document',
+			editor_tabs: [{ code: 'content', label: 'Контент', fields: ['page_title'] }],
             fields: [
               {
                 key: 'page_title',
@@ -76,6 +77,7 @@ describe('ResourceCreateDialog', () => {
       }
     ).open(null)
     await flushPromises()
+		expect(wrapper.findComponent({ name: 'TabbedDynamicFieldsForm' }).exists()).toBe(false)
     const model = wrapper
       .findComponent({ name: 'ElForm' })
       .props('model') as Record<string, unknown>

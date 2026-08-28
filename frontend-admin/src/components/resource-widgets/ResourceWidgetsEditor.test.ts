@@ -18,7 +18,8 @@ const template: ResourceTemplate = {
   code: 'page',
   label: 'Page',
   icon: 'document',
-  fields: [],
+	fields: [],
+	editor_tabs: [],
   supports_resource_widgets: true,
   widget_areas: ['body', 'sidebar'],
 }

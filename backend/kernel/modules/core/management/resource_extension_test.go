@@ -24,6 +24,15 @@ import (
 
 type extensionTestDatabaseResolver struct{}
 
+type extensionProfileSource struct {
+	code      kernel.ProfileCode
+	blueprint *kernel.ProfileBlueprint
+}
+
+func (s extensionProfileSource) ProfileBlueprint(code kernel.ProfileCode) (*kernel.ProfileBlueprint, bool) {
+	return s.blueprint, code == s.code
+}
+
 func (extensionTestDatabaseResolver) MainModuleDatabase(
 	kernel.ModuleCode,
 ) (kernel.ModuleDatabase, bool) {
@@ -382,10 +391,15 @@ func TestResourceMetadataHasNoExtensionsWithoutProfileProvider(t *testing.T) {
 func TestResourceMetadataDescribesTemplateSlotsAndProfileWidgets(t *testing.T) {
 	compact := widget.NewView(corewidgets.Content, "compact", "Compact")
 	profile := kernel.Profile{
-		Code:    "widgets",
-		Modules: []kernel.ProfileModule{{Module: widgetMetadataModule{}}},
+		Code:       "widgets",
+		Name:       "Widgets",
+		Modules:    []kernel.ProfileModule{{Module: widgetMetadataModule{}}},
+		Params:     []field.Definition{{Key: "company", Type: field.TypeString, Label: "Company"}},
+		EditorTabs: []field.EditorTab{{Code: "main", Label: "Main", Fields: []string{"company"}}},
 		Templates: []template.Definition{{
 			Code: "page", Label: "Page",
+			Fields:     []field.Definition{{Key: "title", Type: field.TypeString, Label: "Title"}},
+			EditorTabs: []field.EditorTab{{Code: "content", Label: "Content", Fields: []string{"title"}}},
 			Layout: template.Layout{
 				Body: []template.Item{
 					template.Widget{Widget: corewidgets.Content},
@@ -424,7 +438,8 @@ func TestResourceMetadataDescribesTemplateSlotsAndProfileWidgets(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(metadata.Templates) != 1 || !metadata.Templates[0].SupportsResourceWidgets ||
-		len(metadata.Templates[0].WidgetAreas) != 2 {
+		len(metadata.Templates[0].WidgetAreas) != 2 || len(metadata.Templates[0].EditorTabs) != 1 ||
+		metadata.Templates[0].EditorTabs[0].Fields[0] != "title" {
 		t.Fatalf("templates = %#v", metadata.Templates)
 	}
 	if len(metadata.Widgets) != 1 || metadata.Widgets[0].Code != "feature_content" ||
@@ -458,6 +473,20 @@ func TestResourceMetadataDescribesTemplateSlotsAndProfileWidgets(t *testing.T) {
 		catalog.SettingsDefaults["catalog_mode"] != "standard" || len(catalog.ContentTypes) != 1 ||
 		catalog.ContentTypes[0].Code != "markdown" {
 		t.Fatalf("catalog metadata = %#v", catalog)
+	}
+
+	sites := &Sites{
+		authorization: authorization{authorizer: managementAuthorizer{denied: map[permission.Code]error{}}},
+		profiles:      []kernel.Profile{profile},
+		profileSource: extensionProfileSource{code: profile.Code, blueprint: blueprint},
+	}
+	profiles, err := sites.Profiles(context.Background(), security.User(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles.Items) != 1 || len(profiles.Items[0].EditorTabs) != 1 ||
+		profiles.Items[0].EditorTabs[0].Fields[0] != "company" {
+		t.Fatalf("profile metadata = %#v", profiles.Items)
 	}
 }
 

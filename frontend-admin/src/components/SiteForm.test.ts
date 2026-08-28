@@ -27,6 +27,9 @@ describe('SiteForm', () => {
               rules: ['min=2'],
             },
           ],
+			editor_tabs: [
+				{ code: 'main', label: 'Main', fields: ['title'] },
+			],
         },
       ],
     })
@@ -59,4 +62,22 @@ describe('SiteForm', () => {
       settings: { title: 'Demo' },
     })
   })
+
+	it('uses tabbed settings only while editing a site', async () => {
+		const createWrapper = shallowMount(SiteForm, {
+			props: { accessToken: 'token' },
+			global: { renderStubDefaultSlot: true },
+		})
+		await flushPromises()
+		expect(createWrapper.findComponent({ name: 'TabbedDynamicFieldsForm' }).exists()).toBe(false)
+		expect(createWrapper.findComponent({ name: 'DynamicFieldsForm' }).exists()).toBe(true)
+
+		const editWrapper = shallowMount(SiteForm, {
+			props: { accessToken: 'token', editing: true },
+			global: { renderStubDefaultSlot: true },
+		})
+		await flushPromises()
+		expect(editWrapper.findComponent({ name: 'TabbedDynamicFieldsForm' }).exists()).toBe(true)
+		expect(editWrapper.findComponent({ name: 'DynamicFieldsForm' }).exists()).toBe(false)
+	})
 })

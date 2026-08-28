@@ -62,7 +62,8 @@ describe('ResourceEditView schema transitions', () => {
             code: 'page',
             label: 'Страница',
             icon: 'document',
-					supports_resource_widgets: true,
+				editor_tabs: [{ code: 'content', label: 'Контент', fields: ['page_title'] }],
+				supports_resource_widgets: true,
 					widget_areas: ['body', 'sidebar'],
             fields: [
               {
@@ -78,7 +79,11 @@ describe('ResourceEditView schema transitions', () => {
             code: 'landing',
             label: 'Лендинг',
             icon: 'document',
-					supports_resource_widgets: false,
+				editor_tabs: [
+					{ code: 'content', label: 'Контент', fields: ['hero_title'] },
+					{ code: 'layout', label: 'Макет', fields: ['columns'] },
+				],
+				supports_resource_widgets: false,
 					widget_areas: [],
             fields: [
               {
@@ -118,6 +123,7 @@ describe('ResourceEditView schema transitions', () => {
 		expect(wrapper.findAllComponents({ name: 'ElTabPane' }).some(
 			(tab) => tab.props('name') === 'widgets',
 		)).toBe(true)
+		expect(wrapper.findComponent({ name: 'TabbedDynamicFieldsForm' }).exists()).toBe(true)
 
     const selects = wrapper.findAllComponents({ name: 'ElSelect' })
     expect(selects).toHaveLength(3)

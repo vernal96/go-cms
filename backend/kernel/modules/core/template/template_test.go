@@ -42,6 +42,41 @@ func TestResourceTemplateRequiresPersistentFieldType(t *testing.T) {
 	}
 }
 
+func TestResourceTemplateValidatesAndClonesEditorTabs(t *testing.T) {
+	definition := Definition{
+		Code:  "article",
+		Label: "Article",
+		Fields: []field.Definition{
+			{Key: "title", Type: field.TypeString, Label: "Title"},
+			{Key: "color", Type: field.TypeString, Label: "Color"},
+		},
+		EditorTabs: []field.EditorTab{
+			{Code: "content", Label: "Content", Fields: []string{"title"}},
+			{Code: "appearance", Label: "Appearance", Fields: []string{"color"}},
+		},
+	}
+	catalog, err := Compile([]Definition{definition}, resolver())
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition.EditorTabs[0].Fields[0] = "changed"
+	runtime, _ := catalog.Template("article")
+	exposed := runtime.Definition()
+	exposed.EditorTabs[0].Fields[0] = "mutated"
+	if frozen := runtime.Definition(); frozen.EditorTabs[0].Fields[0] != "title" {
+		t.Fatalf("editor tabs share mutable state: %#v", frozen.EditorTabs)
+	}
+
+	_, err = Compile([]Definition{{
+		Code: "invalid", Label: "Invalid",
+		Fields:     []field.Definition{{Key: "title", Type: field.TypeString, Label: "Title"}},
+		EditorTabs: []field.EditorTab{{Code: "main", Label: "Main"}},
+	}}, resolver())
+	if err == nil || !strings.Contains(err.Error(), "not assigned") {
+		t.Fatalf("invalid editor tabs error = %v", err)
+	}
+}
+
 func resolver() testResolver {
 	result := testResolver{}
 	for _, value := range field.StandardTypes() {
