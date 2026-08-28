@@ -38,6 +38,7 @@ describe('AdminPluginRegistry', () => {
 
   it('registers every Mail navigation target and icon', () => {
     expect(adminPluginRegistry.icon('mail')).toBeDefined()
+    expect(adminPluginRegistry.icon('forms')).toBeDefined()
     expect([
       'mail.templates',
       'mail.templates.create',
@@ -45,6 +46,10 @@ describe('AdminPluginRegistry', () => {
       'mail.send',
       'mail.history',
       'mail.history.detail',
+      'forms.list',
+      'forms.edit',
+      'forms.results',
+      'forms.results.detail',
     ].every((name) => adminPluginRegistry.hasRoute(name))).toBe(true)
   })
 })

@@ -93,6 +93,75 @@ func TestProfileRuntimeListsModuleRuntimesInProfileOrder(t *testing.T) {
 	}
 }
 
+type finalizingModule struct {
+	code  kernel.ModuleCode
+	order *[]kernel.ModuleCode
+	err   error
+}
+
+func (m finalizingModule) Code() kernel.ModuleCode { return m.code }
+
+func (m finalizingModule) Build(context.Context, kernel.ModuleContext) (kernel.ModuleRuntime, error) {
+	return &finalizingRuntime{code: m.code, order: m.order, err: m.err}, nil
+}
+
+type finalizingRuntime struct {
+	code  kernel.ModuleCode
+	order *[]kernel.ModuleCode
+	err   error
+}
+
+func (r *finalizingRuntime) ModuleCode() kernel.ModuleCode { return r.code }
+
+func (r *finalizingRuntime) FinalizeRuntimeBuild(context.Context) error {
+	*r.order = append(*r.order, r.code)
+	return r.err
+}
+
+func TestProfileRuntimeFinalizesModuleRuntimesInProfileOrder(t *testing.T) {
+	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{}, testRuntimeServices())
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := []kernel.ModuleCode{}
+	_, err = buildProfileRuntime(factory, context.Background(), kernel.Profile{
+		Code: "finalized",
+		Modules: []kernel.ProfileModule{
+			{Module: finalizingModule{code: "first", order: &order}},
+			{Module: registryModule{code: "ordinary"}},
+			{Module: finalizingModule{code: "second", order: &order}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(order) != 2 || order[0] != "first" || order[1] != "second" {
+		t.Fatalf("finalizer order = %#v", order)
+	}
+}
+
+func TestProfileRuntimeFinalizerFailureRejectsCandidate(t *testing.T) {
+	factory, err := kernel.NewProfileRuntimeFactory(emptyDatabaseResolver{}, testRuntimeServices())
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := []kernel.ModuleCode{}
+	_, err = buildProfileRuntime(factory, context.Background(), kernel.Profile{
+		Code: "finalizer-failure",
+		Modules: []kernel.ProfileModule{
+			{Module: finalizingModule{code: "first", order: &order, err: errors.New("seal failed")}},
+			{Module: finalizingModule{code: "second", order: &order}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "finalize module runtime \"first\"") ||
+		!strings.Contains(err.Error(), "seal failed") {
+		t.Fatalf("finalizer failure = %v", err)
+	}
+	if len(order) != 1 || order[0] != "first" {
+		t.Fatalf("finalizers after failure = %#v", order)
+	}
+}
+
 func TestProfileRuntimePassesImmutableSiteScopeToEveryModuleBuild(t *testing.T) {
 	factory, err := kernel.NewProfileRuntimeFactory(
 		emptyDatabaseResolver{},

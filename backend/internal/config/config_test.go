@@ -11,6 +11,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	"github.com/vernal96/go-cms/kernel/modules/forms"
 	"github.com/vernal96/go-cms/kernel/modules/mail"
 )
 
@@ -55,6 +56,9 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	t.Setenv("MAIL_HISTORY_RETENTION", "240h")
 	t.Setenv("MAIL_UPLOAD_STORAGE", "private-mail")
 	t.Setenv("MAIL_UPLOAD_PATH", "mail/uploads")
+	t.Setenv("FORMS_ACTION_MAX_ATTEMPTS", "4")
+	t.Setenv("FORMS_PUBLIC_RATE_LIMIT", "12")
+	t.Setenv("FORMS_DEVELOPMENT_CAPTCHA_TOKEN", "test-captcha")
 
 	config, err := configloader.Load[projectconfig.Config]("")
 	if err != nil {
@@ -97,6 +101,9 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	if config.Mail.Driver != "null" || config.Mail.HistoryRetention != 240*time.Hour || config.Mail.UploadStorage != "private-mail" || config.Mail.UploadPath != "mail/uploads" {
 		t.Fatalf("mail configuration = %#v", config.Mail)
 	}
+	if config.Forms.ActionMaxAttempts != 4 || config.Forms.PublicRateLimit != 12 || config.Forms.DevelopmentCaptchaExpectedToken != "test-captcha" {
+		t.Fatalf("forms configuration = %#v", config.Forms)
+	}
 
 	definition := config.Application()
 	if definition.Logger == nil {
@@ -105,16 +112,17 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	if definition.EventBus == nil {
 		t.Fatal("event bus factory is nil")
 	}
-	if len(definition.ModuleApplications) != 1 || definition.ModuleApplications[0].ModuleCode() != mail.ModuleCode {
+	if len(definition.ModuleApplications) != 2 || definition.ModuleApplications[0].ModuleCode() != mail.ModuleCode || definition.ModuleApplications[1].ModuleCode() != forms.ModuleCode {
 		t.Fatalf("module applications = %#v", definition.ModuleApplications)
 	}
 	if definition.MainDatabase.Connector.Code() != mainpostgres.ConnectionCode {
 		t.Fatalf("connection code = %q", definition.MainDatabase.Connector.Code())
 	}
-	if len(definition.MainDatabase.Adapters) != 3 ||
+	if len(definition.MainDatabase.Adapters) != 4 ||
 		definition.MainDatabase.Adapters[0].ModuleCode() != core.ModuleCode ||
 		definition.MainDatabase.Adapters[1].ModuleCode() != "seo" ||
-		definition.MainDatabase.Adapters[2].ModuleCode() != mail.ModuleCode {
+		definition.MainDatabase.Adapters[2].ModuleCode() != mail.ModuleCode ||
+		definition.MainDatabase.Adapters[3].ModuleCode() != forms.ModuleCode {
 		t.Fatalf("database adapters = %#v", definition.MainDatabase.Adapters)
 	}
 	if len(definition.Profiles) != 1 || definition.Profiles[0].Code != "dev" {
@@ -134,11 +142,12 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		definition.OutboxPublisher.CleanupMaxBatches != 40 {
 		t.Fatalf("outbox publisher definition = %#v", definition.OutboxPublisher)
 	}
-	if len(definition.Profiles[0].Modules) != 4 ||
+	if len(definition.Profiles[0].Modules) != 5 ||
 		definition.Profiles[0].Modules[0].Module.Code() != core.ModuleCode ||
 		definition.Profiles[0].Modules[1].Module.Code() != "seo" ||
 		definition.Profiles[0].Modules[2].Module.Code() != mail.ModuleCode ||
-		definition.Profiles[0].Modules[3].Module.Code() != admin.ModuleCode ||
+		definition.Profiles[0].Modules[3].Module.Code() != forms.ModuleCode ||
+		definition.Profiles[0].Modules[4].Module.Code() != admin.ModuleCode ||
 		len(definition.Profiles[0].Modules[0].Caches) != 2 ||
 		definition.Profiles[0].Modules[0].Caches[0].Alias != core.DurableCacheAlias ||
 		definition.Profiles[0].Modules[0].Caches[0].Code != projectcache.FilesystemCode ||

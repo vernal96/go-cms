@@ -17,6 +17,8 @@ import (
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	corepostgres "github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/user/adapters/argon2id"
+	formsmodule "github.com/vernal96/go-cms/kernel/modules/forms"
+	formspostgres "github.com/vernal96/go-cms/kernel/modules/forms/adapters/postgres"
 	mailmodule "github.com/vernal96/go-cms/kernel/modules/mail"
 	mailpostgres "github.com/vernal96/go-cms/kernel/modules/mail/adapters/postgres"
 	seopostgres "github.com/vernal96/go-cms/kernel/modules/seo/adapters/postgres"
@@ -33,6 +35,51 @@ type Config struct {
 	JWT      jwtsecurity.Config  `envconfig:"JWT"`
 	Outbox   OutboxConfig        `envconfig:"OUTBOX"`
 	Mail     MailConfig          `envconfig:"MAIL"`
+	Forms    FormsConfig         `envconfig:"FORMS"`
+}
+
+type FormsConfig struct {
+	ActionMaxAttempts               int           `envconfig:"ACTION_MAX_ATTEMPTS" default:"5"`
+	PublicMaxRequestSize            int64         `envconfig:"PUBLIC_MAX_REQUEST_SIZE" default:"26214400"`
+	PublicMaxScalarFields           int           `envconfig:"PUBLIC_MAX_SCALAR_FIELDS" default:"100"`
+	PublicMaxScalarValueSize        int64         `envconfig:"PUBLIC_MAX_SCALAR_VALUE_SIZE" default:"65536"`
+	PublicMaxUploadFileSize         int64         `envconfig:"PUBLIC_MAX_UPLOAD_FILE_SIZE" default:"20971520"`
+	PublicMaxUploadCount            int           `envconfig:"PUBLIC_MAX_UPLOAD_COUNT" default:"10"`
+	PublicMaxTotalUploadBytes       int64         `envconfig:"PUBLIC_MAX_TOTAL_UPLOAD_BYTES" default:"26214400"`
+	PublicSubmissionTimeout         time.Duration `envconfig:"PUBLIC_SUBMISSION_TIMEOUT" default:"30s"`
+	PublicRateLimit                 int           `envconfig:"PUBLIC_RATE_LIMIT" default:"20"`
+	PublicRateWindow                time.Duration `envconfig:"PUBLIC_RATE_WINDOW" default:"1m"`
+	PublicRateEntries               int           `envconfig:"PUBLIC_RATE_ENTRIES" default:"10000"`
+	StoreClientAddress              bool          `envconfig:"STORE_CLIENT_ADDRESS" default:"false"`
+	SpoolEnabled                    bool          `envconfig:"SPOOL_ENABLED" default:"true"`
+	SpoolTTL                        time.Duration `envconfig:"SPOOL_TTL" default:"24h"`
+	SpoolCleanupInterval            time.Duration `envconfig:"SPOOL_CLEANUP_INTERVAL" default:"1h"`
+	SpoolCleanupBatch               int           `envconfig:"SPOOL_CLEANUP_BATCH" default:"100"`
+	DefaultCaptchaProvider          string        `envconfig:"DEFAULT_CAPTCHA_PROVIDER" default:"development"`
+	DevelopmentCaptchaExpectedToken string        `envconfig:"DEVELOPMENT_CAPTCHA_TOKEN" default:"development-captcha"`
+}
+
+func (c FormsConfig) Application() formsmodule.Application {
+	return formsmodule.Application{Providers: []formsmodule.CaptchaProvider{
+		formsmodule.DevelopmentCaptchaProvider{ExpectedToken: c.DevelopmentCaptchaExpectedToken},
+	}}
+}
+
+func (c FormsConfig) ModuleConfig() formsmodule.Config {
+	return formsmodule.Config{
+		ActionMaxAttempts: c.ActionMaxAttempts,
+		Public: formsmodule.PublicLimits{
+			MaxRequestSize: c.PublicMaxRequestSize, MaxScalarFields: c.PublicMaxScalarFields,
+			MaxScalarValueSize: c.PublicMaxScalarValueSize, MaxUploadFileSize: c.PublicMaxUploadFileSize,
+			MaxUploadCount: c.PublicMaxUploadCount, MaxTotalUploadBytes: c.PublicMaxTotalUploadBytes,
+			SubmissionTimeout: c.PublicSubmissionTimeout, RateLimit: c.PublicRateLimit,
+			RateWindow: c.PublicRateWindow, RateEntries: c.PublicRateEntries,
+			StoreClientAddress: c.StoreClientAddress,
+		},
+		SpoolEnabled: c.SpoolEnabled, SpoolTTL: c.SpoolTTL,
+		SpoolCleanupInterval: c.SpoolCleanupInterval, SpoolCleanupBatch: c.SpoolCleanupBatch,
+		DefaultCaptchaProvider: c.DefaultCaptchaProvider,
+	}
 }
 
 type MailConfig struct {
@@ -149,6 +196,7 @@ func (c Config) Application() appkernel.Definition {
 				corepostgres.DatabaseFactory{},
 				seopostgres.DatabaseFactory{},
 				mailpostgres.DatabaseFactory{},
+				formspostgres.DatabaseFactory{},
 			},
 		},
 		Filesystems: []filesystem.Factory{
@@ -158,8 +206,9 @@ func (c Config) Application() appkernel.Definition {
 		Caches: c.Caches.Factories(),
 		ModuleApplications: []kernel.ModuleApplication{
 			c.Mail.Application(),
+			c.Forms.Application(),
 		},
-		Profiles:        []kernel.Profile{dev.ProfileWithMail(c.Mail.ModuleConfig())},
+		Profiles:        []kernel.Profile{dev.ProfileWithMailAndForms(c.Mail.ModuleConfig(), c.Forms.ModuleConfig())},
 		PasswordHasher:  argon2id.Factory{},
 		MaxUploadSize:   c.Files.MaxUploadSize,
 		UploadTimeout:   c.Files.UploadTimeout,

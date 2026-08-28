@@ -72,6 +72,15 @@ type ModuleRuntime interface {
 	ModuleCode() ModuleCode
 }
 
+// RuntimeBuildFinalizer is an optional module-runtime capability invoked after
+// every module in the profile has been built. It lets contributor modules
+// register into an earlier dependency during Build while ensuring the
+// dependency becomes immutable before the completed ProfileRuntime is used.
+// Finalizers run deterministically in profile order.
+type RuntimeBuildFinalizer interface {
+	FinalizeRuntimeBuild(context.Context) error
+}
+
 type RuntimeTransitionReason string
 
 var ErrRuntimeTransitionBlocked = errors.New("runtime transition is blocked")
@@ -193,6 +202,7 @@ func cloneRuntimeSettingValue(value any) any {
 
 type DefinitionRegistry interface {
 	FieldType(field.TypeCode) (field.Type, bool)
+	FieldTypes() []field.TypeCode
 	ResourceType(resourcetype.Code) (resourcetype.Type, bool)
 	ResourceTypes() []resourcetype.Code
 	Permission(permission.Code) (permission.Definition, bool)
@@ -253,6 +263,15 @@ func (r *RuntimeRegistry) FieldType(
 ) (field.Type, bool) {
 	fieldType, exists := r.fieldTypes[code]
 	return fieldType, exists
+}
+
+func (r *RuntimeRegistry) FieldTypes() []field.TypeCode {
+	result := make([]field.TypeCode, 0, len(r.fieldTypes))
+	for code := range r.fieldTypes {
+		result = append(result, code)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
 }
 
 func (r *RuntimeRegistry) ResourceType(
@@ -1070,6 +1089,21 @@ func (b *ProfileBlueprint) Build(
 				},
 				Widgets: provider.Widgets(),
 			})
+		}
+	}
+
+	for _, moduleRuntime := range registry.Modules() {
+		finalizer, ok := moduleRuntime.(RuntimeBuildFinalizer)
+		if !ok {
+			continue
+		}
+		if err := finalizer.FinalizeRuntimeBuild(ctx); err != nil {
+			return nil, fmt.Errorf(
+				"finalize module runtime %q for profile %q: %w",
+				moduleRuntime.ModuleCode(),
+				profile.Code,
+				err,
+			)
 		}
 	}
 

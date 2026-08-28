@@ -113,6 +113,8 @@ The form label is public presentation; ResultLabel is admin-result presentation.
 
 Field Code is unique inside a Form and remains the stable semantic key used for submitted values, Mail action mappings and result snapshots.
 
+The final runtime field registry is the source of available builder types. Do not replace it with a Forms-owned closed list. Persist type-specific options as JSON at the Forms HTTP/PostgreSQL boundary, reconstruct built-in typed options where required, and preserve contributed-module option objects for their own field compiler. A non-transient field is accepted only when its compiled value implements valid `field.StorageValueType` semantics; never stringify an unsupported value to force persistence.
+
 ## Forms-specific field types
 
 Forms registers Forms-owned field types through the existing module field registry.
@@ -425,6 +427,8 @@ Forms includes the built-in Mail action for v1 and therefore explicitly depends 
 The Mail action references a MailTemplate by stable `template_code`, never by DB ID, and resolves the site-scoped Mail service from the same SiteRuntime/module dependency.
 
 Other modules may contribute Forms action types by explicitly depending on Forms and registering an ActionType through a narrow Forms registration interface during SiteRuntime/module build. Registration is site-runtime scoped, duplicate action codes are errors, and runtime use must observe a stable/sealed registry after build. Do not make Forms import or enumerate concrete contributor modules.
+
+Contributor modules register during their `Build`; Forms seals the per-site registry from `RuntimeBuildFinalizer` only after every profile module has built. Late registration is an error. Persisted actions whose contributor later disappears stay stored and are exposed to admin metadata as unavailable rather than breaking runtime construction.
 
 Do not use mutable global action registries.
 

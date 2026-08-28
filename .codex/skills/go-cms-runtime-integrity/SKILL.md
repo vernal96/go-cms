@@ -37,6 +37,8 @@ Prepare and validate the complete candidate state before publishing it. If prepa
 
 HTTP artifacts may be compiled once per site, but transport/server code should own transport-specific handler state. Runtime and its required HTTP artifact must switch coherently.
 
+When later profile modules explicitly contribute into an earlier dependency during `Build`, keep that registry site-scoped and unpublished. A generic `RuntimeBuildFinalizer` may seal/validate it only after all modules have built; invoke finalizers deterministically in profile order and fail the candidate runtime before publication if any finalizer fails. Do not use a global mutable registry or seal the dependency before its declared contributors run.
+
 ## Runtime deactivation transitions
 
 Runtime-owned work that must be drained or cleaned before a SiteRuntime is removed participates through the generic kernel runtime-transition capability. Keep feature-specific behavior out of the Site catalog.

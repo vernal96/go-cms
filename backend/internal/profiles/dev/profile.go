@@ -13,6 +13,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
+	"github.com/vernal96/go-cms/kernel/modules/forms"
 	"github.com/vernal96/go-cms/kernel/modules/mail"
 	"github.com/vernal96/go-cms/kernel/modules/seo"
 )
@@ -55,13 +56,15 @@ var Profile = kernel.Profile{
 	},
 }
 
-func ProfileWithMail(config mail.Config) kernel.Profile {
+func ProfileWithMailAndForms(mailConfig mail.Config, formsConfig forms.Config) kernel.Profile {
 	result := Profile
 	result.Modules = append([]kernel.ProfileModule(nil), Profile.Modules...)
-	mailModule := kernel.ProfileModule{Module: mail.Module{}, Config: config, Filesystems: []filesystem.Binding{{Alias: mail.SpoolFilesystemAlias, Code: corefiles.PrivateCode}}}
+	mailModule := kernel.ProfileModule{Module: mail.Module{}, Config: mailConfig, Filesystems: []filesystem.Binding{{Alias: mail.SpoolFilesystemAlias, Code: corefiles.PrivateCode}}}
+	formsModule := kernel.ProfileModule{Module: forms.Module{}, Config: formsConfig, Filesystems: []filesystem.Binding{{Alias: forms.SpoolFilesystemAlias, Code: corefiles.PrivateCode}}}
 	adminIndex := len(result.Modules) - 1
-	result.Modules = append(result.Modules, kernel.ProfileModule{})
-	copy(result.Modules[adminIndex+1:], result.Modules[adminIndex:])
+	result.Modules = append(result.Modules, kernel.ProfileModule{}, kernel.ProfileModule{})
+	copy(result.Modules[adminIndex+2:], result.Modules[adminIndex:])
 	result.Modules[adminIndex] = mailModule
+	result.Modules[adminIndex+1] = formsModule
 	return result
 }

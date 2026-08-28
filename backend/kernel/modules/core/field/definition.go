@@ -65,8 +65,8 @@ type EditorCode string
 // VisibleWhen is a small declarative condition for dynamic forms. It is not
 // an expression language: a field is shown when another field equals Value.
 type VisibleWhen struct {
-	Field string
-	Value any
+	Field string `json:"field"`
+	Value any    `json:"value"`
 }
 
 type IntegerOptions struct {

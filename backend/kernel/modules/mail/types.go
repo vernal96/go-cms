@@ -238,6 +238,17 @@ type QueueInput struct {
 	Origin       Origin
 }
 
+// IntegrationTemplateMetadata is the narrow, site-scoped template contract
+// used by trusted feature modules while configuring semantic integrations.
+// It intentionally excludes rendered content, recipients and persistence
+// details that Forms and similar modules do not own.
+type IntegrationTemplateMetadata struct {
+	Code      string             `json:"code"`
+	Name      string             `json:"name"`
+	Enabled   bool               `json:"enabled"`
+	Variables []field.Definition `json:"variables"`
+}
+
 type TransientAttachment struct {
 	Filename string
 	MIMEType string

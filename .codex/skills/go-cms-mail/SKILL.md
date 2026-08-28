@@ -76,6 +76,8 @@ Name -> human label
 
 Other modules reference stable template codes rather than DB IDs.
 
+Programmatic integrations use the current site-scoped Mail service. Expose only permission-checked, non-secret template metadata needed to validate configuration (Code, Name, Enabled and variable definitions), then queue through `QueueByCode`; never hand another module a repository, arbitrary SiteID, cross-site template ID, rendered secrets or transport internals. Transient attachment streams are copied into Mail's own spool during queueing, so the caller retains no Mail spool ownership.
+
 Do NOT introduce MailTemplate version history, optimistic template versions, `expected_template_version`, preview fingerprints or similar concurrency machinery unless explicitly requested later.
 
 A Preview is informational. Send always reloads the current authoritative template/site data and renders the current state again. If the template or site changed between Preview and Send, sending the newer current state is acceptable product behavior.

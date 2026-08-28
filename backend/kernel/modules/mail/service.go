@@ -14,6 +14,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/job"
 	"github.com/vernal96/go-cms/kernel/messageid"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/permission"
@@ -98,6 +99,23 @@ func (s *Service) Template(ctx context.Context, actor security.Actor, id Templat
 		return Template{}, err
 	}
 	return s.repository.TemplateByID(ctx, s.siteID, id)
+}
+
+// IntegrationTemplate returns safe metadata for another same-site module's
+// admin configuration flow. The initiating actor must be allowed to read Mail
+// templates; automatic execution later uses the already-trusted template Code.
+func (s *Service) IntegrationTemplate(ctx context.Context, actor security.Actor, code string) (IntegrationTemplateMetadata, error) {
+	if err := s.authorizer.Check(ctx, actor, TemplateReadPermission); err != nil {
+		return IntegrationTemplateMetadata{}, err
+	}
+	template, err := s.repository.TemplateByCode(ctx, s.siteID, strings.TrimSpace(code))
+	if err != nil {
+		return IntegrationTemplateMetadata{}, err
+	}
+	return IntegrationTemplateMetadata{
+		Code: template.Code, Name: template.Name, Enabled: template.Enabled,
+		Variables: field.CloneDefinitions(template.Variables),
+	}, nil
 }
 
 func (s *Service) SendTemplates(ctx context.Context, actor security.Actor, query PageQuery) (TemplatePage, error) {
