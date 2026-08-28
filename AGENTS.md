@@ -96,6 +96,7 @@ Use the smallest set of skills that covers the actual task. A workflow skill suc
 - `go-cms-events-jobs`: domain events, transactional outbox, EventBus publishing/consumption, application background workers/jobs, retries, delivery semantics and idempotency.
 - `go-cms-templating`: reusable `{{...}}` interpolation, variable allowlists/resolvers, context-aware rendering/escaping and migration of feature-specific template engines such as SEO to shared kernel templating.
 - `go-cms-mail`: mail templates, manual/automatic sending, preview/render snapshots, SMTP/null/log transports, mail jobs, attachments, delivery attempts/history, retention, permissions and mail admin UI/API.
+- `go-cms-forms`: site-owned forms, form fields/elements/layout trees, public submission, results/values/statuses, triggers/actions/action executions, CAPTCHA/consent/upload fields, transient submission spool, Mail actions and Forms admin UI/API.
 - `go-cms-architecture-review`: architecture/refactor/PR/commit review.
 - `go-cms-admin-ui`: backend-driven admin extensibility/navigation/frontend plugin work.
 - `go-cms-administration`: global system administration reserved for the protected built-in `admin` group, including administration navigation/pages, destructive maintenance and global cleanup operations.
