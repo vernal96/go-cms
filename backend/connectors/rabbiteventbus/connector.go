@@ -264,57 +264,84 @@ func (c *Connector) Consume(
 	}()
 
 	subscription = eventbusutil.CloneSubscription(subscription)
-	consumer, err := c.openConsumer(consumeContext, subscription)
-	if err != nil {
-		return fmt.Errorf(
-			"open RabbitMQ event bus consumer group %q: %w",
-			subscription.Group,
-			err,
-		)
-	}
-	defer func() { _ = consumer.Close() }()
-
+	consecutiveFailures := 0
 	for {
-		message, err := consumer.Next(consumeContext)
+		consumer, err := c.openConsumer(consumeContext, subscription)
 		if err != nil {
-			requeueErr := consumer.Requeue()
 			if consumeContext.Err() != nil {
 				return nil
 			}
-			return errors.Join(
-				fmt.Errorf(
-					"consume RabbitMQ event for group %q: %w",
-					subscription.Group,
-					err,
-				),
-				requeueErr,
+			err = fmt.Errorf(
+				"open RabbitMQ event bus consumer group %q: %w",
+				subscription.Group,
+				err,
+			)
+		} else {
+			var processed bool
+			processed, err = consumeRabbitSession(
+				consumeContext,
+				consumer,
+				subscription,
+				handler,
+				c.config.ConsumerRetryDelay,
+			)
+			_ = consumer.Close()
+			if consumeContext.Err() != nil {
+				return nil
+			}
+			if processed {
+				consecutiveFailures = 0
+			}
+		}
+		consecutiveFailures++
+		if consecutiveFailures >= c.config.ReconnectAttempts {
+			return err
+		}
+		if !waitForRabbitRetry(consumeContext, c.config.ReconnectDelay) {
+			return nil
+		}
+	}
+}
+
+func consumeRabbitSession(
+	ctx context.Context,
+	consumer consumerBackend,
+	subscription eventbus.Subscription,
+	handler eventbus.Handler,
+	retryDelay time.Duration,
+) (bool, error) {
+	processed := false
+	for {
+		message, err := consumer.Next(ctx)
+		if err != nil {
+			return processed, errors.Join(
+				fmt.Errorf("consume RabbitMQ event for group %q: %w", subscription.Group, err),
+				consumer.Requeue(),
 			)
 		}
-
-		handled := eventbusutil.HandleWithRetry(
-			consumeContext,
-			c.config.ConsumerRetryDelay,
-			message,
-			handler,
-		)
-		if !handled {
-			_ = consumer.Requeue()
-			return nil
-		}
-		if consumeContext.Err() != nil {
-			_ = consumer.Requeue()
-			return nil
+		handled := eventbusutil.HandleWithRetry(ctx, retryDelay, message, handler)
+		if !handled || ctx.Err() != nil {
+			return processed, errors.Join(ctx.Err(), consumer.Requeue())
 		}
 		if err := consumer.Ack(); err != nil {
-			if consumeContext.Err() != nil {
-				return nil
-			}
-			return fmt.Errorf(
+			return processed, fmt.Errorf(
 				"ack RabbitMQ event for group %q: %w",
 				subscription.Group,
 				err,
 			)
 		}
+		processed = true
+	}
+}
+
+func waitForRabbitRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

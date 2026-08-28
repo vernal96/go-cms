@@ -72,8 +72,12 @@ func TestFileValidationErrorPreservesAuthorizationAndConflicts(t *testing.T) {
 			t.Fatalf("error %v became %v", expected, actual)
 		}
 	}
-	if actual := fileValidationError(errors.New("bad name")); !errors.Is(actual, ErrValidation) {
+	if actual := fileValidationError(file.ErrInvalidInput); !errors.Is(actual, ErrValidation) {
 		t.Fatalf("invalid input = %v", actual)
+	}
+	internal := errors.New("storage unavailable")
+	if actual := fileValidationError(internal); !errors.Is(actual, internal) || errors.Is(actual, ErrValidation) {
+		t.Fatalf("internal error = %v", actual)
 	}
 }
 

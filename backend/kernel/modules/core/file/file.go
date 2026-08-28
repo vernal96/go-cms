@@ -23,6 +23,7 @@ var (
 	ErrStorageMismatch  = errors.New("file storage mismatch")
 	ErrUnauthorized     = errors.New("file delivery is unauthorized")
 	ErrInUse            = errors.New("file is in use")
+	ErrInvalidInput     = errors.New("invalid file input")
 )
 
 type ItemKind string

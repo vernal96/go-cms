@@ -239,11 +239,11 @@ func (s *service) EnsureFolderPath(ctx context.Context, actor security.Actor, st
 func normalizeFolderPath(folderPath string) (string, error) {
 	raw := strings.TrimSpace(folderPath)
 	if raw == "" || path.IsAbs(raw) || strings.Contains(raw, "\\") {
-		return "", errors.New("file folder path is invalid")
+		return "", fmt.Errorf("%w: file folder path is invalid", ErrInvalidInput)
 	}
 	normalized := strings.Trim(raw, "/")
 	if normalized == "" || path.Clean(normalized) != normalized || normalized == ".." || strings.HasPrefix(normalized, "../") {
-		return "", errors.New("file folder path is invalid")
+		return "", fmt.Errorf("%w: file folder path is invalid", ErrInvalidInput)
 	}
 	return normalized, nil
 }
@@ -354,7 +354,7 @@ func (s *service) GetFolder(
 		return Folder{}, err
 	}
 	if id <= 0 {
-		return Folder{}, errors.New("file folder id is invalid")
+		return Folder{}, fmt.Errorf("%w: file folder id is invalid", ErrInvalidInput)
 	}
 	result, err := s.repository.FolderByID(ctx, id)
 	if err != nil {
@@ -648,7 +648,7 @@ func (s *service) MoveFolder(
 		return Folder{}, err
 	}
 	if input.ID <= 0 {
-		return Folder{}, errors.New("file folder id is invalid")
+		return Folder{}, fmt.Errorf("%w: file folder id is invalid", ErrInvalidInput)
 	}
 	item, err := s.repository.FolderByID(ctx, input.ID)
 	if err != nil {
@@ -690,7 +690,7 @@ func (s *service) RenameFile(
 		return File{}, err
 	}
 	if input.ID <= 0 {
-		return File{}, errors.New("file id is invalid")
+		return File{}, fmt.Errorf("%w: file id is invalid", ErrInvalidInput)
 	}
 	name, err := normalizeName(input.Name)
 	if err != nil {
@@ -719,7 +719,7 @@ func (s *service) RenameFolder(
 		return Folder{}, err
 	}
 	if input.ID <= 0 {
-		return Folder{}, errors.New("file folder id is invalid")
+		return Folder{}, fmt.Errorf("%w: file folder id is invalid", ErrInvalidInput)
 	}
 	name, err := normalizeName(input.Name)
 	if err != nil {
@@ -748,7 +748,7 @@ func (s *service) MoveItems(
 		return nil, nil, err
 	}
 	if len(input.Items) == 0 {
-		return nil, nil, errors.New("filesystem move items are empty")
+		return nil, nil, fmt.Errorf("%w: filesystem move items are empty", ErrInvalidInput)
 	}
 	if err := validateItemReferences(input.Items); err != nil {
 		return nil, nil, err
@@ -788,7 +788,7 @@ func (s *service) DeleteItems(
 		return err
 	}
 	if len(input.Items) == 0 {
-		return errors.New("filesystem delete items are empty")
+		return fmt.Errorf("%w: filesystem delete items are empty", ErrInvalidInput)
 	}
 	if err := validateItemReferences(input.Items); err != nil {
 		return err
@@ -815,7 +815,7 @@ func (s *service) DeleteFile(
 		return err
 	}
 	if id <= 0 {
-		return errors.New("file id is invalid")
+		return fmt.Errorf("%w: file id is invalid", ErrInvalidInput)
 	}
 	if err := s.repository.DeleteFile(ctx, id, s.deletePhysical); err != nil {
 		return fmt.Errorf("delete file %d: %w", id, err)
@@ -835,7 +835,7 @@ func (s *service) DeleteFolder(
 		return err
 	}
 	if id <= 0 {
-		return errors.New("file folder id is invalid")
+		return fmt.Errorf("%w: file folder id is invalid", ErrInvalidInput)
 	}
 	if err := s.repository.DeleteFolder(ctx, id, s.deletePhysical); err != nil {
 		return fmt.Errorf("delete file folder %d: %w", id, err)
@@ -925,7 +925,7 @@ func (s *service) deletePhysical(
 
 func (s *service) file(ctx context.Context, id ID) (File, error) {
 	if id <= 0 {
-		return File{}, errors.New("file id is invalid")
+		return File{}, fmt.Errorf("%w: file id is invalid", ErrInvalidInput)
 	}
 	item, err := s.repository.FileByID(ctx, id)
 	if err != nil {
@@ -936,7 +936,7 @@ func (s *service) file(ctx context.Context, id ID) (File, error) {
 
 func (s *service) disk(code filesystem.Code) (filesystem.Disk, error) {
 	if code == "" {
-		return nil, errors.New("file storage is empty")
+		return nil, fmt.Errorf("%w: file storage is empty", ErrInvalidInput)
 	}
 	disk, exists := s.disks.Disk(code)
 	if !exists {
@@ -957,10 +957,10 @@ func validateItemReferences(items []ItemReference) error {
 	seen := make(map[ItemReference]struct{}, len(items))
 	for _, item := range items {
 		if item.ID <= 0 || (item.Kind != ItemFile && item.Kind != ItemFolder) {
-			return errors.New("filesystem item reference is invalid")
+			return fmt.Errorf("%w: filesystem item reference is invalid", ErrInvalidInput)
 		}
 		if _, exists := seen[item]; exists {
-			return errors.New("filesystem item reference is duplicated")
+			return fmt.Errorf("%w: filesystem item reference is duplicated", ErrInvalidInput)
 		}
 		seen[item] = struct{}{}
 	}
@@ -985,13 +985,13 @@ func normalizeName(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	switch {
 	case value == "":
-		return "", errors.New("file name is empty")
+		return "", fmt.Errorf("%w: file name is empty", ErrInvalidInput)
 	case value == ".", value == "..":
-		return "", errors.New("file name is reserved")
+		return "", fmt.Errorf("%w: file name is reserved", ErrInvalidInput)
 	case strings.Contains(value, "/"):
-		return "", errors.New("file name contains a path separator")
+		return "", fmt.Errorf("%w: file name contains a path separator", ErrInvalidInput)
 	case strings.ContainsRune(value, '\x00'):
-		return "", errors.New("file name contains NUL")
+		return "", fmt.Errorf("%w: file name contains NUL", ErrInvalidInput)
 	default:
 		return value, nil
 	}

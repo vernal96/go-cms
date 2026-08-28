@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -66,6 +68,11 @@ type objectAPI interface {
 		*awss3.DeleteObjectInput,
 		...func(*awss3.Options),
 	) (*awss3.DeleteObjectOutput, error)
+	ListObjectsV2(
+		context.Context,
+		*awss3.ListObjectsV2Input,
+		...func(*awss3.Options),
+	) (*awss3.ListObjectsV2Output, error)
 }
 
 type presignAPI interface {
@@ -216,10 +223,15 @@ func (c *Connector) put(
 	if err != nil {
 		return err
 	}
+	body, cleanup, err := seekableBody(ctx, source)
+	if err != nil {
+		return fmt.Errorf("prepare s3 object %q body: %w", key, err)
+	}
+	defer cleanup()
 	input := &awss3.PutObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
-		Body:   source,
+		Body:   body,
 	}
 	if putNew {
 		input.IfNoneMatch = aws.String("*")
@@ -235,6 +247,45 @@ func (c *Connector) put(
 		return fmt.Errorf("put s3 object %q: %w", key, err)
 	}
 	return nil
+}
+
+func seekableBody(
+	ctx context.Context,
+	source io.Reader,
+) (io.Reader, func(), error) {
+	if seeker, ok := source.(io.ReadSeeker); ok {
+		return seeker, func() {}, nil
+	}
+
+	temporary, err := os.CreateTemp("", "go-cms-s3-upload-*")
+	if err != nil {
+		return nil, nil, fmt.Errorf("create temporary upload file: %w", err)
+	}
+	cleanup := func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporary.Name())
+	}
+	if _, err := io.Copy(temporary, contextReader{ctx: ctx, source: source}); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("spool upload stream: %w", err)
+	}
+	if _, err := temporary.Seek(0, io.SeekStart); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("rewind upload stream: %w", err)
+	}
+	return temporary, cleanup, nil
+}
+
+type contextReader struct {
+	ctx    context.Context
+	source io.Reader
+}
+
+func (r contextReader) Read(target []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.source.Read(target)
 }
 
 func (c *Connector) Open(
@@ -275,6 +326,134 @@ func (c *Connector) Delete(ctx context.Context, key string) error {
 	}); err != nil {
 		return fmt.Errorf("delete s3 object %q: %w", key, err)
 	}
+	return nil
+}
+
+func (c *Connector) WalkPrefix(
+	ctx context.Context,
+	prefix string,
+	visit func(string) error,
+) error {
+	if visit == nil {
+		return errors.New("s3 prefix walker visitor is nil")
+	}
+	scan, err := c.OpenPrefixScan(ctx, prefix)
+	if err != nil {
+		return err
+	}
+	defer scan.Close()
+	for {
+		page, err := scan.Next(ctx, 1000)
+		if err != nil {
+			return err
+		}
+		for _, key := range page.Keys {
+			if err := visit(key); err != nil {
+				return err
+			}
+		}
+		if page.Done {
+			return nil
+		}
+	}
+}
+
+func (c *Connector) OpenPrefixScan(
+	ctx context.Context,
+	prefix string,
+) (filesystem.PrefixScan, error) {
+	if ctx == nil {
+		return nil, errors.New("s3 prefix-scan context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	normalizedPrefix := strings.Trim(prefix, "/")
+	if normalizedPrefix == "" {
+		return nil, errors.New("s3 prefix-scan prefix is empty")
+	}
+	objectPrefix, err := c.objectKey(normalizedPrefix)
+	if err != nil {
+		return nil, err
+	}
+	stripPrefix := ""
+	if c.prefix != "" {
+		stripPrefix = c.prefix + "/"
+	}
+	return &prefixScan{
+		client:       c.client,
+		bucket:       c.bucket,
+		objectPrefix: objectPrefix + "/",
+		stripPrefix:  stripPrefix,
+	}, nil
+}
+
+type prefixScan struct {
+	mu           sync.Mutex
+	client       objectAPI
+	bucket       string
+	objectPrefix string
+	stripPrefix  string
+	continuation *string
+	done         bool
+}
+
+func (s *prefixScan) Next(
+	ctx context.Context,
+	limit int,
+) (filesystem.PrefixScanPage, error) {
+	if ctx == nil {
+		return filesystem.PrefixScanPage{}, errors.New("s3 prefix-scan next context is nil")
+	}
+	if limit < 1 {
+		return filesystem.PrefixScanPage{}, errors.New("s3 prefix-scan limit is invalid")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.done {
+		return filesystem.PrefixScanPage{Done: true}, nil
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	result, err := s.client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+		Bucket:            aws.String(s.bucket),
+		Prefix:            aws.String(s.objectPrefix),
+		ContinuationToken: s.continuation,
+		MaxKeys:           aws.Int32(int32(limit)),
+	})
+	if err != nil {
+		return filesystem.PrefixScanPage{}, fmt.Errorf("scan s3 prefix %q: %w", s.objectPrefix, err)
+	}
+	page := filesystem.PrefixScanPage{Keys: make([]string, 0, len(result.Contents))}
+	for _, object := range result.Contents {
+		key := aws.ToString(object.Key)
+		if s.stripPrefix != "" {
+			var exists bool
+			key, exists = strings.CutPrefix(key, s.stripPrefix)
+			if !exists {
+				return filesystem.PrefixScanPage{}, fmt.Errorf("s3 scan returned key outside connector prefix: %q", key)
+			}
+		}
+		page.Keys = append(page.Keys, key)
+	}
+	if !aws.ToBool(result.IsTruncated) {
+		s.done = true
+		page.Done = true
+		return page, nil
+	}
+	if aws.ToString(result.NextContinuationToken) == "" {
+		return filesystem.PrefixScanPage{}, errors.New("s3 prefix scan omitted continuation token")
+	}
+	s.continuation = result.NextContinuationToken
+	return page, nil
+}
+
+func (s *prefixScan) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.done = true
+	s.continuation = nil
 	return nil
 }
 
@@ -392,5 +571,7 @@ func apiErrorCode(err error, codes ...string) bool {
 
 var _ filesystem.Disk = (*Connector)(nil)
 var _ filesystem.OverwriteDisk = (*Connector)(nil)
+var _ filesystem.PrefixWalker = (*Connector)(nil)
+var _ filesystem.PrefixScannerProvider = (*Connector)(nil)
 var _ filesystem.KeyDistributionProvider = (*Connector)(nil)
 var _ filesystem.Factory = Factory{}

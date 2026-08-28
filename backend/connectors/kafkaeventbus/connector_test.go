@@ -233,31 +233,35 @@ func TestConnectorDoesNotCommitWhenCanceledDuringHandling(t *testing.T) {
 	}
 }
 
-func TestConnectorReturnsFatalConsumerError(t *testing.T) {
-	consumer := &fakeConsumer{nextErr: errors.New("broker fetch failed")}
+func TestConnectorReopensConsumerAfterBrokerError(t *testing.T) {
+	failed := &fakeConsumer{nextErr: errors.New("broker fetch failed")}
+	recovered := &fakeConsumer{messages: []eventbus.Message{{Topic: "topic", Body: []byte("recovered")}}}
+	var opened atomic.Int32
 	connector := newConnector(
 		validConfig(),
 		&fakeProducer{},
 		func(eventbus.Subscription) (consumerBackend, error) {
-			return consumer, nil
+			if opened.Add(1) == 1 {
+				return failed, nil
+			}
+			return recovered, nil
 		},
 	)
-	err := connector.Consume(
-		context.Background(),
-		eventbus.Subscription{
-			Topics: []string{"topic"},
-			Group:  "group",
-		},
-		func(context.Context, eventbus.Message) error { return nil },
-	)
-	if err == nil || !strings.Contains(err.Error(), "broker fetch failed") {
-		t.Fatalf("consumer error = %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	err := connector.Consume(ctx, eventbus.Subscription{Topics: []string{"topic"}, Group: "group"}, func(_ context.Context, message eventbus.Message) error {
+		if string(message.Body) != "recovered" {
+			t.Fatalf("message body = %q", message.Body)
+		}
+		cancel()
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if consumer.releases.Load() != 1 || !consumer.closed.Load() {
+	if opened.Load() != 2 || failed.releases.Load() != 1 || !failed.closed.Load() || recovered.releases.Load() != 1 || !recovered.closed.Load() {
 		t.Fatalf(
-			"releases=%d closed=%t",
-			consumer.releases.Load(),
-			consumer.closed.Load(),
+			"opened=%d failed releases=%d closed=%t recovered releases=%d closed=%t",
+			opened.Load(), failed.releases.Load(), failed.closed.Load(), recovered.releases.Load(), recovered.closed.Load(),
 		)
 	}
 }

@@ -277,7 +277,9 @@ func fileValidationError(err error) error {
 		errors.Is(err, file.ErrInvalidTree),
 		errors.Is(err, file.ErrInUse):
 		return err
-	default:
+	case errors.Is(err, file.ErrInvalidInput):
 		return fmt.Errorf("%w: request data is invalid", ErrValidation)
+	default:
+		return err
 	}
 }

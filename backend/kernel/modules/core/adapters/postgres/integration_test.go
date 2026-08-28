@@ -82,10 +82,12 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 34 {
+	if len(entries) != 36 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	expected := map[string]bool{
+		"000018_reconcile_resource_field_schema.up.sql":       false,
+		"000018_reconcile_resource_field_schema.down.sql":     false,
 		"000017_outbox_messages.up.sql":                      false,
 		"000017_outbox_messages.down.sql":                    false,
 		"000016_resource_revisions.up.sql":                   false,
@@ -207,12 +209,30 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err := manager.Up(ctx, plan); err != nil {
 		t.Fatalf("up: %v", err)
 	}
+	if err := manager.Down(ctx, plan, 1); err != nil {
+		t.Fatalf("down reconciliation marker: %v", err)
+	}
+	if _, err := connector.Pool().Exec(ctx, `
+DROP TABLE core.library_item_template_usage;
+DROP INDEX core.idx_resource_field_values_library_string;
+DROP INDEX core.idx_resource_field_values_library_integer;
+DROP INDEX core.idx_resource_field_values_library_float;
+DROP INDEX core.idx_resource_field_values_library_timestamp;
+ALTER TABLE core.resource_field_values
+    DROP CONSTRAINT fk_resource_field_values_library_site,
+    DROP COLUMN library_id;
+`); err != nil {
+		t.Fatalf("simulate pre-reconciliation schema: %v", err)
+	}
+	if err := manager.Up(ctx, plan); err != nil {
+		t.Fatalf("reconciliation up: %v", err)
+	}
 
 	version, hasVersion, dirty, err := manager.Version(ctx, plan)
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 17 || !hasVersion || dirty {
+	if version != 18 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,

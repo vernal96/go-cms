@@ -186,6 +186,7 @@ func clientOptions(config Config) []kgo.Opt {
 		kgo.ClientID(config.ClientID),
 		kgo.DialTimeout(config.DialTimeout),
 		kgo.RequiredAcks(kgo.AllISRAcks()),
+		kgo.AllowAutoTopicCreation(),
 	}
 	if config.Username != "" {
 		options = append(options, kgo.SASL(plain.Auth{
@@ -286,49 +287,59 @@ func (c *Connector) Consume(
 	}()
 
 	subscription = eventbusutil.CloneSubscription(subscription)
-	consumer, err := c.openConsumer(subscription)
-	if err != nil {
-		return fmt.Errorf(
-			"open Kafka event bus consumer group %q: %w",
-			subscription.Group,
-			err,
-		)
-	}
-	defer consumer.Close()
-
 	for {
-		message, err := consumer.Next(consumeContext)
+		consumer, err := c.openConsumer(subscription)
 		if err != nil {
-			consumer.Release()
 			if consumeContext.Err() != nil {
 				return nil
 			}
+		} else {
+			err = consumeKafkaSession(
+				consumeContext,
+				consumer,
+				subscription,
+				handler,
+				c.config.ConsumerRetryDelay,
+			)
+			consumer.Close()
+			if consumeContext.Err() != nil {
+				return nil
+			}
+		}
+		if !waitForKafkaRetry(consumeContext, c.config.ConsumerRetryDelay) {
+			return nil
+		}
+	}
+}
+
+func consumeKafkaSession(
+	ctx context.Context,
+	consumer consumerBackend,
+	subscription eventbus.Subscription,
+	handler eventbus.Handler,
+	retryDelay time.Duration,
+) error {
+	for {
+		message, err := consumer.Next(ctx)
+		if err != nil {
+			consumer.Release()
 			return fmt.Errorf(
 				"consume Kafka event for group %q: %w",
 				subscription.Group,
 				err,
 			)
 		}
-
-		handled := eventbusutil.HandleWithRetry(
-			consumeContext,
-			c.config.ConsumerRetryDelay,
-			message,
-			handler,
-		)
+		handled := eventbusutil.HandleWithRetry(ctx, retryDelay, message, handler)
 		if !handled {
 			consumer.Release()
-			return nil
+			return ctx.Err()
 		}
-		if consumeContext.Err() != nil {
+		if ctx.Err() != nil {
 			consumer.Release()
-			return nil
+			return ctx.Err()
 		}
-		if err := consumer.Commit(consumeContext); err != nil {
+		if err := consumer.Commit(ctx); err != nil {
 			consumer.Release()
-			if consumeContext.Err() != nil {
-				return nil
-			}
 			return fmt.Errorf(
 				"commit Kafka event for group %q: %w",
 				subscription.Group,
@@ -336,6 +347,17 @@ func (c *Connector) Consume(
 			)
 		}
 		consumer.Release()
+	}
+}
+
+func waitForKafkaRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

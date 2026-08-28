@@ -32,21 +32,6 @@ func TestKafkaIntegrationPublishConsume(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer admin.Close()
-	partitions := int32(1)
-	replicationFactor := int16(1)
-	request := kmsg.NewPtrCreateTopicsRequest()
-	request.Topics = append(request.Topics, kmsg.CreateTopicsRequestTopic{
-		Topic:             topic,
-		NumPartitions:     partitions,
-		ReplicationFactor: replicationFactor,
-	})
-	response, err := request.RequestWith(ctx, admin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(response.Topics) != 1 || response.Topics[0].ErrorCode != 0 {
-		t.Fatalf("create topic response = %#v", response.Topics)
-	}
 	t.Cleanup(func() {
 		deleteRequest := kmsg.NewPtrDeleteTopicsRequest()
 		deleteRequest.TopicNames = []string{topic}

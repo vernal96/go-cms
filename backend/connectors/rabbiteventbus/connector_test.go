@@ -246,8 +246,10 @@ func TestConnectorRequeuesWhenCanceledDuringHandling(t *testing.T) {
 	}
 }
 
-func TestConnectorReturnsFatalConsumerError(t *testing.T) {
-	consumer := &fakeConsumer{nextErr: errors.New("broker delivery failed")}
+func TestConnectorReopensConsumerAfterBrokerError(t *testing.T) {
+	failed := &fakeConsumer{nextErr: errors.New("broker delivery failed")}
+	recovered := &fakeConsumer{messages: []eventbus.Message{{Topic: "topic", Body: []byte("recovered")}}}
+	var opened atomic.Int32
 	connector := newConnector(
 		validConfig(),
 		&fakeProducer{},
@@ -255,25 +257,27 @@ func TestConnectorReturnsFatalConsumerError(t *testing.T) {
 			context.Context,
 			eventbus.Subscription,
 		) (consumerBackend, error) {
-			return consumer, nil
+			if opened.Add(1) == 1 {
+				return failed, nil
+			}
+			return recovered, nil
 		},
 	)
-	err := connector.Consume(
-		context.Background(),
-		eventbus.Subscription{
-			Topics: []string{"topic"},
-			Group:  "group",
-		},
-		func(context.Context, eventbus.Message) error { return nil },
-	)
-	if err == nil || !strings.Contains(err.Error(), "broker delivery failed") {
-		t.Fatalf("consumer error = %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	err := connector.Consume(ctx, eventbus.Subscription{Topics: []string{"topic"}, Group: "group"}, func(_ context.Context, message eventbus.Message) error {
+		if string(message.Body) != "recovered" {
+			t.Fatalf("message body = %q", message.Body)
+		}
+		cancel()
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if consumer.requeues.Load() != 1 || !consumer.closed.Load() {
+	if opened.Load() != 2 || failed.requeues.Load() != 1 || !failed.closed.Load() || recovered.requeues.Load() != 1 || !recovered.closed.Load() {
 		t.Fatalf(
-			"requeues=%d closed=%t",
-			consumer.requeues.Load(),
-			consumer.closed.Load(),
+			"opened=%d failed requeues=%d closed=%t recovered requeues=%d closed=%t",
+			opened.Load(), failed.requeues.Load(), failed.closed.Load(), recovered.requeues.Load(), recovered.closed.Load(),
 		)
 	}
 }

@@ -105,7 +105,10 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # The application publishes module-owned domain event topics. The bundled
+      # development broker must accept those topics without an external
+      # provisioning step; production brokers may keep explicit provisioning.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
@@ -151,7 +154,10 @@ services:
       start_period: 15s
 
   loki:
-    image: grafana/loki:3.7.3
+    build:
+      context: ./backend/observability
+      dockerfile: loki.Dockerfile
+    image: go-cms-loki:dev
     container_name: go-cms-loki
     command: ["-config.file=/etc/loki/config.yaml"]
     ports:
@@ -160,7 +166,7 @@ services:
       - ./backend/observability/loki.yaml:/etc/loki/config.yaml:ro
       - loki_data:/loki
     healthcheck:
-      test: ["CMD", "/usr/bin/loki", "-verify-config=true", "-config.file=/etc/loki/config.yaml"]
+      test: ["CMD", "/usr/local/bin/wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3100/ready"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -171,6 +177,8 @@ services:
     container_name: go-cms-grafana
     env_file:
       - .env
+    environment:
+      GF_PLUGINS_PREINSTALL_AUTO_UPDATE: "false"
     ports:
       - "3000:3000"
     volumes:
