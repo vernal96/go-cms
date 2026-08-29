@@ -70,12 +70,14 @@ func TestManagementHTTPListSiteOptionsAndErrors(t *testing.T) {
 	tests := []struct {
 		name            string
 		url             string
+		wantExcludeID   site.ID
 		denied          map[permission.Code]error
 		repositoryError error
 		wantStatus      int
 		wantCode        string
 	}{
 		{name: "success", url: "/sites/options?page=1&per_page=10", wantStatus: http.StatusOK},
+		{name: "exclude current site", url: "/sites/options?exclude_id=7", wantExcludeID: 7, wantStatus: http.StatusOK},
 		{name: "bad pagination", url: "/sites/options?page=zero", wantStatus: http.StatusBadRequest, wantCode: "bad_request"},
 		{name: "forbidden", url: "/sites/options", denied: map[permission.Code]error{SiteReadPermission: security.ErrForbidden}, wantStatus: http.StatusForbidden, wantCode: "forbidden"},
 		{name: "database failure", url: "/sites/options", repositoryError: errors.New("pq: secret database detail"), wantStatus: http.StatusInternalServerError, wantCode: "internal_error"},
@@ -102,6 +104,9 @@ func TestManagementHTTPListSiteOptionsAndErrors(t *testing.T) {
 
 			if response.Code != test.wantStatus {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+			if test.wantExcludeID > 0 && (repository.query.ExcludeID == nil || *repository.query.ExcludeID != test.wantExcludeID) {
+				t.Fatalf("exclude id = %#v", repository.query.ExcludeID)
 			}
 			if strings.Contains(response.Body.String(), "secret database detail") {
 				t.Fatalf("database error leaked: %s", response.Body.String())
@@ -156,6 +161,48 @@ func TestManagementHTTPWritesRouteMaintenanceConflict(t *testing.T) {
 	writeManagementError(response, resource.ErrRouteMutationRequiresMaintenance)
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"route_mutation_requires_maintenance"`) {
 		t.Fatalf("response = %d, %s", response.Code, response.Body.String())
+	}
+}
+
+func TestManagementHTTPWritesStableSiteTransferConflicts(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		err  error
+		code string
+	}{
+		{err: resource.ErrIncompatibleTargetSite, code: "incompatible_target_site"},
+		{err: resource.ErrCrossSiteReference, code: "cross_site_reference"},
+		{err: resource.ErrRouteConflict, code: "route_conflict"},
+		{err: resource.ErrInvalidTree, code: "invalid_tree"},
+	} {
+		response := httptest.NewRecorder()
+		writeManagementError(response, test.err)
+		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"`+test.code+`"`) {
+			t.Fatalf("%s response = %d, %s", test.code, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestManagementHTTPTransferResourceValidatesPayload(t *testing.T) {
+	t.Parallel()
+	router := chi.NewRouter()
+	registerContentRoutes(router, nil, &Resources{})
+	for _, test := range []struct {
+		body       string
+		wantStatus int
+	}{
+		{body: `{}`, wantStatus: http.StatusUnprocessableEntity},
+		{body: `{"target_site_id":0,"expected_version":1}`, wantStatus: http.StatusUnprocessableEntity},
+		{body: `{"target_site_id":8,"expected_version":0}`, wantStatus: http.StatusUnprocessableEntity},
+		{body: `{"target_site_id":8,"expected_version":1,"unexpected":true}`, wantStatus: http.StatusBadRequest},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/sites/7/resources/9/transfer", strings.NewReader(test.body))
+		request = request.WithContext(httptransport.WithActor(request.Context(), security.User(1)))
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != test.wantStatus {
+			t.Fatalf("body %s response = %d, %s", test.body, response.Code, response.Body.String())
+		}
 	}
 }
 

@@ -307,6 +307,23 @@ func (r *cachedResourceRepository) ListChildren(
 	return management.ListChildren(ctx, siteID, parentID)
 }
 
+func (r *cachedResourceRepository) TransferToSite(
+	ctx context.Context,
+	actorID *security.UserID,
+	id resource.ID,
+	sourceSiteID site.ID,
+	targetSiteID site.ID,
+	expectedVersion int64,
+	expectedSourceProfile string,
+	expectedTargetProfile string,
+) (resource.SiteTransferResult, error) {
+	repository, ok := r.base.(resource.SiteTransferRepository)
+	if !ok {
+		return resource.SiteTransferResult{}, errors.New("resource site transfer repository is unavailable")
+	}
+	return repository.TransferToSite(ctx, actorID, id, sourceSiteID, targetSiteID, expectedVersion, expectedSourceProfile, expectedTargetProfile)
+}
+
 func (r *cachedResourceRepository) Statistics(
 	ctx context.Context,
 	query resource.StatisticsQuery,
@@ -482,6 +499,14 @@ func (r *cachedResourceRepository) LibraryItemTemplateCodes(ctx context.Context,
 	}
 	return repository.LibraryItemTemplateCodes(ctx, siteID, libraryID)
 }
+
+func (r *cachedResourceRepository) LibraryItemWidgetCodes(ctx context.Context, siteID site.ID, libraryID resource.ID) ([]widget.Code, error) {
+	repository, ok := r.base.(resource.LibraryItemRepository)
+	if !ok {
+		return nil, errors.New("resource library item repository is unavailable")
+	}
+	return repository.LibraryItemWidgetCodes(ctx, siteID, libraryID)
+}
 func (r *cachedResourceRepository) ResolveLibraryItemRoute(ctx context.Context, siteID site.ID, path string) (resource.LibraryItem, resource.Resource, error) {
 	repository, err := r.libraryItems()
 	if err != nil {
@@ -533,6 +558,7 @@ var _ site.StatisticsRepository = (*cachedSiteRepository)(nil)
 var _ resource.Repository = (*cachedResourceRepository)(nil)
 var _ resource.WidgetRepository = (*cachedResourceRepository)(nil)
 var _ resource.ManagementRepository = (*cachedResourceRepository)(nil)
+var _ resource.SiteTransferRepository = (*cachedResourceRepository)(nil)
 var _ resource.StatisticsRepository = (*cachedResourceRepository)(nil)
 var _ resource.QueryRepository = (*cachedResourceRepository)(nil)
 var _ resource.LibraryItemRepository = (*cachedResourceRepository)(nil)

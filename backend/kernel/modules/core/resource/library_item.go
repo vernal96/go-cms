@@ -114,6 +114,7 @@ type LibraryItemRepository interface {
 	MoveLibraryItem(context.Context, *security.UserID, ID, ID, int64, bool) (LibraryItem, error)
 	QueryLibraryItems(context.Context, LibraryItemQuery) (LibraryItemPage, error)
 	LibraryItemTemplateCodes(context.Context, site.ID, ID) ([]template.Code, error)
+	LibraryItemWidgetCodes(context.Context, site.ID, ID) ([]widget.Code, error)
 	ResolveLibraryItemRoute(context.Context, site.ID, string) (LibraryItem, Resource, error)
 }
 

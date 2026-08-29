@@ -64,6 +64,7 @@ func registerContentRoutes(router chi.Router, sites *Sites, resources *Resources
 	router.Patch("/sites/{siteID}/resources/{resourceID}/extensions/{extensionCode}", handler.saveResourceExtension)
 	router.Post("/sites/{siteID}/resources/{resourceID}/extensions/{extensionCode}/preview", handler.previewResourceExtension)
 	router.Post("/sites/{siteID}/resources/{resourceID}/move", handler.moveResource)
+	router.Post("/sites/{siteID}/resources/{resourceID}/transfer", handler.transferResource)
 	router.Delete("/sites/{siteID}/resources/{resourceID}", handler.deleteResource)
 	router.Post("/sites/{siteID}/resources/{resourceID}/restore", handler.restoreResource)
 	router.Delete("/sites/{siteID}/resources/{resourceID}/permanent", handler.deleteResourcePermanent)
@@ -186,8 +187,17 @@ func (h *contentHTTP) listSiteOptions(response http.ResponseWriter, request *htt
 	if !ok {
 		return
 	}
+	var exclude []site.ID
+	if raw := strings.TrimSpace(request.URL.Query().Get("exclude_id")); raw != "" {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value <= 0 {
+			writeBadRequest(response, "exclude_id is invalid")
+			return
+		}
+		exclude = append(exclude, site.ID(value))
+	}
 	result, err := h.sites.ListSiteOptions(
-		request.Context(), actor(request), request.URL.Query().Get("search"), page, perPage,
+		request.Context(), actor(request), request.URL.Query().Get("search"), page, perPage, exclude...,
 	)
 	writeResult(response, http.StatusOK, result, err)
 }
@@ -636,6 +646,35 @@ func (h *contentHTTP) moveResource(response http.ResponseWriter, request *http.R
 	writeResult(response, http.StatusOK, result, err)
 }
 
+type transferResourceRequest struct {
+	TargetSiteID    site.ID `json:"target_site_id"`
+	ExpectedVersion int64   `json:"expected_version"`
+}
+
+func (h *contentHTTP) transferResource(response http.ResponseWriter, request *http.Request) {
+	sourceSiteID, ok := siteID(response, request)
+	if !ok {
+		return
+	}
+	resourceID, ok := resourceID(response, request)
+	if !ok {
+		return
+	}
+	var payload transferResourceRequest
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	if payload.TargetSiteID <= 0 || payload.ExpectedVersion <= 0 {
+		writeValidation(response, "target_site_id and expected_version are required")
+		return
+	}
+	result, err := h.resources.TransferResourceToSite(
+		request.Context(), actor(request), sourceSiteID, resourceID,
+		payload.TargetSiteID, payload.ExpectedVersion,
+	)
+	writeResult(response, http.StatusOK, result, err)
+}
+
 func (h *contentHTTP) getResourceExtension(
 	response http.ResponseWriter,
 	request *http.Request,
@@ -1055,6 +1094,10 @@ func writeManagementError(response http.ResponseWriter, err error) {
 		httptransport.WriteJSONError(response, http.StatusConflict, "route_conflict", "route conflicts with existing content")
 	case errors.Is(err, resource.ErrRouteMutationRequiresMaintenance):
 		httptransport.WriteJSONError(response, http.StatusConflict, "route_mutation_requires_maintenance", "route mutation requires offline validation")
+	case errors.Is(err, resource.ErrIncompatibleTargetSite):
+		httptransport.WriteJSONError(response, http.StatusConflict, "incompatible_target_site", "target site is incompatible with the resource")
+	case errors.Is(err, resource.ErrCrossSiteReference):
+		httptransport.WriteJSONError(response, http.StatusConflict, "cross_site_reference", "resource transfer has cross-site references")
 	case errors.Is(err, file.ErrInUse):
 		httptransport.WriteJSONError(response, http.StatusConflict, "file_in_use", "file is used by content")
 	case errors.Is(err, file.ErrStorageMismatch):

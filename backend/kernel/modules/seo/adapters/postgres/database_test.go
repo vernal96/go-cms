@@ -18,7 +18,7 @@ func TestMigrationSourceDefinesScopedCascadingMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 4 {
+	if len(entries) != 6 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	identity, err := fs.ReadFile(sources[0].FS, sources[0].Path+"/000002_resource_entity_identity.up.sql")

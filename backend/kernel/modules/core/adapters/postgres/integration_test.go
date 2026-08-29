@@ -82,12 +82,14 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 36 {
+	if len(entries) != 38 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	expected := map[string]bool{
-		"000018_reconcile_resource_field_schema.up.sql":       false,
-		"000018_reconcile_resource_field_schema.down.sql":     false,
+		"000019_resource_site_transfer.up.sql":               false,
+		"000019_resource_site_transfer.down.sql":             false,
+		"000018_reconcile_resource_field_schema.up.sql":      false,
+		"000018_reconcile_resource_field_schema.down.sql":    false,
 		"000017_outbox_messages.up.sql":                      false,
 		"000017_outbox_messages.down.sql":                    false,
 		"000016_resource_revisions.up.sql":                   false,
@@ -209,7 +211,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err := manager.Up(ctx, plan); err != nil {
 		t.Fatalf("up: %v", err)
 	}
-	if err := manager.Down(ctx, plan, 1); err != nil {
+	if err := manager.Down(ctx, plan, 2); err != nil {
 		t.Fatalf("down reconciliation marker: %v", err)
 	}
 	if _, err := connector.Pool().Exec(ctx, `
@@ -232,7 +234,7 @@ ALTER TABLE core.resource_field_values
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 18 || !hasVersion || dirty {
+	if version != 19 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,
@@ -2500,6 +2502,156 @@ LIMIT 101;`, siteIDs["localhost"], perfLibrary.ID)
 		t.Fatalf("deleted library item error = %v", err)
 	}
 
+	transferRepository, ok := resourceRepository.(resource.SiteTransferRepository)
+	if !ok {
+		t.Fatal("resource site transfer repository is unavailable")
+	}
+	transferRootPath := "/transfer-fixture"
+	transferRoot, err := resourceRepository.Create(ctx, &adminID, resource.Resource{
+		SiteID: siteIDs["localhost"], Type: resourcetype.Page, Template: &templateCode,
+		ContentType: &contentType, Title: "Transfer fixture", Slug: "transfer-fixture", Path: &transferRootPath,
+		IsPublic: true, IsSearchable: true, InMenu: true, InSitemap: true,
+		Fields:      map[string]any{"headline": "Transferred"},
+		FieldValues: []field.StoredValue{{Key: "headline", Kind: field.StorageString, Value: "Transferred"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create transfer root: %v", err)
+	}
+	transferChildPath := "/transfer-fixture/child"
+	transferChild, err := resourceRepository.Create(ctx, &adminID, resource.Resource{
+		SiteID: siteIDs["localhost"], ParentID: &transferRoot.ID, Type: resourcetype.Page,
+		Title: "Transfer child", Slug: "child", Path: &transferChildPath,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create transfer child: %v", err)
+	}
+	transferLibraryPath := "/transfer-fixture/catalog"
+	transferLibrary, err := resourceRepository.Create(ctx, &adminID, resource.Resource{
+		SiteID: siteIDs["localhost"], ParentID: &transferRoot.ID, Type: resourcetype.Library,
+		Title: "Transfer catalog", Slug: "catalog", Path: &transferLibraryPath,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+		TypeSettings: map[string]any{"item_url_pattern": "/{year}/{slug}"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create transfer library: %v", err)
+	}
+	transferPublication := time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC)
+	transferItem, err := libraryItems.CreateLibraryItem(ctx, &adminID, resource.LibraryItem{
+		SiteID: siteIDs["localhost"], LibraryID: transferLibrary.ID, Template: &templateCode,
+		ContentType: &contentType, Title: "Transfer item", Slug: "item", PublishedAt: &transferPublication,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{"headline": "Library item"},
+		FieldValues: []field.StoredValue{{Key: "headline", Kind: field.StorageString, Value: "Library item"}},
+	}, true)
+	if err != nil {
+		t.Fatalf("create transfer library item: %v", err)
+	}
+	if _, err := widgetRepository.CreateWidget(ctx, &adminID, transferRoot.ID, transferRoot.Version, widget.Binding{
+		Code: "content_summary", Area: widget.AreaBody, Position: 0,
+		Presentation: widget.DefaultPresentation(), Params: map[string]any{"title": "Transferred widget"},
+	}, true); err != nil {
+		t.Fatalf("create transfer widget: %v", err)
+	}
+	transferRoot, err = resourceRepository.ByID(ctx, transferRoot.ID)
+	if err != nil {
+		t.Fatalf("reload transfer root: %v", err)
+	}
+	if _, err := transferRepository.TransferToSite(
+		ctx, &adminID, transferRoot.ID, siteIDs["localhost"], siteIDs["example.com"], transferRoot.Version,
+		"dev", "changed-profile",
+	); !errors.Is(err, resource.ErrIncompatibleTargetSite) {
+		t.Fatalf("changed target profile error = %v", err)
+	}
+	if current, loadErr := resourceRepository.ByID(ctx, transferRoot.ID); loadErr != nil || current.SiteID != siteIDs["localhost"] {
+		t.Fatalf("profile-conflicted transfer changed root = %#v, %v", current, loadErr)
+	}
+
+	conflictingItemRoutePath := "/transfer-fixture/catalog/2026/item"
+	conflictingTarget, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: siteIDs["example.com"], Type: resourcetype.Page, Title: "Transfer conflict",
+		Slug: "transfer-conflict", Path: &conflictingItemRoutePath,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create transfer route conflict: %v", err)
+	}
+	if _, err := transferRepository.TransferToSite(ctx, &adminID, transferRoot.ID, siteIDs["localhost"], siteIDs["example.com"], transferRoot.Version, "dev", "dev"); !errors.Is(err, resource.ErrRouteConflict) {
+		t.Fatalf("library route transfer conflict error = %v", err)
+	}
+	if current, loadErr := resourceRepository.ByID(ctx, transferRoot.ID); loadErr != nil || current.SiteID != siteIDs["localhost"] {
+		t.Fatalf("route-conflicted transfer changed root = %#v, %v", current, loadErr)
+	}
+	if err := resourceRepository.Delete(ctx, conflictingTarget.ID); err != nil {
+		t.Fatalf("delete transfer route conflict: %v", err)
+	}
+
+	incomingReference, err := resourceRepository.Create(ctx, nil, resource.Resource{
+		SiteID: siteIDs["localhost"], Type: resourcetype.ResourceLink, Title: "Incoming transfer reference",
+		Slug: "incoming-transfer-reference", TargetResourceID: &transferRoot.ID,
+		IsPublic: true, IsSearchable: true, Fields: map[string]any{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create incoming transfer reference: %v", err)
+	}
+	if _, err := transferRepository.TransferToSite(ctx, &adminID, transferRoot.ID, siteIDs["localhost"], siteIDs["example.com"], transferRoot.Version, "dev", "dev"); !errors.Is(err, resource.ErrCrossSiteReference) {
+		t.Fatalf("incoming transfer reference error = %v", err)
+	}
+	if err := resourceRepository.Delete(ctx, incomingReference.ID); err != nil {
+		t.Fatalf("delete incoming transfer reference: %v", err)
+	}
+
+	var expectedTransferSort int
+	if err := connector.Pool().QueryRow(ctx, `SELECT COALESCE(max(sort)+1,0) FROM core.resources WHERE site_id=$1 AND parent_id IS NULL;`, siteIDs["example.com"]).Scan(&expectedTransferSort); err != nil {
+		t.Fatalf("load target root sort: %v", err)
+	}
+	transferResult, err := transferRepository.TransferToSite(
+		ctx, &adminID, transferRoot.ID, siteIDs["localhost"], siteIDs["example.com"], transferRoot.Version,
+		"dev", "dev",
+	)
+	if err != nil {
+		t.Fatalf("transfer resource subtree: %v", err)
+	}
+	if transferResult.Resource.ID != transferRoot.ID || transferResult.Resource.SiteID != siteIDs["example.com"] ||
+		transferResult.Resource.ParentID != nil || transferResult.Resource.Sort != expectedTransferSort ||
+		transferResult.Resource.Version != transferRoot.Version+1 || len(transferResult.ResourceIDs) != 3 {
+		t.Fatalf("transferred root result = %#v, ids = %#v", transferResult.Resource, transferResult.ResourceIDs)
+	}
+	transferredChild, childErr := resourceRepository.ByID(ctx, transferChild.ID)
+	transferredLibrary, libraryErr := resourceRepository.ByID(ctx, transferLibrary.ID)
+	transferredItem, itemErr := libraryItems.LibraryItemByID(ctx, transferItem.ID)
+	if childErr != nil || libraryErr != nil || itemErr != nil ||
+		transferredChild.SiteID != siteIDs["example.com"] || transferredChild.Path == nil || *transferredChild.Path != transferChildPath ||
+		transferredLibrary.SiteID != siteIDs["example.com"] || transferredLibrary.Path == nil || *transferredLibrary.Path != transferLibraryPath ||
+		transferredItem.SiteID != siteIDs["example.com"] || transferredItem.ID != transferItem.ID || transferredItem.LibraryID != transferLibrary.ID {
+		t.Fatalf("transferred descendants = %#v / %#v / %#v, errors = %v / %v / %v", transferredChild, transferredLibrary, transferredItem, childErr, libraryErr, itemErr)
+	}
+	if len(transferResult.Resource.Widgets) != 1 || transferResult.Resource.Widgets[0].Code != "content_summary" ||
+		transferResult.Resource.Fields["headline"] != "Transferred" || transferredItem.Fields["headline"] != "Library item" {
+		t.Fatalf("transferred values/widgets = %#v / %#v / %#v", transferResult.Resource.Fields, transferResult.Resource.Widgets, transferredItem.Fields)
+	}
+	transferHistory, historyErr := revisionRepository.ListRevisions(ctx, siteIDs["example.com"], transferRoot.ID, 1, 20)
+	itemHistory, itemHistoryErr := revisionRepository.ListRevisions(ctx, siteIDs["example.com"], transferItem.ID, 1, 20)
+	if historyErr != nil || itemHistoryErr != nil || transferHistory.Total != 3 || itemHistory.Total != 1 ||
+		transferHistory.Items[0].Kind != resource.RevisionUpdated {
+		t.Fatalf("transferred history = %#v / %#v, errors = %v / %v", transferHistory, itemHistory, historyErr, itemHistoryErr)
+	}
+	var sourceTreeCount, targetEntityCount, targetRouteCount, targetUsageCount int
+	if err := connector.Pool().QueryRow(ctx, `SELECT count(*) FROM core.resources WHERE site_id=$1 AND id=ANY($2::bigint[]);`, siteIDs["localhost"], []int64{int64(transferRoot.ID), int64(transferChild.ID), int64(transferLibrary.ID)}).Scan(&sourceTreeCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := connector.Pool().QueryRow(ctx, `SELECT count(*) FROM core.resource_entities WHERE site_id=$1 AND id=ANY($2::bigint[]);`, siteIDs["example.com"], []int64{int64(transferRoot.ID), int64(transferChild.ID), int64(transferLibrary.ID), int64(transferItem.ID)}).Scan(&targetEntityCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := connector.Pool().QueryRow(ctx, `SELECT count(*) FROM core.library_item_routes WHERE site_id=$1 AND resource_id=$2;`, siteIDs["example.com"], transferItem.ID).Scan(&targetRouteCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := connector.Pool().QueryRow(ctx, `SELECT count(*) FROM core.library_item_template_usage WHERE site_id=$1 AND library_id=$2;`, siteIDs["example.com"], transferLibrary.ID).Scan(&targetUsageCount); err != nil {
+		t.Fatal(err)
+	}
+	if sourceTreeCount != 0 || targetEntityCount != 4 || targetRouteCount != 1 || targetUsageCount != 1 {
+		t.Fatalf("transferred ownership counts = source tree %d, target entities %d, routes %d, usage %d", sourceTreeCount, targetEntityCount, targetRouteCount, targetUsageCount)
+	}
+
 	child.Slug = "renamed"
 	child.Title = "Renamed child"
 	child.ParentID = &section.ID
@@ -2686,7 +2838,7 @@ WHERE id = ANY($2);
 	}
 
 	restoreMigration = true
-	if err := manager.Down(ctx, plan, 9); err != nil {
+	if err := manager.Down(ctx, plan, 10); err != nil {
 		t.Fatalf("down: %v", err)
 	}
 

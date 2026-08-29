@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -465,6 +466,223 @@ func (s *Service) Move(ctx context.Context, actor security.Actor, id ID, parentI
 		PublishedAt: current.PublishedAt, UnpublishedAt: current.UnpublishedAt,
 		Fields: current.Fields, TypeSettings: current.TypeSettings,
 	})
+}
+
+func (s *Service) TransferToSite(
+	ctx context.Context,
+	actor security.Actor,
+	id ID,
+	targetSiteID site.ID,
+	expectedVersion int64,
+	compatibility SiteTransferCompatibility,
+) (SiteTransferResult, error) {
+	if err := validateContext(ctx, "resource site transfer"); err != nil {
+		return SiteTransferResult{}, err
+	}
+	if err := s.authorizer.Check(ctx, actor, updatePermission); err != nil {
+		return SiteTransferResult{}, err
+	}
+	if id <= 0 || targetSiteID <= 0 {
+		return SiteTransferResult{}, fmt.Errorf("%w: resource or target site id is invalid", ErrInvalid)
+	}
+	if expectedVersion <= 0 {
+		return SiteTransferResult{}, ErrConflict
+	}
+
+	current, err := s.repository.ByID(ctx, id)
+	if err != nil {
+		return SiteTransferResult{}, fmt.Errorf("get resource %d for site transfer: %w", id, err)
+	}
+	if current.Version != expectedVersion {
+		return SiteTransferResult{}, ErrConflict
+	}
+	if current.SiteID == targetSiteID || current.DeletedAt != nil || current.Path != nil && *current.Path == "/" {
+		return SiteTransferResult{}, ErrInvalidTree
+	}
+	sourceRuntime, exists := s.sites.RuntimeByID(current.SiteID)
+	if !exists {
+		return SiteTransferResult{}, fmt.Errorf("resource source site %d not found", current.SiteID)
+	}
+	targetRuntime, exists := s.sites.RuntimeByID(targetSiteID)
+	if !exists {
+		return SiteTransferResult{}, fmt.Errorf("resource target site %d not found", targetSiteID)
+	}
+
+	items, err := s.repository.ListBySite(ctx, current.SiteID)
+	if err != nil {
+		return SiteTransferResult{}, fmt.Errorf("list resource transfer subtree: %w", err)
+	}
+	subtree, err := transferSubtree(items, id)
+	if err != nil {
+		return SiteTransferResult{}, err
+	}
+	known := make(map[ID]Resource, len(subtree))
+	for index, item := range subtree {
+		item.SiteID = targetSiteID
+		if item.ID == id {
+			item.ParentID = nil
+		}
+		subtree[index] = item
+		known[item.ID] = Clone(item)
+	}
+	for _, item := range subtree {
+		if item.TargetResourceID == nil {
+			continue
+		}
+		if _, exists := known[*item.TargetResourceID]; !exists {
+			return SiteTransferResult{}, fmt.Errorf(
+				"%w: resource %d targets resource %d outside the transferred subtree",
+				ErrCrossSiteReference,
+				item.ID,
+				*item.TargetResourceID,
+			)
+		}
+	}
+	for index, item := range subtree {
+		normalized, normalizeErr := s.normalize(
+			ctx, actor, item, targetRuntime, known, item.FileReferences,
+		)
+		if normalizeErr != nil {
+			return SiteTransferResult{}, fmt.Errorf("%w: resource %d: %v", ErrIncompatibleTargetSite, item.ID, normalizeErr)
+		}
+		subtree[index] = normalized
+		known[normalized.ID] = Clone(normalized)
+	}
+	if err := s.validateTransferredLibraries(ctx, sourceRuntime, targetRuntime, subtree); err != nil {
+		return SiteTransferResult{}, err
+	}
+	if compatibility != nil {
+		if err := compatibility(ctx, subtree, sourceRuntime, targetRuntime); err != nil {
+			return SiteTransferResult{}, err
+		}
+	}
+
+	repository, ok := s.repository.(SiteTransferRepository)
+	if !ok {
+		return SiteTransferResult{}, errors.New("resource site transfer repository is unavailable")
+	}
+	result, err := repository.TransferToSite(
+		ctx, actor.AuditUserID(), id, current.SiteID, targetSiteID, expectedVersion,
+		string(sourceRuntime.Site().ProfileCode), string(targetRuntime.Site().ProfileCode),
+	)
+	if err != nil {
+		return SiteTransferResult{}, fmt.Errorf("transfer resource %d to site %d: %w", id, targetSiteID, err)
+	}
+	result.Resource, err = s.validateStored(ctx, result.Resource)
+	if err != nil {
+		return SiteTransferResult{}, fmt.Errorf("validate transferred resource %d: %w", id, err)
+	}
+	return result, nil
+}
+
+func transferSubtree(items []Resource, rootID ID) ([]Resource, error) {
+	byParent := make(map[ID][]Resource)
+	var root *Resource
+	for _, item := range items {
+		if item.ID == rootID {
+			copy := Clone(item)
+			root = &copy
+		}
+		if item.ParentID != nil {
+			byParent[*item.ParentID] = append(byParent[*item.ParentID], Clone(item))
+		}
+	}
+	if root == nil {
+		return nil, ErrNotFound
+	}
+	result := make([]Resource, 0)
+	visiting := make(map[ID]bool)
+	visited := make(map[ID]bool)
+	var appendTree func(Resource) error
+	appendTree = func(item Resource) error {
+		if visiting[item.ID] || visited[item.ID] {
+			return ErrInvalidTree
+		}
+		visiting[item.ID] = true
+		result = append(result, Clone(item))
+		children := byParent[item.ID]
+		sort.Slice(children, func(left, right int) bool {
+			if children[left].Sort != children[right].Sort {
+				return children[left].Sort < children[right].Sort
+			}
+			return children[left].ID < children[right].ID
+		})
+		for _, child := range children {
+			if err := appendTree(child); err != nil {
+				return err
+			}
+		}
+		delete(visiting, item.ID)
+		visited[item.ID] = true
+		return nil
+	}
+	if err := appendTree(*root); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (s *Service) validateTransferredLibraries(
+	ctx context.Context,
+	sourceRuntime *site.Runtime,
+	targetRuntime *site.Runtime,
+	items []Resource,
+) error {
+	libraries := make([]ID, 0)
+	for _, item := range items {
+		if item.Type == resourcetype.Library {
+			libraries = append(libraries, item.ID)
+		}
+	}
+	if len(libraries) == 0 {
+		return nil
+	}
+	repository, ok := s.repository.(LibraryItemRepository)
+	if !ok {
+		return errors.New("resource library item repository is unavailable")
+	}
+	usedWidgetCodes := make(map[widget.Code]struct{})
+	for _, item := range items {
+		for _, binding := range item.Widgets {
+			usedWidgetCodes[binding.Code] = struct{}{}
+		}
+	}
+	for _, libraryID := range libraries {
+		codes, err := repository.LibraryItemTemplateCodes(ctx, sourceRuntime.Site().ID, libraryID)
+		if err != nil {
+			return fmt.Errorf("list library %d template usage: %w", libraryID, err)
+		}
+		for _, code := range codes {
+			sourceTemplate, sourceExists := sourceRuntime.Profile().Template(code)
+			targetTemplate, targetExists := targetRuntime.Profile().Template(code)
+			if !sourceExists || !targetExists || !reflect.DeepEqual(sourceTemplate.Definition(), targetTemplate.Definition()) {
+				return fmt.Errorf("%w: library template %q is unavailable or incompatible", ErrIncompatibleTargetSite, code)
+			}
+		}
+		widgetCodes, err := repository.LibraryItemWidgetCodes(ctx, sourceRuntime.Site().ID, libraryID)
+		if err != nil {
+			return fmt.Errorf("list library %d widget usage: %w", libraryID, err)
+		}
+		for _, code := range widgetCodes {
+			usedWidgetCodes[code] = struct{}{}
+		}
+	}
+	sourceWidgets := make(map[widget.Code]widget.Definition)
+	for _, definition := range sourceRuntime.Profile().Widgets() {
+		sourceWidgets[definition.Code] = definition
+	}
+	targetWidgets := make(map[widget.Code]widget.Definition)
+	for _, definition := range targetRuntime.Profile().Widgets() {
+		targetWidgets[definition.Code] = definition
+	}
+	for code := range usedWidgetCodes {
+		source, sourceExists := sourceWidgets[code]
+		target, targetExists := targetWidgets[code]
+		if !sourceExists || !targetExists || !reflect.DeepEqual(source, target) {
+			return fmt.Errorf("%w: widget %q is unavailable or incompatible", ErrIncompatibleTargetSite, code)
+		}
+	}
+	return nil
 }
 
 func (s *Service) CreateWidget(

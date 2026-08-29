@@ -69,6 +69,20 @@ type scopedPolicy struct {
 	checks map[SiteAccessAction]error
 }
 
+type siteSpecificPolicy struct {
+	checks []site.ID
+	denied map[site.ID]error
+}
+
+func (p *siteSpecificPolicy) Scope(context.Context, security.Actor, SiteAccessAction) (SiteAccessScope, error) {
+	return SiteAccessScope{All: true}, nil
+}
+
+func (p *siteSpecificPolicy) Check(_ context.Context, _ security.Actor, siteID site.ID, _ SiteAccessAction) error {
+	p.checks = append(p.checks, siteID)
+	return p.denied[siteID]
+}
+
 func (p scopedPolicy) Scope(_ context.Context, _ security.Actor, action SiteAccessAction) (SiteAccessScope, error) {
 	if scope, exists := p.scopes[action]; exists {
 		return scope, nil
@@ -108,6 +122,22 @@ func TestDeleteLibraryItemRequiresSiteEditNotSiteDelete(t *testing.T) {
 	}
 	if err := management.DeleteLibraryItem(context.Background(), security.User(1), 7, 1, false); !errors.Is(err, security.ErrForbidden) {
 		t.Fatalf("delete library item site access error = %v", err)
+	}
+}
+
+func TestTransferResourceRequiresEditAccessToBothSites(t *testing.T) {
+	t.Parallel()
+	policy := &siteSpecificPolicy{denied: map[site.ID]error{8: security.ErrForbidden}}
+	management := &Resources{authorization: authorization{
+		authorizer: managementAuthorizer{denied: map[permission.Code]error{}},
+		policy:     policy,
+	}}
+	_, err := management.TransferResourceToSite(context.Background(), security.User(1), 7, 9, 8, 1)
+	if !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("target edit access error = %v", err)
+	}
+	if len(policy.checks) != 2 || policy.checks[0] != 7 || policy.checks[1] != 8 {
+		t.Fatalf("checked sites = %#v", policy.checks)
 	}
 }
 

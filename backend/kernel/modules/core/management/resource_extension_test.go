@@ -116,6 +116,20 @@ type extensionTestEditor struct {
 	saved bool
 }
 
+type extensionTransferUsageEditor struct {
+	*extensionTestEditor
+	used bool
+	err  error
+}
+
+func (e *extensionTransferUsageEditor) UsedByResources(
+	context.Context,
+	site.ID,
+	[]resource.ID,
+) (bool, error) {
+	return e.used, e.err
+}
+
 func (*extensionTestEditor) Metadata() resourceextension.Metadata {
 	return resourceextension.Metadata{
 		Code: "test", Title: "Test",
@@ -385,6 +399,28 @@ func TestResourceMetadataHasNoExtensionsWithoutProfileProvider(t *testing.T) {
 	)
 	if err != nil || len(metadata.Extensions) != 0 {
 		t.Fatalf("metadata = %#v, %v", metadata, err)
+	}
+}
+
+func TestTransferCompatibilityRequiresOnlyActuallyUsedExtensions(t *testing.T) {
+	t.Parallel()
+	editor := &extensionTransferUsageEditor{extensionTestEditor: &extensionTestEditor{}}
+	source, _ := extensionManagement(t, editor, resourcetype.Page)
+	target, _ := extensionManagement(t, nil, resourcetype.Page)
+	sourceRuntime, _ := source.sites.RuntimeByID(7)
+	targetRuntime, _ := target.sites.RuntimeByID(7)
+	items := []resource.Resource{{ID: 9, SiteID: 7, Type: resourcetype.Page}}
+
+	if err := validateTransferExtensions(context.Background(), items, sourceRuntime, targetRuntime); err != nil {
+		t.Fatalf("unused extension blocked transfer: %v", err)
+	}
+	editor.used = true
+	if err := validateTransferExtensions(context.Background(), items, sourceRuntime, targetRuntime); !errors.Is(err, resource.ErrIncompatibleTargetSite) {
+		t.Fatalf("used missing extension error = %v", err)
+	}
+	editor.err = errors.New("usage unavailable")
+	if err := validateTransferExtensions(context.Background(), items, sourceRuntime, targetRuntime); err == nil || errors.Is(err, resource.ErrIncompatibleTargetSite) {
+		t.Fatalf("usage failure was hidden as incompatibility: %v", err)
 	}
 }
 

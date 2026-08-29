@@ -849,6 +849,7 @@ SELECT
 	current.published_at,
 	current.unpublished_at,
 	current.deleted_at,
+	(current.deleted_at IS NULL AND current.path IS DISTINCT FROM '/') AS can_transfer_site,
     EXISTS (
         SELECT 1
         FROM core.resources child
@@ -877,6 +878,7 @@ SELECT
 	children.published_at,
 	children.unpublished_at,
 	children.deleted_at,
+	children.can_transfer_site,
 	children.sort,
     children.has_children
 FROM (SELECT true) marker
@@ -904,6 +906,7 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 			rawPublishedAt   *time.Time
 			rawUnpublishedAt *time.Time
 			rawDeletedAt     *time.Time
+			rawCanTransfer   *bool
 			rawSort          *int
 			rawHasChildren   *bool
 		)
@@ -922,6 +925,7 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 			&rawPublishedAt,
 			&rawUnpublishedAt,
 			&rawDeletedAt,
+			&rawCanTransfer,
 			&rawSort,
 			&rawHasChildren,
 		); err != nil {
@@ -934,19 +938,20 @@ ORDER BY children.sort, children.id;`, siteID, parentID)
 			continue
 		}
 		item := resource.Child{
-			ID:            resource.ID(*rawID),
-			Version:       *rawVersion,
-			SiteID:        site.ID(*rawSiteID),
-			Type:          resourcetype.Code(*rawType),
-			Title:         *rawTitle,
-			MenuTitle:     *rawMenuTitle,
-			Sort:          *rawSort,
-			IsPublic:      rawIsPublic != nil && *rawIsPublic,
-			InMenu:        rawInMenu != nil && *rawInMenu,
-			PublishedAt:   rawPublishedAt,
-			UnpublishedAt: rawUnpublishedAt,
-			DeletedAt:     rawDeletedAt,
-			HasChildren:   *rawHasChildren,
+			ID:              resource.ID(*rawID),
+			Version:         *rawVersion,
+			SiteID:          site.ID(*rawSiteID),
+			Type:            resourcetype.Code(*rawType),
+			Title:           *rawTitle,
+			MenuTitle:       *rawMenuTitle,
+			Sort:            *rawSort,
+			IsPublic:        rawIsPublic != nil && *rawIsPublic,
+			InMenu:          rawInMenu != nil && *rawInMenu,
+			PublishedAt:     rawPublishedAt,
+			UnpublishedAt:   rawUnpublishedAt,
+			DeletedAt:       rawDeletedAt,
+			HasChildren:     *rawHasChildren,
+			CanTransferSite: rawCanTransfer != nil && *rawCanTransfer,
 		}
 		if rawParent != nil {
 			value := resource.ID(*rawParent)

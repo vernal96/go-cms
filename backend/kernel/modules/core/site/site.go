@@ -90,10 +90,11 @@ type Scope struct {
 }
 
 type ListQuery struct {
-	Search  string
-	Page    int
-	PerPage int
-	Scope   Scope
+	Search    string
+	Page      int
+	PerPage   int
+	Scope     Scope
+	ExcludeID *ID
 }
 
 type Page struct {

@@ -53,6 +53,10 @@ type EditorProvider interface {
 	ResourceEditorExtension() Editor
 }
 
+type TransferUsage interface {
+	UsedByResources(context.Context, site.ID, []resource.ID) (bool, error)
+}
+
 type PublicRequest struct {
 	Site     site.Site
 	Resource resource.Resource

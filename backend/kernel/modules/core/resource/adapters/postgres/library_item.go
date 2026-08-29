@@ -647,6 +647,28 @@ func (r *Repository) LibraryItemTemplateCodes(ctx context.Context, siteID site.I
 	return result, translateError(rows.Err())
 }
 
+func (r *Repository) LibraryItemWidgetCodes(ctx context.Context, siteID site.ID, libraryID resource.ID) ([]widget.Code, error) {
+	rows, err := r.connector.Pool().Query(ctx, `
+SELECT DISTINCT binding.widget_code
+FROM core.library_item_routes route
+JOIN core.resource_widgets binding ON binding.resource_id=route.resource_id
+WHERE route.site_id=$1 AND route.library_id=$2
+ORDER BY binding.widget_code;`, siteID, libraryID)
+	if err != nil {
+		return nil, translateError(err)
+	}
+	defer rows.Close()
+	result := make([]widget.Code, 0, 4)
+	for rows.Next() {
+		var code widget.Code
+		if err := rows.Scan(&code); err != nil {
+			return nil, err
+		}
+		result = append(result, code)
+	}
+	return result, translateError(rows.Err())
+}
+
 func ensureLibraryItemTemplateUsage(ctx context.Context, tx pgx.Tx, siteID site.ID, libraryID resource.ID, code *template.Code) error {
 	if code == nil {
 		return nil

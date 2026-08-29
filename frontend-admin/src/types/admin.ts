@@ -227,6 +227,7 @@ export interface ResourceTreeItem {
   deleted_at: string | null
   has_children: boolean
   can_create_child: boolean
+  can_transfer_site: boolean
 }
 
 export interface ResourceChildrenResponse {

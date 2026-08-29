@@ -54,6 +54,30 @@ WHERE resource_id = $1 AND site_id = $2;
 	return metadata, nil
 }
 
+func (r *Repository) UsedByResources(
+	ctx context.Context,
+	siteID site.ID,
+	resourceIDs []resource.ID,
+) (bool, error) {
+	if ctx == nil {
+		return false, errors.New("SEO metadata usage query context is nil")
+	}
+	ids := make([]int64, len(resourceIDs))
+	for index, id := range resourceIDs {
+		ids[index] = int64(id)
+	}
+	var used bool
+	if err := r.connector.Pool().QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM seo.resource_metadata
+    WHERE site_id=$1 AND resource_id=ANY($2::bigint[])
+);`, siteID, ids).Scan(&used); err != nil {
+		return false, fmt.Errorf("query SEO metadata usage: %w", err)
+	}
+	return used, nil
+}
+
 func (r *Repository) Save(
 	ctx context.Context,
 	metadata seo.Metadata,

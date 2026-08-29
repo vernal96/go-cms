@@ -11,6 +11,7 @@ import { useSelectedSite } from '../composables/use-selected-site'
 import type { ResourceChildrenResponse, ResourceOption, ResourceOptionsResponse, ResourceTreeItem } from '../types/admin'
 import { resourceTreeNodeClasses } from './resource-tree-state'
 import ResourceCreateDialog from './ResourceCreateDialog.vue'
+import ResourceSiteTransferDialog from './ResourceSiteTransferDialog.vue'
 
 const props = withDefaults(defineProps<{
   accessToken: string
@@ -32,6 +33,7 @@ const resourceSearch = ref('')
 const searchResults = ref<ResourceOption[]>([])
 const searchLoading = ref(false)
 const dialogRef = ref<{ open(parent: ResourceTreeItem | null): Promise<void> } | null>(null)
+const transferDialogRef = ref<{ open(item: ResourceTreeItem): void } | null>(null)
 let removeRouteListener: (() => void) | null = null
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 let searchRequest = 0
@@ -69,6 +71,7 @@ function errorNode(parentId: number): TreeNodeData {
     title: 'Не удалось загрузить дочерние ресурсы', menu_title: '',
     display_title: 'Не удалось загрузить дочерние ресурсы', sort: 0,
     in_menu: true, deleted: false, published: false, deleted_at: null, has_children: false, can_create_child: false,
+    can_transfer_site: false,
     isLeaf: true, loadError: true, retryParentId: parentId,
   }
 }
@@ -161,6 +164,19 @@ function openContextMenu(event: MouseEvent, item: TreeNodeData): void {
 }
 
 function closeContextMenu(): void { context.value = null }
+
+function openSiteTransfer(item: TreeNodeData): void {
+  closeContextMenu()
+  transferDialogRef.value?.open(item)
+}
+
+function handleSiteTransferred(payload: { resource: { id: number }; source: ResourceTreeItem; target: { id: number; domain: string } }): void {
+  ElMessage.success(`Ресурс перенесён на сайт ${payload.target.domain}`)
+  notifyChanged([siteId.value, payload.target.id])
+  if (Number(router.currentRoute?.value.params.resourceId) === payload.source.id) {
+    void router.push('/admin/dashboard')
+  }
+}
 
 async function softDelete(item: TreeNodeData): Promise<void> {
   closeContextMenu()
@@ -269,8 +285,12 @@ function reloadTree(): void {
   treeKey.value += 1
 }
 
-function notifyChanged(): void {
-  window.dispatchEvent(new CustomEvent('admin:resource-tree-changed', { detail: { siteId: siteId.value } }))
+function notifyChanged(siteIDs: Array<number | null> = [siteId.value]): void {
+  for (const changedSiteID of siteIDs) {
+    if (changedSiteID !== null) {
+      window.dispatchEvent(new CustomEvent('admin:resource-tree-changed', { detail: { siteId: changedSiteID } }))
+    }
+  }
 }
 
 function handleTreeChanged(event: Event): void {
@@ -394,6 +414,12 @@ watch(siteId, () => {
       @pointerdown.stop
     >
       <button type="button" role="menuitem" @click="openEditor(context.item); closeContextMenu()">Редактировать</button>
+      <button
+        v-if="canUpdate && context.item.can_transfer_site && !context.item.deleted"
+        type="button"
+        role="menuitem"
+        @click="openSiteTransfer(context.item)"
+      >Перенести на сайт</button>
       <template v-if="canDelete && !context.item.deleted">
         <button type="button" role="menuitem" @click="softDelete(context.item)">Удалить</button>
       </template>
@@ -410,6 +436,14 @@ watch(siteId, () => {
       :access-token="accessToken"
       :site-id="siteId"
       @created="handleCreated"
+      @error="emit('error', $event)"
+    />
+    <resource-site-transfer-dialog
+      v-if="siteId"
+      ref="transferDialogRef"
+      :access-token="accessToken"
+      :source-site-id="siteId"
+      @transferred="handleSiteTransferred"
       @error="emit('error', $event)"
     />
   </section>

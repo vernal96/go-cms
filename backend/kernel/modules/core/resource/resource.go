@@ -43,6 +43,8 @@ var (
 	ErrInvalidReference                 = errors.New("invalid resource reference")
 	ErrInvalidTree                      = errors.New("invalid resource tree")
 	ErrReferenced                       = errors.New("resource is referenced")
+	ErrIncompatibleTargetSite           = errors.New("resource target site is incompatible")
+	ErrCrossSiteReference               = errors.New("resource transfer has cross-site references")
 )
 
 type Resource struct {
@@ -161,22 +163,35 @@ type Node struct {
 }
 
 type Child struct {
-	ID            ID
-	Version       int64
-	SiteID        site.ID
-	ParentID      *ID
-	Type          resourcetype.Code
-	Template      *template.Code
-	Title         string
-	MenuTitle     string
-	Sort          int
-	IsPublic      bool
-	InMenu        bool
-	PublishedAt   *time.Time
-	UnpublishedAt *time.Time
-	DeletedAt     *time.Time
-	HasChildren   bool
+	ID              ID
+	Version         int64
+	SiteID          site.ID
+	ParentID        *ID
+	Type            resourcetype.Code
+	Template        *template.Code
+	Title           string
+	MenuTitle       string
+	Sort            int
+	IsPublic        bool
+	InMenu          bool
+	PublishedAt     *time.Time
+	UnpublishedAt   *time.Time
+	DeletedAt       *time.Time
+	HasChildren     bool
+	CanTransferSite bool
 }
+
+type SiteTransferResult struct {
+	Resource    Resource
+	ResourceIDs []ID
+}
+
+type SiteTransferCompatibility func(
+	context.Context,
+	[]Resource,
+	*site.Runtime,
+	*site.Runtime,
+) error
 
 type ValidateImageMedia func(context.Context, media.ID) error
 
@@ -217,6 +232,19 @@ type ManagementRepository interface {
 	Repository
 	ExistsInSite(context.Context, site.ID, ID) (bool, error)
 	ListChildren(context.Context, site.ID, *ID) ([]Child, error)
+}
+
+type SiteTransferRepository interface {
+	TransferToSite(
+		context.Context,
+		*security.UserID,
+		ID,
+		site.ID,
+		site.ID,
+		int64,
+		string,
+		string,
+	) (SiteTransferResult, error)
 }
 
 type StatisticsRepository interface {

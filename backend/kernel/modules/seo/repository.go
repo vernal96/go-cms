@@ -15,5 +15,6 @@ var (
 
 type Repository interface {
 	ByResource(context.Context, site.ID, resource.ID) (Metadata, error)
+	UsedByResources(context.Context, site.ID, []resource.ID) (bool, error)
 	Save(context.Context, Metadata) (Metadata, error)
 }

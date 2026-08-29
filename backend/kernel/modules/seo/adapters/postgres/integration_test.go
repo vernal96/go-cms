@@ -137,6 +137,14 @@ RETURNING id;
 	if err != nil || stored.ResourceID != resourceID || stored.SiteID != firstSiteID {
 		t.Fatalf("save = %#v, %v", stored, err)
 	}
+	used, err := repository.UsedByResources(ctx, firstSiteID, []resource.ID{resourceID})
+	if err != nil || !used {
+		t.Fatalf("SEO usage = %t, %v", used, err)
+	}
+	used, err = repository.UsedByResources(ctx, secondSiteID, []resource.ID{resourceID})
+	if err != nil || used {
+		t.Fatalf("cross-site SEO usage = %t, %v", used, err)
+	}
 	if _, err := repository.ByResource(ctx, secondSiteID, resourceID); !errors.Is(err, seo.ErrNotFound) {
 		t.Fatalf("cross-site read error = %v", err)
 	}
@@ -147,6 +155,15 @@ RETURNING id;
 	}); !errors.Is(err, seo.ErrInvalidReference) {
 		t.Fatalf("cross-site save error = %v", err)
 	}
+	if _, err := connector.Pool().Exec(ctx, `UPDATE core.resource_entities SET site_id=$2 WHERE id=$1;`, resourceID, secondSiteID); err != nil {
+		t.Fatalf("cascade resource site ownership: %v", err)
+	}
+	if moved, err := repository.ByResource(ctx, secondSiteID, resourceID); err != nil || moved.SiteID != secondSiteID {
+		t.Fatalf("moved SEO metadata = %#v, %v", moved, err)
+	}
+	if _, err := repository.ByResource(ctx, firstSiteID, resourceID); !errors.Is(err, seo.ErrNotFound) {
+		t.Fatalf("old-site SEO metadata error = %v", err)
+	}
 	if _, err := connector.Pool().Exec(
 		ctx,
 		`DELETE FROM core.resource_entities WHERE id = $1;`,
@@ -154,7 +171,7 @@ RETURNING id;
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.ByResource(ctx, firstSiteID, resourceID); !errors.Is(err, seo.ErrNotFound) {
+	if _, err := repository.ByResource(ctx, secondSiteID, resourceID); !errors.Is(err, seo.ErrNotFound) {
 		t.Fatalf("metadata after permanent resource delete = %v", err)
 	}
 }

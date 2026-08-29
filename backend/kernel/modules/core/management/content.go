@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -322,6 +323,7 @@ func (m *Sites) ListSiteOptions(
 	search string,
 	page int,
 	perPage int,
+	excludeIDs ...site.ID,
 ) (SiteOptions, error) {
 	if err := m.authorizer.Check(ctx, actor, SiteReadPermission); err != nil {
 		return SiteOptions{}, err
@@ -334,9 +336,15 @@ func (m *Sites) ListSiteOptions(
 	if err != nil {
 		return SiteOptions{}, err
 	}
+	var excludeID *site.ID
+	if len(excludeIDs) > 0 && excludeIDs[0] > 0 {
+		value := excludeIDs[0]
+		excludeID = &value
+	}
 	result, err := m.repository.ListPage(ctx, site.ListQuery{
 		Search: search, Page: page, PerPage: perPage,
-		Scope: site.Scope{All: scope.All, SiteIDs: append([]site.ID(nil), scope.SiteIDs...)},
+		Scope:     site.Scope{All: scope.All, SiteIDs: append([]site.ID(nil), scope.SiteIDs...)},
+		ExcludeID: excludeID,
 	})
 	if err != nil {
 		return SiteOptions{}, fmt.Errorf("list CMS site options: %w", err)
@@ -491,21 +499,22 @@ func (m *Sites) Profiles(
 }
 
 type ResourceTreeItem struct {
-	ID             resource.ID    `json:"id"`
-	Version        int64          `json:"version"`
-	ParentID       *resource.ID   `json:"parent_id"`
-	TemplateCode   *template.Code `json:"template_code"`
-	Icon           string         `json:"icon"`
-	Title          string         `json:"title"`
-	MenuTitle      string         `json:"menu_title"`
-	DisplayTitle   string         `json:"display_title"`
-	Sort           int            `json:"sort"`
-	Deleted        bool           `json:"deleted"`
-	Published      bool           `json:"published"`
-	InMenu         bool           `json:"in_menu"`
-	DeletedAt      *time.Time     `json:"deleted_at"`
-	HasChildren    bool           `json:"has_children"`
-	CanCreateChild bool           `json:"can_create_child"`
+	ID              resource.ID    `json:"id"`
+	Version         int64          `json:"version"`
+	ParentID        *resource.ID   `json:"parent_id"`
+	TemplateCode    *template.Code `json:"template_code"`
+	Icon            string         `json:"icon"`
+	Title           string         `json:"title"`
+	MenuTitle       string         `json:"menu_title"`
+	DisplayTitle    string         `json:"display_title"`
+	Sort            int            `json:"sort"`
+	Deleted         bool           `json:"deleted"`
+	Published       bool           `json:"published"`
+	InMenu          bool           `json:"in_menu"`
+	DeletedAt       *time.Time     `json:"deleted_at"`
+	HasChildren     bool           `json:"has_children"`
+	CanCreateChild  bool           `json:"can_create_child"`
+	CanTransferSite bool           `json:"can_transfer_site"`
 }
 
 type ResourceChildren struct {
@@ -1550,6 +1559,93 @@ func (m *Resources) MoveResource(
 	return resourceDTO(updated), nil
 }
 
+func (m *Resources) TransferResourceToSite(
+	ctx context.Context,
+	actor security.Actor,
+	sourceSiteID site.ID,
+	resourceID resource.ID,
+	targetSiteID site.ID,
+	expectedVersion int64,
+) (ResourceDTO, error) {
+	if err := m.requireSite(ctx, actor, sourceSiteID, ResourceUpdatePermission, SiteAccessEdit); err != nil {
+		return ResourceDTO{}, err
+	}
+	if err := m.requireSite(ctx, actor, targetSiteID, ResourceUpdatePermission, SiteAccessEdit); err != nil {
+		return ResourceDTO{}, err
+	}
+	current, err := m.resources.Get(ctx, actor, resourceID)
+	if err != nil {
+		return ResourceDTO{}, err
+	}
+	if current.SiteID != sourceSiteID {
+		return ResourceDTO{}, resource.ErrNotFound
+	}
+	result, err := m.resources.TransferToSite(
+		ctx, actor, resourceID, targetSiteID, expectedVersion, validateTransferExtensions,
+	)
+	if err != nil {
+		return ResourceDTO{}, err
+	}
+	return resourceDTO(result.Resource), nil
+}
+
+func validateTransferExtensions(
+	ctx context.Context,
+	items []resource.Resource,
+	sourceRuntime *site.Runtime,
+	targetRuntime *site.Runtime,
+) error {
+	targetEditors := make(map[resourceextension.Code]resourceextension.Editor)
+	for _, moduleRuntime := range targetRuntime.Profile().Modules() {
+		provider, ok := moduleRuntime.(resourceextension.EditorProvider)
+		if !ok {
+			continue
+		}
+		editor := provider.ResourceEditorExtension()
+		if editor != nil {
+			targetEditors[editor.Metadata().Code] = editor
+		}
+	}
+	for _, moduleRuntime := range sourceRuntime.Profile().Modules() {
+		provider, ok := moduleRuntime.(resourceextension.EditorProvider)
+		if !ok {
+			continue
+		}
+		editor := provider.ResourceEditorExtension()
+		if editor == nil {
+			continue
+		}
+		applicableIDs := make([]resource.ID, 0, len(items))
+		for _, item := range items {
+			if editor.AppliesTo(item.Type) {
+				applicableIDs = append(applicableIDs, item.ID)
+			}
+		}
+		if len(applicableIDs) == 0 {
+			continue
+		}
+		if usage, supportsUsage := editor.(resourceextension.TransferUsage); supportsUsage {
+			used, err := usage.UsedByResources(ctx, sourceRuntime.Site().ID, applicableIDs)
+			if err != nil {
+				return fmt.Errorf("query resource extension %q usage: %w", editor.Metadata().Code, err)
+			}
+			if !used {
+				continue
+			}
+		}
+		target, exists := targetEditors[editor.Metadata().Code]
+		if !exists || !reflect.DeepEqual(editor.Metadata(), target.Metadata()) {
+			return fmt.Errorf("%w: resource extension %q is unavailable or incompatible", resource.ErrIncompatibleTargetSite, editor.Metadata().Code)
+		}
+		for _, item := range items {
+			if editor.AppliesTo(item.Type) && !target.AppliesTo(item.Type) {
+				return fmt.Errorf("%w: resource extension %q does not support type %q", resource.ErrIncompatibleTargetSite, editor.Metadata().Code, item.Type)
+			}
+		}
+	}
+	return nil
+}
+
 func (m *Resources) DeleteResource(
 	ctx context.Context,
 	actor security.Actor,
@@ -1932,21 +2028,22 @@ func treeItem(runtime *site.Runtime, item resource.Child, canCreate bool) Resour
 		}
 	}
 	return ResourceTreeItem{
-		ID:             item.ID,
-		Version:        item.Version,
-		ParentID:       item.ParentID,
-		TemplateCode:   item.Template,
-		Icon:           icon,
-		Title:          item.Title,
-		MenuTitle:      item.MenuTitle,
-		DisplayTitle:   displayTitle,
-		Sort:           item.Sort,
-		Deleted:        item.DeletedAt != nil,
-		Published:      isPublished(item),
-		InMenu:         item.InMenu,
-		DeletedAt:      item.DeletedAt,
-		HasChildren:    item.HasChildren,
-		CanCreateChild: canCreate && item.DeletedAt == nil,
+		ID:              item.ID,
+		Version:         item.Version,
+		ParentID:        item.ParentID,
+		TemplateCode:    item.Template,
+		Icon:            icon,
+		Title:           item.Title,
+		MenuTitle:       item.MenuTitle,
+		DisplayTitle:    displayTitle,
+		Sort:            item.Sort,
+		Deleted:         item.DeletedAt != nil,
+		Published:       isPublished(item),
+		InMenu:          item.InMenu,
+		DeletedAt:       item.DeletedAt,
+		HasChildren:     item.HasChildren,
+		CanCreateChild:  canCreate && item.DeletedAt == nil,
+		CanTransferSite: item.CanTransferSite,
 	}
 }
 
@@ -2078,7 +2175,9 @@ func validationError(err error) error {
 		return err
 	}
 	if errors.Is(err, site.ErrConflict) || errors.Is(err, site.ErrNotFound) ||
-		errors.Is(err, resource.ErrConflict) || errors.Is(err, resource.ErrRouteConflict) || errors.Is(err, resource.ErrNotFound) {
+		errors.Is(err, resource.ErrConflict) || errors.Is(err, resource.ErrRouteConflict) || errors.Is(err, resource.ErrNotFound) ||
+		errors.Is(err, resource.ErrInvalidTree) || errors.Is(err, resource.ErrCrossSiteReference) ||
+		errors.Is(err, resource.ErrIncompatibleTargetSite) {
 		return err
 	}
 	var fieldErrors field.ValidationErrors

@@ -256,6 +256,20 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 	) {
 		t.Fatalf("update invalidated = %v", store.invalidated)
 	}
+	store.invalidated = nil
+	transferResult, err := repository.TransferToSite(context.Background(), nil, updated.ID, 4, 5, updated.Version, "dev", "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transferResult.Resource.SiteID != 5 || !reflect.DeepEqual(transferResult.ResourceIDs, []resource.ID{7, 8}) {
+		t.Fatalf("transfer result = %#v", transferResult)
+	}
+	if !reflect.DeepEqual(store.invalidated, []cache.Tag{
+		siteResourcesTag(4), siteResourcesTag(5), resourceTag(7), resourceTag(8),
+	}) {
+		t.Fatalf("transfer invalidated = %v", store.invalidated)
+	}
+	updated = transferResult.Resource
 	beforeWidgetUpdate, err := repository.ByID(context.Background(), updated.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -270,7 +284,7 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 	if _, err := repository.UpdateWidget(context.Background(), nil, updated.ID, updated.Version, changedWidget, true); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(store.invalidated, []cache.Tag{siteResourcesTag(4), resourceTag(7)}) {
+	if !reflect.DeepEqual(store.invalidated, []cache.Tag{siteResourcesTag(5), resourceTag(7)}) {
 		t.Fatalf("widget update invalidated = %v", store.invalidated)
 	}
 	freshAfterWidgetUpdate, err := repository.ByID(context.Background(), updated.ID)
@@ -287,7 +301,7 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(
 		store.invalidated,
-		[]cache.Tag{siteResourcesTag(4), resourceTag(7)},
+		[]cache.Tag{siteResourcesTag(5), resourceTag(7)},
 	) {
 		t.Fatalf("soft delete invalidated = %v", store.invalidated)
 	}
@@ -298,7 +312,7 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(
 		store.invalidated,
-		[]cache.Tag{siteResourcesTag(4), resourceTag(7)},
+		[]cache.Tag{siteResourcesTag(5), resourceTag(7)},
 	) {
 		t.Fatalf("restore invalidated = %v", store.invalidated)
 	}
@@ -309,7 +323,7 @@ func TestCachedResourceRepositoryKeysTagsAndInvalidation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(
 		store.invalidated,
-		[]cache.Tag{siteResourcesTag(4), resourceTag(7)},
+		[]cache.Tag{siteResourcesTag(5), resourceTag(7)},
 	) {
 		t.Fatalf("delete invalidated = %v", store.invalidated)
 	}
@@ -672,6 +686,23 @@ func (r *resourceRepositoryStub) ListBySite(
 	site.ID,
 ) ([]resource.Resource, error) {
 	return []resource.Resource{r.item}, nil
+}
+
+func (r *resourceRepositoryStub) TransferToSite(
+	_ context.Context,
+	_ *security.UserID,
+	_ resource.ID,
+	_ site.ID,
+	targetSiteID site.ID,
+	_ int64,
+	_ string,
+	_ string,
+) (resource.SiteTransferResult, error) {
+	r.item.SiteID = targetSiteID
+	return resource.SiteTransferResult{
+		Resource:    r.item,
+		ResourceIDs: []resource.ID{r.item.ID, 8},
+	}, nil
 }
 
 func (r *resourceRepositoryStub) Update(

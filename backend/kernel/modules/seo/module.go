@@ -9,7 +9,9 @@ import (
 	"io"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
+	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/resourceextension"
 )
 
@@ -68,6 +70,14 @@ func (*Runtime) ModuleCode() kernel.ModuleCode { return ModuleCode }
 
 func (r *Runtime) ResourceEditorExtension() resourceextension.Editor {
 	return r
+}
+
+func (r *Runtime) UsedByResources(
+	ctx context.Context,
+	siteID site.ID,
+	resourceIDs []resource.ID,
+) (bool, error) {
+	return r.service.UsedByResources(ctx, siteID, resourceIDs)
 }
 
 func (r *Runtime) Metadata() resourceextension.Metadata {
@@ -208,4 +218,5 @@ var _ kernel.Module = Module{}
 var _ kernel.ModuleRuntime = (*Runtime)(nil)
 var _ resourceextension.EditorProvider = (*Runtime)(nil)
 var _ resourceextension.Editor = (*Runtime)(nil)
+var _ resourceextension.TransferUsage = (*Runtime)(nil)
 var _ resourceextension.PublicProvider = (*Runtime)(nil)

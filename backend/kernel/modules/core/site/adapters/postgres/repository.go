@@ -80,13 +80,19 @@ func (r *Repository) ListPage(ctx context.Context, query site.ListQuery) (site.P
 	for index, id := range query.Scope.SiteIDs {
 		allowed[index] = int64(id)
 	}
+	var excluded *int64
+	if query.ExcludeID != nil {
+		value := int64(*query.ExcludeID)
+		excluded = &value
+	}
 
 	var total int
 	err := r.connector.Pool().QueryRow(ctx, `
 SELECT count(*)
 FROM core.sites
 WHERE ($1 = '' OR domain ILIKE '%' || $1 || '%')
-  AND ($2 OR id = ANY($3::bigint[]));`, search, query.Scope.All, allowed).Scan(&total)
+  AND ($2 OR id = ANY($3::bigint[]))
+  AND ($4::bigint IS NULL OR id <> $4);`, search, query.Scope.All, allowed, excluded).Scan(&total)
 	if err != nil {
 		return site.Page{}, fmt.Errorf("count core sites: %w", err)
 	}
@@ -95,11 +101,13 @@ WHERE ($1 = '' OR domain ILIKE '%' || $1 || '%')
 FROM core.sites
 WHERE ($1 = '' OR domain ILIKE '%' || $1 || '%')
   AND ($2 OR id = ANY($3::bigint[]))
+  AND ($4::bigint IS NULL OR id <> $4)
 ORDER BY id
-LIMIT $4 OFFSET $5;`,
+LIMIT $5 OFFSET $6;`,
 		search,
 		query.Scope.All,
 		allowed,
+		excluded,
 		query.PerPage,
 		(query.Page-1)*query.PerPage,
 	)

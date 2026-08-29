@@ -394,6 +394,24 @@ func (r *memoryLibraryRepository) LibraryItemTemplateCodes(_ context.Context, si
 	return result, nil
 }
 
+func (r *memoryLibraryRepository) LibraryItemWidgetCodes(_ context.Context, siteID site.ID, libraryID ID) ([]widget.Code, error) {
+	seen := make(map[widget.Code]struct{})
+	for _, item := range r.items {
+		if item.SiteID != siteID || item.LibraryID != libraryID {
+			continue
+		}
+		for _, binding := range item.Widgets {
+			seen[binding.Code] = struct{}{}
+		}
+	}
+	result := make([]widget.Code, 0, len(seen))
+	for code := range seen {
+		result = append(result, code)
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left] < result[right] })
+	return result, nil
+}
+
 func (*memoryLibraryRepository) ResolveLibraryItemRoute(context.Context, site.ID, string) (LibraryItem, Resource, error) {
 	return LibraryItem{}, Resource{}, ErrNotFound
 }
@@ -570,6 +588,53 @@ func (r *memoryRepository) ListBySite(
 		return result[left].ID < result[right].ID
 	})
 	return result, nil
+}
+
+func (r *memoryRepository) TransferToSite(
+	_ context.Context,
+	_ *security.UserID,
+	id ID,
+	sourceSiteID site.ID,
+	targetSiteID site.ID,
+	expectedVersion int64,
+	_ string,
+	_ string,
+) (SiteTransferResult, error) {
+	root, exists := r.items[id]
+	if !exists || root.SiteID != sourceSiteID {
+		return SiteTransferResult{}, ErrNotFound
+	}
+	if root.Version != expectedVersion {
+		return SiteTransferResult{}, ErrConflict
+	}
+	children := make(map[ID][]ID)
+	for childID, item := range r.items {
+		if item.ParentID != nil {
+			children[*item.ParentID] = append(children[*item.ParentID], childID)
+		}
+	}
+	ids := make([]ID, 0)
+	var move func(ID, *string)
+	move = func(currentID ID, parentPath *string) {
+		item := Clone(r.items[currentID])
+		item.SiteID = targetSiteID
+		if currentID == id {
+			item.ParentID = nil
+			item.Version++
+		}
+		path := "/" + item.Slug
+		if parentPath != nil && *parentPath != "/" {
+			path = strings.TrimSuffix(*parentPath, "/") + "/" + item.Slug
+		}
+		item.Path = &path
+		r.items[currentID] = item
+		ids = append(ids, currentID)
+		for _, childID := range children[currentID] {
+			move(childID, item.Path)
+		}
+	}
+	move(id, nil)
+	return SiteTransferResult{Resource: Clone(r.items[id]), ResourceIDs: ids}, nil
 }
 
 func (r *memoryRepository) Update(
@@ -1057,6 +1122,99 @@ func TestServiceCreatePageDefaultsAndTemplateSettings(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "slug") {
 		t.Fatalf("invalid slug error = %v", err)
+	}
+}
+
+func TestServiceTransfersResourceSubtreeToAnotherSite(t *testing.T) {
+	service, repository, _ := newTestService(t)
+	ctx := context.Background()
+	home, err := service.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, Type: resourcetype.Page, Title: "Home",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := service.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, ParentID: &home.ID, Type: resourcetype.Page, Title: "Section", Slug: "section",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := service.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, ParentID: &root.ID, Type: resourcetype.Page, Title: "Child", Slug: "child",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Create(ctx, security.System(), CreateInput{
+		SiteID: 2, Type: resourcetype.Page, Title: "Target home",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := service.TransferToSite(ctx, security.System(), root.ID, 2, root.Version, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Resource.SiteID != 2 || result.Resource.ParentID != nil || result.Resource.Version != root.Version+1 {
+		t.Fatalf("unexpected transferred root: %#v", result.Resource)
+	}
+	if len(result.ResourceIDs) != 2 {
+		t.Fatalf("unexpected transferred ids: %#v", result.ResourceIDs)
+	}
+	storedChild := repository.items[child.ID]
+	if storedChild.SiteID != 2 || storedChild.ParentID == nil || *storedChild.ParentID != root.ID {
+		t.Fatalf("unexpected transferred child: %#v", storedChild)
+	}
+}
+
+func TestServiceRejectsInvalidCrossSiteTransfers(t *testing.T) {
+	service, _, _ := newTestService(t)
+	ctx := context.Background()
+	home, err := service.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, Type: resourcetype.Page, Title: "Home",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked, err := service.Create(ctx, security.System(), CreateInput{
+		SiteID: 1, ParentID: &home.ID, Type: resourcetype.ResourceLink, Title: "Linked", Slug: "linked",
+		TargetResourceID: &home.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name         string
+		resourceID   ID
+		targetSiteID site.ID
+		version      int64
+		expected     error
+	}{
+		{name: "main resource", resourceID: home.ID, targetSiteID: 2, version: home.Version, expected: ErrInvalidTree},
+		{name: "same site", resourceID: linked.ID, targetSiteID: 1, version: linked.Version, expected: ErrInvalidTree},
+		{name: "stale version", resourceID: linked.ID, targetSiteID: 2, version: linked.Version + 1, expected: ErrConflict},
+		{name: "outgoing reference", resourceID: linked.ID, targetSiteID: 2, version: linked.Version, expected: ErrCrossSiteReference},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, transferErr := service.TransferToSite(ctx, security.System(), test.resourceID, test.targetSiteID, test.version, nil)
+			if !errors.Is(transferErr, test.expected) {
+				t.Fatalf("expected %v, got %v", test.expected, transferErr)
+			}
+		})
+	}
+}
+
+func TestTransferSubtreeRejectsCycle(t *testing.T) {
+	firstID := ID(1)
+	secondID := ID(2)
+	_, err := transferSubtree([]Resource{
+		{ID: firstID, ParentID: &secondID},
+		{ID: secondID, ParentID: &firstID},
+	}, firstID)
+	if !errors.Is(err, ErrInvalidTree) {
+		t.Fatalf("cycle error = %v", err)
 	}
 }
 

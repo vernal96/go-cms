@@ -32,7 +32,8 @@ describe('ResourceCreateDialog', () => {
 		published: true,
 		deleted_at: null,
       has_children: false,
-      can_create_child: true,
+	can_create_child: true,
+	can_transfer_site: true,
     }
     requestMock
       .mockResolvedValueOnce({

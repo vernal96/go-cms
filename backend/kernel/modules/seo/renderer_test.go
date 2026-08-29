@@ -131,7 +131,7 @@ func TestRendererExcludesFileFieldsButKeepsScalarFields(t *testing.T) {
 		}
 	}
 	result, err := renderer.Render(Settings{TitleTemplate: "{{ site.field.company }} {{ resource.field.summary }}"}, RenderInput{
-		Site: site.Site{Settings: map[string]any{"company": "Acme", "logo": int64(42)}},
+		Site:     site.Site{Settings: map[string]any{"company": "Acme", "logo": int64(42)}},
 		Resource: resource.Resource{Fields: map[string]any{"summary": "About", "hero": int64(43)}},
 	})
 	if err != nil || result.Title != "Acme About" {
@@ -158,6 +158,18 @@ func (r *memoryRepository) ByResource(
 		return Metadata{}, ErrNotFound
 	}
 	return r.metadata.value, nil
+}
+
+func (r *memoryRepository) UsedByResources(_ context.Context, siteID site.ID, resourceIDs []resource.ID) (bool, error) {
+	if !r.metadata.exists || r.metadata.value.SiteID != siteID {
+		return false, nil
+	}
+	for _, resourceID := range resourceIDs {
+		if r.metadata.value.ResourceID == resourceID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (r *memoryRepository) Save(_ context.Context, metadata Metadata) (Metadata, error) {

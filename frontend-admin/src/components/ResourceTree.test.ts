@@ -59,6 +59,7 @@ describe('ResourceTree', () => {
           deleted_at: null,
           has_children: false,
           can_create_child: true,
+		  can_transfer_site: true,
         },
       ],
       permissions: { create_root: true },
@@ -170,5 +171,33 @@ describe('ResourceTree', () => {
     expect(menu.text()).toContain('Восстановить с потомками')
     expect(menu.text()).toContain('Удалить окончательно')
     expect(menu.find('.is-danger').exists()).toBe(true)
+  })
+
+  it('shows site transfer only for transferable resources with update access', async () => {
+    const wrapper = shallowMount(ResourceTree, {
+      props: { accessToken: 'token', canCreate: false, canUpdate: true },
+    })
+    const tree = wrapper.findComponent({ name: 'ElTree' })
+    const event = new MouseEvent('contextmenu', { clientX: 100, clientY: 100 })
+
+    tree.vm.$emit('node-contextmenu', event, {
+      id: 12,
+      display_title: 'Раздел',
+      deleted: false,
+      can_transfer_site: true,
+      loadError: false,
+    })
+    await nextTick()
+    expect(wrapper.find('.resource-context-menu').text()).toContain('Перенести на сайт')
+
+    tree.vm.$emit('node-contextmenu', event, {
+      id: 13,
+      display_title: 'Главная',
+      deleted: false,
+      can_transfer_site: false,
+      loadError: false,
+    })
+    await nextTick()
+    expect(wrapper.find('.resource-context-menu').text()).not.toContain('Перенести на сайт')
   })
 })

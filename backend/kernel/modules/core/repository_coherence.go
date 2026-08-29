@@ -419,6 +419,45 @@ func (r *invalidatingResourceRepository) ListChildren(
 	return management.ListChildren(ctx, siteID, parentID)
 }
 
+func (r *invalidatingResourceRepository) TransferToSite(
+	ctx context.Context,
+	actorID *security.UserID,
+	id resource.ID,
+	sourceSiteID site.ID,
+	targetSiteID site.ID,
+	expectedVersion int64,
+	expectedSourceProfile string,
+	expectedTargetProfile string,
+) (resource.SiteTransferResult, error) {
+	repository, ok := r.base.(resource.SiteTransferRepository)
+	if !ok {
+		return resource.SiteTransferResult{}, errors.New("resource site transfer repository is unavailable")
+	}
+	tags := []cache.Tag{
+		siteResourcesTag(sourceSiteID),
+		siteResourcesTag(targetSiteID),
+		resourceTag(id),
+	}
+	var result resource.SiteTransferResult
+	err := withRepositoryCacheWrite(r.policy, tags, func() error {
+		var writeErr error
+		result, writeErr = repository.TransferToSite(
+			ctx, actorID, id, sourceSiteID, targetSiteID, expectedVersion,
+			expectedSourceProfile, expectedTargetProfile,
+		)
+		if writeErr != nil {
+			return writeErr
+		}
+		invalidate := append([]cache.Tag(nil), tags...)
+		for _, resourceID := range result.ResourceIDs {
+			invalidate = append(invalidate, resourceTag(resourceID))
+		}
+		r.policy.invalidate(ctx, invalidate...)
+		return nil
+	})
+	return result, err
+}
+
 func (r *invalidatingResourceRepository) Statistics(
 	ctx context.Context,
 	query resource.StatisticsQuery,
@@ -710,6 +749,14 @@ func (r *invalidatingResourceRepository) LibraryItemTemplateCodes(ctx context.Co
 	}
 	return repository.LibraryItemTemplateCodes(ctx, siteID, libraryID)
 }
+
+func (r *invalidatingResourceRepository) LibraryItemWidgetCodes(ctx context.Context, siteID site.ID, libraryID resource.ID) ([]widget.Code, error) {
+	repository, ok := r.base.(resource.LibraryItemRepository)
+	if !ok {
+		return nil, errors.New("resource library item repository is unavailable")
+	}
+	return repository.LibraryItemWidgetCodes(ctx, siteID, libraryID)
+}
 func (r *invalidatingResourceRepository) ResolveLibraryItemRoute(ctx context.Context, siteID site.ID, path string) (resource.LibraryItem, resource.Resource, error) {
 	repository, err := r.libraryItems()
 	if err != nil {
@@ -722,6 +769,7 @@ var _ Database = (*coherentDatabase)(nil)
 var _ site.ManagementRepository = (*invalidatingSiteRepository)(nil)
 var _ site.StatisticsRepository = (*invalidatingSiteRepository)(nil)
 var _ resource.ManagementRepository = (*invalidatingResourceRepository)(nil)
+var _ resource.SiteTransferRepository = (*invalidatingResourceRepository)(nil)
 var _ resource.WidgetRepository = (*invalidatingResourceRepository)(nil)
 var _ resource.LifecycleRepository = (*invalidatingResourceRepository)(nil)
 var _ resource.StatisticsRepository = (*invalidatingResourceRepository)(nil)

@@ -47,6 +47,14 @@ func (s *Service) Get(
 	return s.normalize(settingsFromMetadata(metadata)), nil
 }
 
+func (s *Service) UsedByResources(
+	ctx context.Context,
+	siteID site.ID,
+	resourceIDs []resource.ID,
+) (bool, error) {
+	return s.repository.UsedByResources(ctx, siteID, resourceIDs)
+}
+
 func (s *Service) Save(
 	ctx context.Context,
 	actor security.Actor,
