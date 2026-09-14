@@ -33,6 +33,7 @@ type Reference struct {
 
 type DiskInfo struct {
 	Code       Code
+	Label      string
 	Visibility Visibility
 }
 
@@ -46,6 +47,13 @@ type Disk interface {
 	URL(context.Context, Reference) (string, error)
 	TemporaryURL(context.Context, Reference, time.Time) (string, error)
 	Close() error
+}
+
+// FactoryLabelProvider is an optional application-composition capability.
+// Labels are human-facing disk names for admin/catalog UIs; disk codes remain
+// stable machine identifiers stored in domain data and used for resolution.
+type FactoryLabelProvider interface {
+	Label() string
 }
 
 // OverwriteDisk is an optional capability for infrastructure that needs
