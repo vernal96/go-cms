@@ -65,6 +65,7 @@ Never ask the user for information that can be reliably discovered from the curr
 - Immutable profile definitions/blueprints may be shared; final site registries/module runtimes must have the correct site scope.
 - `core` and `admin` are mandatory profile modules; `core` is first. Dependency order must be deterministic.
 - Cache stores are application-owned physical infrastructure; module cache aliases describe module-local storage policy/capability, not a concrete technology and not necessarily a domain component. One domain component may use several aliases/stores at once. Cache keys identify cached data; cache tags identify dependencies. Cache coherence is correctness: every supported mutation path must invalidate/update all affected cached reads, including dependencies spanning aliases/stores.
+- Filesystem disks are application-owned physical infrastructure. A disk has a stable machine `Code`, human-facing `Label`, independent `Visibility`, and a replaceable concrete driver. Modules should use explicit filesystem aliases/bindings for logical storage capabilities instead of depending on concrete driver names or arbitrary project disk codes.
 - Extension precedence is `core < package < project < site`; accidental duplicates are errors and intentional replacement must be explicit/deterministic.
 - Prefer explicit constructors, factories, interfaces and registries over reflection DI/service locators. Avoid mutable global state and unnecessary `any`.
 
@@ -93,6 +94,7 @@ Use the smallest set of skills that covers the actual task. A workflow skill suc
 - `go-cms-development`: cross-package backend architecture or reusable extension/composition work.
 - `go-cms-runtime-integrity`: SiteRuntime/ProfileBlueprint/reload/publication/runtime cache-coherence work.
 - `go-cms-cache`: cache contracts, stores, module cache aliases, cache keys/tags, TTL, invalidation/coherence, Remember/result caching, cache connectors or cache maintenance.
+- `go-cms-filesystem`: filesystem disks/drivers, disk code/label/visibility, project disk declarations, module filesystem aliases/bindings, CMS files/folders, local/S3 connectors, FileExplorer/file picker and storage-selection behavior.
 - `go-cms-events-jobs`: domain events, transactional outbox, EventBus publishing/consumption, application background workers/jobs, retries, delivery semantics and idempotency.
 - `go-cms-templating`: reusable `{{...}}` interpolation, variable allowlists/resolvers, context-aware rendering/escaping and migration of feature-specific template engines such as SEO to shared kernel templating.
 - `go-cms-mail`: mail templates, manual/automatic sending, preview/render snapshots, SMTP/null/log transports, mail jobs, attachments, delivery attempts/history, retention, permissions and mail admin UI/API.
