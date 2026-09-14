@@ -63,6 +63,12 @@ make down  # stop containers without deleting persistent volumes
 make help  # show all Make targets
 ```
 
+## Filesystem configuration
+
+Physical disks are individual Go declarations under `backend/internal/filesystems`.
+See [filesystem declarations](backend/internal/filesystems/README.md) for registration,
+code-only configuration, and mixing Go values with individual environment settings.
+
 ## Checks
 
 ```bash

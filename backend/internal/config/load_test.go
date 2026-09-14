@@ -20,7 +20,10 @@ func TestLoadReadsDotEnvAndPreservesProcessEnvironment(t *testing.T) {
 		"POSTGRES_PORT=5432\r\n" +
 		"POSTGRES_DB=cms\r\n" +
 		"POSTGRES_USER=cms\r\n" +
-		"POSTGRES_PASSWORD=secret\r\n"
+		"POSTGRES_PASSWORD=secret\r\n" +
+		"FILES_PUBLIC_ROOT=var/files/from-dotenv\r\n" +
+		"FILES_PRIVATE_ROOT=var/files/private-from-dotenv\r\n" +
+		"FILES_PRIVATE_SIGNING_KEY=0123456789abcdef0123456789abcdef\r\n"
 	if err := os.WriteFile(filepath.Join(".", ".env"), []byte(dotEnv), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +39,9 @@ func TestLoadReadsDotEnvAndPreservesProcessEnvironment(t *testing.T) {
 		"POSTGRES_DB",
 		"POSTGRES_USER",
 		"POSTGRES_PASSWORD",
+		"FILES_PUBLIC_ROOT",
+		"FILES_PRIVATE_ROOT",
+		"FILES_PRIVATE_SIGNING_KEY",
 	}
 	for _, key := range keys {
 		value, exists := os.LookupEnv(key)
@@ -55,9 +61,13 @@ func TestLoadReadsDotEnvAndPreservesProcessEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	t.Setenv("FILES_PUBLIC_ROOT", "var/files/from-environment")
 	config, err := projectconfig.Load()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if config.Files.Public.Root != "var/files/from-environment" || config.Files.Private.Root != "var/files/private-from-dotenv" {
+		t.Fatal("disk settings did not preserve independent environment and dotenv values")
 	}
 	if config.Postgres.Host != "environment-host" {
 		t.Fatalf("postgres host = %q", config.Postgres.Host)

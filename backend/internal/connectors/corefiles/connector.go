@@ -2,7 +2,6 @@ package corefiles
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,57 +12,30 @@ import (
 )
 
 type Config struct {
-	Code       filesystem.Code       `json:"code"`
-	Label      string                `json:"label"`
-	Driver     string                `json:"driver"`
-	Visibility filesystem.Visibility `json:"visibility"`
-	Local      LocalConfig           `json:"local,omitempty"`
-	S3         S3Config              `json:"s3,omitempty"`
-}
-
-type Configs []Config
-
-func (c *Configs) Decode(value string) error {
-	if c == nil {
-		return errors.New("filesystem configs target is nil")
-	}
-	value = strings.TrimSpace(value)
-	if value == "" {
-		*c = nil
-		return nil
-	}
-	var decoded []Config
-	if err := json.Unmarshal([]byte(value), &decoded); err != nil {
-		return fmt.Errorf("decode filesystem disks: %w", err)
-	}
-	*c = decoded
-	return nil
-}
-
-func (c Configs) Factories() []filesystem.Factory {
-	result := make([]filesystem.Factory, len(c))
-	for index, config := range c {
-		result[index] = Factory{config: config}
-	}
-	return result
+	Code       filesystem.Code
+	Label      string
+	Driver     string
+	Visibility filesystem.Visibility
+	Local      LocalConfig
+	S3         S3Config
 }
 
 type LocalConfig struct {
-	Root       string `json:"root"`
-	BaseURL    string `json:"base_url"`
-	SigningKey string `json:"signing_key,omitempty"`
+	Root       string
+	BaseURL    string
+	SigningKey string
 }
 
 type S3Config struct {
-	Region          string `json:"region"`
-	Bucket          string `json:"bucket"`
-	Prefix          string `json:"prefix,omitempty"`
-	Endpoint        string `json:"endpoint,omitempty"`
-	UsePathStyle    bool   `json:"use_path_style,omitempty"`
-	PublicBaseURL   string `json:"public_base_url,omitempty"`
-	AccessKeyID     string `json:"access_key_id,omitempty"`
-	SecretAccessKey string `json:"secret_access_key,omitempty"`
-	SessionToken    string `json:"session_token,omitempty"`
+	Region          string
+	Bucket          string
+	Prefix          string
+	Endpoint        string
+	UsePathStyle    bool
+	PublicBaseURL   string
+	AccessKeyID     string
+	SecretAccessKey string
+	SessionToken    string
 }
 
 type Factory struct {

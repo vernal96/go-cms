@@ -5,11 +5,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/vernal96/go-cms/internal/connectors/corefiles"
 	"github.com/vernal96/go-cms/internal/connectors/maineventbus"
 	"github.com/vernal96/go-cms/internal/connectors/mainlogger"
 	"github.com/vernal96/go-cms/internal/connectors/mainpostgres"
 	"github.com/vernal96/go-cms/internal/connectors/projectcache"
+	privatefiles "github.com/vernal96/go-cms/internal/filesystems/private"
+	publicfiles "github.com/vernal96/go-cms/internal/filesystems/public"
 	"github.com/vernal96/go-cms/internal/profiles/dev"
 	jwtsecurity "github.com/vernal96/go-cms/internal/security/jwt"
 	"github.com/vernal96/go-cms/kernel"
@@ -164,12 +165,13 @@ func (c OutboxConfig) PublisherConfig() outbox.PublisherConfig {
 }
 
 type FilesConfig struct {
-	Disks           corefiles.Configs  `envconfig:"DISKS" required:"true"`
-	InternalStorage filesystem.Code    `envconfig:"INTERNAL_STORAGE" default:"private"`
-	MaxUploadSize   int64              `envconfig:"MAX_UPLOAD_SIZE" default:"104857600"`
-	UploadTimeout   time.Duration      `envconfig:"UPLOAD_TIMEOUT" default:"10m"`
-	AvatarStorage   filesystem.Code    `envconfig:"AVATAR_STORAGE" default:"private"`
-	AvatarMaxSize   int64              `envconfig:"AVATAR_MAX_SIZE" default:"5242880"`
+	Public          publicfiles.Config  `envconfig:"PUBLIC"`
+	Private         privatefiles.Config `envconfig:"PRIVATE"`
+	InternalStorage filesystem.Code     `envconfig:"INTERNAL_STORAGE" default:"private"`
+	MaxUploadSize   int64               `envconfig:"MAX_UPLOAD_SIZE" default:"104857600"`
+	UploadTimeout   time.Duration       `envconfig:"UPLOAD_TIMEOUT" default:"10m"`
+	AvatarStorage   filesystem.Code     `envconfig:"AVATAR_STORAGE" default:"private"`
+	AvatarMaxSize   int64               `envconfig:"AVATAR_MAX_SIZE" default:"5242880"`
 }
 
 type ServerConfig struct {
@@ -199,8 +201,11 @@ func (c Config) Application() appkernel.Definition {
 				formspostgres.DatabaseFactory{},
 			},
 		},
-		Filesystems: c.Files.Disks.Factories(),
-		Caches:      c.Caches.Factories(),
+		Filesystems: []filesystem.Factory{
+			publicfiles.NewFactory(c.Files.Public),
+			privatefiles.NewFactory(c.Files.Private),
+		},
+		Caches: c.Caches.Factories(),
 		ModuleApplications: []kernel.ModuleApplication{
 			c.Mail.Application(),
 			c.Forms.Application(),

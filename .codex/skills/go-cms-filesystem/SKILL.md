@@ -73,44 +73,21 @@ type DiskInfo struct {
 
 The project layer may declare any number of disks. Do not model `public` and `private` as the only possible disks.
 
-Current project configuration uses a list of disk definitions. Each definition must include:
+Project disks are separate Go declarations under `backend/internal/filesystems`,
+registered explicitly as factories in `internal/config.Config.Application`.
+Each declaration contains its code, label, driver and visibility and chooses which
+settings are fixed in Go versus supplied by its typed environment configuration.
 
-```text
-code
-label
-driver
-visibility
-```
+For example, the `public` and `private` packages fix their identity and local
+storage driver in Go, while `Files.Public` / `Files.Private` load roots, base URLs
+and a private signing key from individual `FILES_PUBLIC_*` / `FILES_PRIVATE_*`
+variables. Constructors can also receive these values directly from Go.
+Environment loading happens once during project configuration loading; request
+handling and factory registration must not read environment variables.
 
-and the selected driver's settings.
-
-Example:
-
-```json
-[
-  {
-    "code": "media",
-    "label": "Медиатека",
-    "driver": "s3",
-    "visibility": "public",
-    "s3": {
-      "region": "eu-central-1",
-      "bucket": "cms-media"
-    }
-  },
-  {
-    "code": "internal",
-    "label": "Служебные файлы",
-    "driver": "local",
-    "visibility": "private",
-    "local": {
-      "root": "var/files/internal",
-      "base_url": "http://localhost:8080",
-      "signing_key": "..."
-    }
-  }
-]
-```
+Use the existing `corefiles.NewFactory` for project local/S3 declarations. See
+`backend/internal/filesystems/README.md` for complete Go-only and mixed S3 examples.
+Do not restore a JSON disk list in env or automatic/global registration.
 
 Adding another disk must not require changing `kernel/filesystem` or adding another hardcoded constructor like `PublicFactory`/`PrivateFactory`.
 

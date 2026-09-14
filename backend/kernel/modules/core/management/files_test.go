@@ -19,9 +19,11 @@ import (
 
 type filesystemManagementService struct {
 	file.ManagementService
-	listing  file.BrowserListing
-	resolved file.Folder
-	ensured  file.Folder
+	listing    file.BrowserListing
+	catalog    []filesystem.DiskInfo
+	catalogErr error
+	resolved   file.Folder
+	ensured    file.Folder
 }
 
 func (s filesystemManagementService) ResolveFolder(context.Context, security.Actor, filesystem.Code, string) (file.Folder, error) {
@@ -33,7 +35,10 @@ func (s filesystemManagementService) EnsureFolderPath(context.Context, security.
 }
 
 func (s filesystemManagementService) Disks(context.Context, security.Actor) ([]filesystem.DiskInfo, error) {
-	return []filesystem.DiskInfo{{Code: "public", Visibility: filesystem.VisibilityPublic}}, nil
+	if s.catalogErr != nil || s.catalog != nil {
+		return s.catalog, s.catalogErr
+	}
+	return []filesystem.DiskInfo{{Code: "public", Label: "Публичные файлы", Visibility: filesystem.VisibilityPublic}}, nil
 }
 
 func (s filesystemManagementService) Browse(context.Context, security.Actor, filesystem.Code, *file.FolderID) (file.BrowserListing, error) {
@@ -54,15 +59,47 @@ func TestFilesystemManagementReturnsDiskListingAndCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(disks.Items) != 1 || disks.Items[0].Code != "public" || !disks.Permissions.Read || disks.Permissions.Delete {
+	if len(disks.Items) != 1 || disks.Items[0].Code != "public" || disks.Items[0].Label != "Публичные файлы" || !disks.Permissions.Read || disks.Permissions.Delete {
 		t.Fatalf("filesystem disks = %#v", disks)
 	}
 	listing, err := management.BrowseFilesystem(context.Background(), security.User(1), "public", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if listing.Disk != disks.Items[0] {
+		t.Fatalf("listing disk = %#v; catalog disk = %#v", listing.Disk, disks.Items[0])
+	}
 	if len(listing.Items) != 2 || listing.Items[0].Kind != file.ItemFolder || *listing.Items[0].ItemCount != 4 || *listing.Items[1].MIMEType != "image/png" {
 		t.Fatalf("filesystem listing = %#v", listing)
+	}
+}
+
+func TestBrowseUsesArbitraryCatalogMetadataAndPropagatesCatalogErrors(t *testing.T) {
+	info := filesystem.DiskInfo{Code: "archive", Label: "Архив документов", Visibility: filesystem.VisibilityPrivate}
+	unavailable := errors.New("catalog unavailable")
+	for _, tc := range []struct {
+		name       string
+		catalog    []filesystem.DiskInfo
+		catalogErr error
+		wantErr    error
+	}{
+		{name: "arbitrary disk", catalog: []filesystem.DiskInfo{{Code: "media", Label: "Медиа", Visibility: filesystem.VisibilityPublic}, info}},
+		{name: "missing disk", catalog: []filesystem.DiskInfo{}, wantErr: file.ErrStorageNotFound},
+		{name: "catalog error", catalogErr: unavailable, wantErr: unavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			management := &Files{
+				files:      filesystemManagementService{listing: file.BrowserListing{Storage: info.Code, Visibility: info.Visibility}, catalog: tc.catalog, catalogErr: tc.catalogErr},
+				authorizer: managementAuthorizer{denied: map[permission.Code]error{}},
+			}
+			listing, err := management.BrowseFilesystem(context.Background(), security.User(1), info.Code, nil)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tc.wantErr)
+			}
+			if err == nil && listing.Disk != filesystemDiskDTO(info) {
+				t.Fatalf("disk = %#v", listing.Disk)
+			}
+		})
 	}
 }
 

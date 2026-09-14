@@ -95,6 +95,47 @@ describe('FileExplorer', () => {
     expect(wrapper.find('.file-status-text').text()).toContain('text/plain')
   })
 
+  it('shows arbitrary disk labels and switches requests by code', async () => {
+    const disks = [
+      { code: 'media', label: 'Медиатека', visibility: 'public' },
+      { code: 'archive', label: 'Архив', visibility: 'private' },
+    ]
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ items: disks, permissions: listing.permissions }))
+      .mockResolvedValueOnce(json({ ...listing, disk: disks[0], items: [] }))
+      .mockResolvedValueOnce(json({ ...listing, disk: disks[1], items: [] }))
+    const wrapper = mountExplorer(fetchMock)
+    await flushPromises()
+    const select = wrapper.findComponent({ name: 'ElSelect' })
+    expect(select.findAllComponents({ name: 'ElOption' }).map(option => option.props('label')))
+      .toEqual(['Медиатека · публичный', 'Архив · приватный'])
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('disk=media')
+    select.vm.$emit('update:modelValue', 'archive')
+    select.vm.$emit('change', 'archive')
+    await flushPromises()
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain('disk=archive')
+    wrapper.unmount()
+  })
+
+  it('limits picker disks by code even when labels match', async () => {
+    const archive = { code: 'archive', label: 'Файлы', visibility: 'private' }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({
+        items: [{ code: 'media', label: 'Файлы', visibility: 'public' }, archive],
+        permissions: listing.permissions,
+      }))
+      .mockResolvedValueOnce(json({ ...listing, disk: archive, items: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(FileExplorer, {
+      props: { accessToken: 'token', permissions: new Set(['core.file.read']), picker: true, allowedStorages: ['archive'] },
+    })
+    await flushPromises()
+    const options = wrapper.findComponent({ name: 'ElSelect' }).findAllComponents({ name: 'ElOption' })
+    expect(options.map(option => option.props('value'))).toEqual(['archive'])
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('disk=archive')
+    wrapper.unmount()
+  })
+
   it('opens the configured initial storage and resolved folder', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(json({

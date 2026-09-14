@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -99,6 +100,44 @@ func TestS3CompatibleIntegration(t *testing.T) {
 	if readErr != nil || closeErr != nil || response.StatusCode != http.StatusOK || string(signedContent) != "integration" {
 		t.Fatalf("signed GET status=%d content=%q read=%v close=%v", response.StatusCode, signedContent, readErr, closeErr)
 	}
+
+	t.Run("rejects tampered and expired signed URLs", func(t *testing.T) {
+		parsed, err := url.Parse(signedURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		query := parsed.Query()
+		query.Set("X-Amz-Signature", strings.Repeat("0", 64))
+		parsed.RawQuery = query.Encode()
+		assertForbidden := func(rawURL string) {
+			t.Helper()
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusForbidden {
+				t.Fatalf("invalid signed URL status = %d", response.StatusCode)
+			}
+		}
+		assertForbidden(parsed.String())
+		shortURL, err := connector.TemporaryURL(ctx, filesystem.Reference{ID: "1", Path: key}, time.Now().Add(time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-timer.C:
+		}
+		assertForbidden(shortURL)
+	})
 
 	scan, err := connector.OpenPrefixScan(ctx, "objects")
 	if err != nil {

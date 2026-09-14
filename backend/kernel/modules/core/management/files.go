@@ -122,12 +122,24 @@ func (m *Files) BrowseFilesystem(
 	if err != nil {
 		return FilesystemListing{}, err
 	}
+	catalog, err := m.files.Disks(ctx, actor)
+	if err != nil {
+		return FilesystemListing{}, err
+	}
+	var diskInfo filesystem.DiskInfo
+	found := false
+	for _, info := range catalog {
+		if info.Code == listing.Storage {
+			diskInfo = info
+			found = true
+			break
+		}
+	}
+	if !found {
+		return FilesystemListing{}, file.ErrStorageNotFound
+	}
 	return FilesystemListing{
-		Disk: FilesystemDiskDTO{
-			Code:       listing.Storage,
-			Label:      string(listing.Storage),
-			Visibility: listing.Visibility,
-		},
+		Disk:   filesystemDiskDTO(diskInfo),
 		Folder: folder, Breadcrumbs: breadcrumbs, Items: items, Permissions: permissions,
 	}, nil
 }

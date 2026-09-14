@@ -30,10 +30,11 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	t.Setenv("POSTGRES_DB", "cms")
 	t.Setenv("POSTGRES_USER", "cms")
 	t.Setenv("POSTGRES_PASSWORD", "secret")
-	t.Setenv("FILES_DISKS", `[
-		{"code":"public","label":"Public files","driver":"local","visibility":"public","local":{"root":"/tmp/cms-public","base_url":"http://localhost:8080"}},
-		{"code":"private","label":"Private files","driver":"s3","visibility":"private","s3":{"region":"us-east-1","bucket":"cms-private"}}
-	]`)
+	t.Setenv("FILES_PUBLIC_ROOT", "/tmp/cms-public")
+	t.Setenv("FILES_PUBLIC_BASE_URL", "http://public.example")
+	t.Setenv("FILES_PRIVATE_ROOT", "/tmp/cms-private")
+	t.Setenv("FILES_PRIVATE_BASE_URL", "http://private.example")
+	t.Setenv("FILES_PRIVATE_SIGNING_KEY", "0123456789abcdef0123456789abcdef")
 	t.Setenv("FILES_INTERNAL_STORAGE", "private")
 	t.Setenv("FILES_MAX_UPLOAD_SIZE", "209715200")
 	t.Setenv("FILES_UPLOAD_TIMEOUT", "12m")
@@ -81,12 +82,11 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		config.Caches.Redis.MasterName != "cms-primary" {
 		t.Fatalf("cache config = %#v", config.Caches)
 	}
-	if len(config.Files.Disks) != 2 ||
-		config.Files.Disks[0].Code != "public" ||
-		config.Files.Disks[0].Label != "Public files" ||
-		config.Files.Disks[0].Visibility != filesystem.VisibilityPublic ||
-		config.Files.Disks[1].Code != "private" ||
-		config.Files.Disks[1].Label != "Private files" ||
+	if config.Files.Public.Root != "/tmp/cms-public" ||
+		config.Files.Public.BaseURL != "http://public.example" ||
+		config.Files.Private.Root != "/tmp/cms-private" ||
+		config.Files.Private.BaseURL != "http://private.example" ||
+		config.Files.Private.SigningKey != "0123456789abcdef0123456789abcdef" ||
 		config.Files.InternalStorage != "private" ||
 		config.Files.MaxUploadSize != 209715200 ||
 		config.Files.UploadTimeout != 12*time.Minute ||
@@ -143,7 +143,7 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		t.Fatalf("filesystem factories = %#v", definition.Filesystems)
 	}
 	labelProvider, ok := definition.Filesystems[0].(filesystem.FactoryLabelProvider)
-	if !ok || labelProvider.Label() != "Public files" {
+	if !ok || labelProvider.Label() != "Публичные файлы" {
 		t.Fatalf("public filesystem label = %#v, %t", labelProvider, ok)
 	}
 	if len(definition.Caches) != 2 ||
