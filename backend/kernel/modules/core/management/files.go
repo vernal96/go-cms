@@ -37,6 +37,7 @@ const (
 
 type FilesystemDiskDTO struct {
 	Code       filesystem.Code       `json:"code"`
+	Label      string                `json:"label"`
 	Visibility filesystem.Visibility `json:"visibility"`
 }
 
@@ -81,7 +82,7 @@ func (m *Files) FilesystemDisks(
 	}
 	result := make([]FilesystemDiskDTO, len(items))
 	for index, item := range items {
-		result[index] = FilesystemDiskDTO{Code: item.Code, Visibility: item.Visibility}
+		result[index] = filesystemDiskDTO(item)
 	}
 	permissions, err := m.filePermissions(ctx, actor)
 	if err != nil {
@@ -122,7 +123,11 @@ func (m *Files) BrowseFilesystem(
 		return FilesystemListing{}, err
 	}
 	return FilesystemListing{
-		Disk:   FilesystemDiskDTO{Code: listing.Storage, Visibility: listing.Visibility},
+		Disk: filesystemDiskDTO(filesystem.DiskInfo{
+			Code:       listing.Storage,
+			Label:      diskLabel(m.files, listing.Storage),
+			Visibility: listing.Visibility,
+		}),
 		Folder: folder, Breadcrumbs: breadcrumbs, Items: items, Permissions: permissions,
 	}, nil
 }
@@ -248,6 +253,22 @@ func (m *Files) filePermissions(ctx context.Context, actor security.Actor) (Perm
 		}
 	}
 	return PermissionSet{Read: values[0], Create: values[1], Update: values[2], Delete: values[3]}, nil
+}
+
+func filesystemDiskDTO(item filesystem.DiskInfo) FilesystemDiskDTO {
+	return FilesystemDiskDTO{Code: item.Code, Label: item.Label, Visibility: item.Visibility}
+}
+
+func diskLabel(files file.ManagementService, code filesystem.Code) string {
+	items, err := files.Disks(context.Background(), security.System())
+	if err == nil {
+		for _, item := range items {
+			if item.Code == code {
+				return item.Label
+			}
+		}
+	}
+	return string(code)
 }
 
 func folderItemDTO(item file.Folder, count *int) FilesystemItemDTO {
