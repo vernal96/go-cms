@@ -247,7 +247,7 @@ type SiteDetails struct {
 type SiteProfile struct {
 	Code       kernel.ProfileCode `json:"code"`
 	Name       string             `json:"name"`
-	Fields     []FieldDefinition  `json:"fields"`
+	Fields     []field.Descriptor `json:"fields"`
 	EditorTabs []FieldEditorTab   `json:"editor_tabs"`
 }
 
@@ -484,7 +484,7 @@ func (m *Sites) Profiles(
 		if !exists {
 			continue
 		}
-		fields, err := fieldDefinitions(blueprint.ParamSchema().Definitions())
+		fields, err := field.DescribeDefinitions(blueprint.ParamSchema().Definitions(), blueprint.Registry())
 		if err != nil {
 			return SiteProfiles{}, err
 		}
@@ -554,13 +554,13 @@ func (m *Resources) ResourceChildren(
 }
 
 type ResourceTemplate struct {
-	Code                    template.Code     `json:"code"`
-	Label                   string            `json:"label"`
-	Icon                    string            `json:"icon"`
-	Fields                  []FieldDefinition `json:"fields"`
-	EditorTabs              []FieldEditorTab  `json:"editor_tabs"`
-	SupportsResourceWidgets bool              `json:"supports_resource_widgets"`
-	WidgetAreas             []widget.AreaCode `json:"widget_areas"`
+	Code                    template.Code      `json:"code"`
+	Label                   string             `json:"label"`
+	Icon                    string             `json:"icon"`
+	Fields                  []field.Descriptor `json:"fields"`
+	EditorTabs              []FieldEditorTab   `json:"editor_tabs"`
+	SupportsResourceWidgets bool               `json:"supports_resource_widgets"`
+	WidgetAreas             []widget.AreaCode  `json:"widget_areas"`
 }
 
 type FieldEditorTab struct {
@@ -587,23 +587,23 @@ type WidgetView struct {
 }
 
 type WidgetDefinition struct {
-	Code              widget.Code       `json:"code"`
-	ModuleCode        string            `json:"module_code"`
-	ModuleLabel       string            `json:"module_label"`
-	ModuleDescription string            `json:"module_description"`
-	Label             string            `json:"label"`
-	Description       string            `json:"description"`
-	Fields            []FieldDefinition `json:"fields"`
-	EditorTabs        []FieldEditorTab  `json:"editor_tabs"`
-	SummaryFields     []string          `json:"summary_fields"`
-	Views             []WidgetView      `json:"views"`
+	Code              widget.Code        `json:"code"`
+	ModuleCode        string             `json:"module_code"`
+	ModuleLabel       string             `json:"module_label"`
+	ModuleDescription string             `json:"module_description"`
+	Label             string             `json:"label"`
+	Description       string             `json:"description"`
+	Fields            []field.Descriptor `json:"fields"`
+	EditorTabs        []FieldEditorTab   `json:"editor_tabs"`
+	SummaryFields     []string           `json:"summary_fields"`
+	Views             []WidgetView       `json:"views"`
 }
 
 type ResourceType struct {
 	Code             resourcetype.Code           `json:"code"`
 	Label            string                      `json:"label"`
 	Capabilities     ResourceTypeCapabilities    `json:"capabilities"`
-	SettingsFields   []FieldDefinition           `json:"settings_fields"`
+	SettingsFields   []field.Descriptor          `json:"settings_fields"`
 	SettingsDefaults map[string]any              `json:"settings_defaults"`
 	ContentTypes     []ResourceContentTypeOption `json:"content_types"`
 }
@@ -648,7 +648,7 @@ func (m *Resources) ResourceMetadata(
 	definitions := runtime.Profile().Templates()
 	templates := make([]ResourceTemplate, len(definitions))
 	for index, definition := range definitions {
-		fields, err := fieldDefinitions(definition.Fields)
+		fields, err := field.DescribeDefinitions(definition.Fields, runtime.Profile().Registry())
 		if err != nil {
 			return ResourceMetadata{}, err
 		}
@@ -666,7 +666,7 @@ func (m *Resources) ResourceMetadata(
 	widgetDefinitions := runtime.Profile().Widgets()
 	widgets := make([]WidgetDefinition, len(widgetDefinitions))
 	for index, definition := range widgetDefinitions {
-		fields, err := fieldDefinitions(definition.Fields)
+		fields, err := field.DescribeDefinitions(definition.Fields, runtime.Profile().Registry())
 		if err != nil {
 			return ResourceMetadata{}, err
 		}
@@ -689,7 +689,7 @@ func (m *Resources) ResourceMetadata(
 			continue
 		}
 		metadata := resourceType.Metadata()
-		settingsFields, err := fieldDefinitions(metadata.SettingsFields)
+		settingsFields, err := field.DescribeDefinitions(metadata.SettingsFields, runtime.Profile().Registry())
 		if err != nil {
 			return ResourceMetadata{}, fmt.Errorf("resource type %q settings metadata: %w", code, err)
 		}

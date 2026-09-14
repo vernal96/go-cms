@@ -19,7 +19,7 @@ const supportedTypes = new Set([
 
 export function unsupportedFieldTypes(fields: FieldDefinition[]): string[] {
   return fields
-    .filter((field) => !supportedTypes.has(field.type))
+    .filter((field) => !supportedTypes.has(field.type) && !field.editor)
     .map((field) => `${field.key} (${field.type})`)
 }
 
@@ -29,17 +29,18 @@ export function createFieldValues(
 ): DynamicValues {
   const result: DynamicValues = {}
   for (const field of fields) {
+    const type = supportedTypes.has(field.editor ?? '') ? field.editor : field.type
     if (Object.hasOwn(source, field.key)) {
       result[field.key] = source[field.key]
-    } else if (field.type === 'checkbox') {
+    } else if (type === 'checkbox') {
       result[field.key] = false
-    } else if (field.type === 'select' && field.options?.multiple) {
+    } else if (type === 'select' && field.options?.multiple) {
       result[field.key] = []
-    } else if (field.type === 'int' || field.type === 'float') {
+    } else if (type === 'int' || type === 'float') {
       result[field.key] = null
-    } else if (field.type === 'file') {
+    } else if (type === 'file') {
       result[field.key] = null
-		} else if (field.type === 'json') {
+		} else if (type === 'json') {
 			result[field.key] = []
     } else {
       result[field.key] = ''
@@ -54,7 +55,7 @@ export function validateFieldValues(
 ): DynamicFieldErrors {
   const errors: DynamicFieldErrors = {}
   for (const field of fields) {
-    if (!supportedTypes.has(field.type)) {
+    if (!supportedTypes.has(field.type) && !field.editor) {
       errors[field.key] = `Тип поля «${field.type}» не поддерживается.`
       continue
     }

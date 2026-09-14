@@ -13,19 +13,19 @@ import (
 	"github.com/vernal96/go-cms/kernel/filesystem"
 )
 
-func StandardTypes() []Type {
-	return []Type{
-		stringType{code: TypeString},
-		integerType{},
-		floatType{},
-		boolType{},
-		choiceType{code: TypeRadio},
-		choiceType{code: TypeSelect},
-		stringType{code: TypeTextarea},
-		stringType{code: TypeEmail, rules: []string{"email"}},
-		phoneType{},
-		fileType{},
-		jsonType{},
+func StandardTypes() Types {
+	return Types{
+		DescribedType{Type: stringType{code: TypeString}, Presentation: Metadata{Label: "Строка", Editor: "string"}},
+		DescribedType{Type: integerType{}, Presentation: Metadata{Label: "Целое число", Editor: "int", Options: []ConfigField{{Key: "step", Label: "Шаг", Type: TypeInteger}}}},
+		DescribedType{Type: floatType{}, Presentation: Metadata{Label: "Дробное число", Editor: "float", Options: []ConfigField{{Key: "step", Label: "Шаг", Type: TypeFloat}}}},
+		DescribedType{Type: boolType{}, Presentation: Metadata{Label: "Флаг", Editor: "checkbox"}},
+		DescribedType{Type: choiceType{code: TypeRadio}, Presentation: Metadata{Label: "Один вариант", Editor: "radio", Options: []ConfigField{{Key: "choices", Label: "Варианты", Type: TypeJSON, Editor: "core.choices", Required: true}}}},
+		DescribedType{Type: choiceType{code: TypeSelect}, Presentation: Metadata{Label: "Список", Editor: "select", Options: []ConfigField{{Key: "choices", Label: "Варианты", Type: TypeJSON, Editor: "core.choices", Required: true}, {Key: "multiple", Label: "Несколько значений", Type: TypeCheckbox}}}},
+		DescribedType{Type: stringType{code: TypeTextarea}, Presentation: Metadata{Label: "Многострочный текст", Editor: "textarea"}},
+		DescribedType{Type: stringType{code: TypeEmail, rules: []string{"email"}}, Presentation: Metadata{Label: "Email", Editor: "email"}},
+		DescribedType{Type: phoneType{}, Presentation: Metadata{Label: "Телефон", Editor: "phone", Options: []ConfigField{{Key: "pattern", Label: "Шаблон", Type: TypeString}}}},
+		DescribedType{Type: fileType{}, Presentation: Metadata{Label: "Файл из библиотеки", Editor: "file", Options: []ConfigField{{Key: "storages", Label: "Хранилища", Type: TypeJSON, Editor: "core.string-list"}, {Key: "mime_types", Label: "MIME-типы", Type: TypeJSON, Editor: "core.string-list"}}}},
+		DescribedType{Type: jsonType{}, Presentation: Metadata{Label: "JSON", Editor: "json"}},
 	}
 }
 

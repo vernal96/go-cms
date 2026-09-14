@@ -1,3 +1,5 @@
+import ChoicesField from '../components/fields/ChoicesField.vue'
+import StringListField from '../components/fields/StringListField.vue'
 import { FolderOpened, OfficeBuilding, Tools, UserFilled } from '@element-plus/icons-vue'
 
 import FilesystemView from '../views/FilesystemView.vue'
@@ -15,6 +17,7 @@ import type { AdminPlugin } from './plugin'
 
 export const coreAdminPlugin: AdminPlugin = {
   code: 'core',
+  fieldEditors: { 'core.choices': ChoicesField, 'core.string-list': StringListField },
   icons: {
     sites: OfficeBuilding,
     files: FolderOpened,

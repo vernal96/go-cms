@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,14 @@ import (
 
 type testFieldResolver map[field.TypeCode]field.Type
 
+func (r testFieldResolver) FieldTypes() []field.TypeCode {
+	result := make([]field.TypeCode, 0, len(r))
+	for code := range r {
+		result = append(result, code)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
+}
 func (r testFieldResolver) FieldType(code field.TypeCode) (field.Type, bool) {
 	item, exists := r[code]
 	return item, exists
@@ -164,11 +173,15 @@ func (m customActionContributor) Build(_ context.Context, moduleContext kernel.M
 	dependency, err := kernel.ModuleDependencyFrom[interface {
 		kernel.ModuleRuntime
 		ActionRegistrar
+		ElementRegistrar
 	}](moduleContext, ModuleCode)
 	if err != nil {
 		return nil, err
 	}
 	if err := dependency.RegisterActionType(m.action); err != nil {
+		return nil, err
+	}
+	if err := dependency.RegisterElementType(ElementDefinition{Description: ElementTypeMetadata{Code: "contributor.notice", Label: "Notice"}}); err != nil {
 		return nil, err
 	}
 	return customActionContributorRuntime{}, nil
@@ -182,7 +195,11 @@ func (customActionContributorRuntime) ModuleCode() kernel.ModuleCode {
 
 func TestContributorModuleRegistersActionBeforeFormsFinalization(t *testing.T) {
 	actions := newActionRegistry()
-	runtime := &Runtime{actions: actions}
+	elements, err := newElementCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &Runtime{actions: actions, service: &Service{elements: elements}}
 	factory, err := kernel.NewProfileRuntimeFactory(formsTestDatabaseResolver{}, kernel.RuntimeServices{
 		EventBus: formsTestEventBus{}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
@@ -198,6 +215,9 @@ func TestContributorModuleRegistersActionBeforeFormsFinalization(t *testing.T) {
 	}
 	if _, err := blueprint.Build(context.Background(), kernel.NewRuntimeScope("9", "", "", nil)); err != nil {
 		t.Fatal(err)
+	}
+	if _, exists := elements.Type("contributor.notice"); !exists {
+		t.Fatal("contributor element was not registered")
 	}
 	if _, exists := actions.Type("custom"); !exists {
 		t.Fatal("contributor action was not registered")

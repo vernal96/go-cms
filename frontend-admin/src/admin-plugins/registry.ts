@@ -7,6 +7,7 @@ const semanticCodePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/
 
 export class AdminPluginRegistry {
   readonly #routes = new Map<string, AdminRouteDefinition>()
+  readonly #configEditors = new Map<string, Component>()
   readonly #fieldEditors = new Map<string, Component>()
   readonly #icons = new Map<string, Component>()
   readonly #plugins: AdminPlugin[]
@@ -50,6 +51,12 @@ export class AdminPluginRegistry {
         this.#fieldEditors.set(code, editor)
       }
 
+      for (const [code, editor] of Object.entries(plugin.configEditors ?? {})) {
+        if (!semanticCodePattern.test(code) || !code.startsWith(`${plugin.code}.`)) throw new Error(`Invalid config editor ${code} for admin plugin ${plugin.code}`)
+        if (this.#configEditors.has(code)) throw new Error(`Admin config editor is registered more than once: ${code}`)
+        this.#configEditors.set(code, editor)
+      }
+
       for (const [code, icon] of Object.entries(plugin.icons ?? {})) {
         if (!semanticCodePattern.test(code)) {
           throw new Error(`Invalid admin icon code: ${code}`)
@@ -85,6 +92,10 @@ export class AdminPluginRegistry {
 
   fieldEditor(code: string): Component | undefined {
     return this.#fieldEditors.get(code)
+  }
+
+  configEditor(code: string): Component | undefined {
+    return this.#configEditors.get(code)
   }
 
   icon(code: string): Component | undefined {

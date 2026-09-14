@@ -7,8 +7,8 @@ const source = ref('[]')
 const invalid = ref(false)
 
 watch(model, (value) => {
-  source.value = JSON.stringify(value ?? [], null, 2)
-  invalid.value = false
+  invalid.value = typeof value === 'string'
+  source.value = typeof value === 'string' ? value : JSON.stringify(value ?? [], null, 2)
 }, { immediate: true, deep: true })
 
 const help = computed(() => invalid.value ? 'Некорректный JSON.' : 'JSON-массив или объект')
@@ -23,6 +23,7 @@ function update(value: string): void {
     }
   } catch { /* shown below */ }
   invalid.value = true
+  model.value = value
 }
 </script>
 

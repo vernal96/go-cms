@@ -10,20 +10,15 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
-type ConfigField struct {
-	Key      string `json:"key"`
-	Label    string `json:"label"`
-	Type     string `json:"type"`
-	Required bool   `json:"required"`
-}
-
 type ElementTypeMetadata struct {
-	Code   ElementTypeCode `json:"code"`
-	Label  string          `json:"label"`
-	Fields []ConfigField   `json:"fields"`
+	EditorCode string              `json:"editor_code,omitempty"`
+	Code       ElementTypeCode     `json:"code"`
+	Label      string              `json:"label"`
+	Fields     []field.ConfigField `json:"fields"`
 }
 
 type ElementType interface {
@@ -33,70 +28,55 @@ type ElementType interface {
 }
 
 type elementCatalog struct {
-	types map[ElementTypeCode]ElementType
+	mu     sync.RWMutex
+	sealed bool
+	types  map[ElementTypeCode]ElementType
 }
 
 func newElementCatalog() (*elementCatalog, error) {
 	items := []ElementType{
-		jsonElementType{code: ElementText, label: "Текст", fields: []ConfigField{{Key: "content", Label: "Текст", Type: "textarea", Required: true}}},
-		jsonElementType{code: ElementHeading, label: "Заголовок", fields: []ConfigField{{Key: "text", Label: "Заголовок", Type: "string", Required: true}, {Key: "level", Label: "Уровень", Type: "int", Required: true}}},
-		jsonElementType{code: ElementImage, label: "Изображение", fields: []ConfigField{{Key: "file_id", Label: "Файл", Type: "file", Required: true}, {Key: "alt", Label: "Alt", Type: "string"}}},
-		jsonElementType{code: ElementSubmitButton, label: "Кнопка отправки", fields: []ConfigField{{Key: "label", Label: "Текст кнопки", Type: "string", Required: true}}},
+		ElementDefinition{Description: ElementTypeMetadata{Code: ElementText, Label: "Текст", Fields: []field.ConfigField{{Key: "content", Label: "Текст", Type: field.TypeTextarea, Required: true}}}},
+		ElementDefinition{Description: ElementTypeMetadata{Code: ElementHeading, Label: "Заголовок", Fields: []field.ConfigField{{Key: "text", Label: "Заголовок", Type: field.TypeString, Required: true}, {Key: "level", Label: "Уровень", Type: field.TypeInteger, Required: true, Default: 2, Rules: []string{"min=1", "max=6"}}}}},
+		ElementDefinition{Description: ElementTypeMetadata{Code: ElementImage, Label: "Изображение", Fields: []field.ConfigField{{Key: "file_id", Label: "Публичное изображение", Type: field.TypeFile, Required: true, Options: map[string]any{"storages": []string{"public"}}}, {Key: "alt", Label: "Alt", Type: field.TypeString}}}},
+		ElementDefinition{Description: ElementTypeMetadata{Code: ElementSubmitButton, Label: "Кнопка отправки", Fields: []field.ConfigField{{Key: "label", Label: "Текст кнопки", Type: field.TypeString, Required: true, Default: "Отправить"}}}},
 	}
+
 	result := &elementCatalog{types: make(map[ElementTypeCode]ElementType, len(items))}
 	for _, item := range items {
-		if _, exists := result.types[item.Code()]; exists {
-			return nil, fmt.Errorf("element type %q is duplicated", item.Code())
+		if err := result.Register(item); err != nil {
+			return nil, err
 		}
-		result.types[item.Code()] = item
 	}
+
 	return result, nil
 }
 
 func (c *elementCatalog) Type(code ElementTypeCode) (ElementType, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	item, exists := c.types[code]
 	return item, exists
 }
 
 func (c *elementCatalog) Metadata() []ElementTypeMetadata {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	result := make([]ElementTypeMetadata, 0, len(c.types))
 	for _, item := range c.types {
-		result = append(result, item.Metadata())
+		metadata := item.Metadata()
+		metadata.Fields = field.CloneConfigFields(metadata.Fields)
+		result = append(result, metadata)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Code < result[j].Code })
 	return result
 }
 
-type jsonElementType struct {
-	code   ElementTypeCode
-	label  string
-	fields []ConfigField
-}
-
-func (t jsonElementType) Code() ElementTypeCode { return t.code }
-func (t jsonElementType) Metadata() ElementTypeMetadata {
-	return ElementTypeMetadata{Code: t.code, Label: t.label, Fields: append([]ConfigField(nil), t.fields...)}
-}
-func (t jsonElementType) ValidateConfig(raw json.RawMessage) error {
-	var values map[string]any
-	if len(raw) == 0 || !json.Valid(raw) || json.Unmarshal(raw, &values) != nil {
-		return fmt.Errorf("%w: element config is invalid", ErrInvalid)
-	}
-	for _, configField := range t.fields {
-		value, exists := values[configField.Key]
-		if configField.Required && (!exists || value == nil || value == "") {
-			return fmt.Errorf("%w: element config field %q is required", ErrInvalid, configField.Key)
-		}
-	}
-	return nil
-}
-
 type ActionTypeMetadata struct {
-	Code       string        `json:"code"`
-	Label      string        `json:"label"`
-	Available  bool          `json:"available"`
-	EditorCode string        `json:"editor_code,omitempty"`
-	Fields     []ConfigField `json:"fields,omitempty"`
+	Code       string              `json:"code"`
+	Label      string              `json:"label"`
+	Available  bool                `json:"available"`
+	EditorCode string              `json:"editor_code,omitempty"`
+	Fields     []field.ConfigField `json:"fields,omitempty"`
 }
 
 type ActionValidationContext struct {
@@ -186,6 +166,7 @@ func (r *actionRegistry) Metadata() []ActionTypeMetadata {
 	for _, item := range r.types {
 		metadata := item.Metadata()
 		metadata.Available = true
+		metadata.Fields = field.CloneConfigFields(metadata.Fields)
 		result = append(result, metadata)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Code < result[j].Code })

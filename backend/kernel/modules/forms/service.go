@@ -36,7 +36,7 @@ var (
 type Service struct {
 	siteID         site.ID
 	repository     Repository
-	fieldTypes     field.TypeResolver
+	fieldTypes     field.TypeCatalog
 	elements       *elementCatalog
 	actions        *actionRegistry
 	captcha        map[string]CaptchaProvider
@@ -53,7 +53,7 @@ type Service struct {
 func NewService(
 	siteID site.ID,
 	repository Repository,
-	fieldTypes field.TypeResolver,
+	fieldTypes field.TypeCatalog,
 	elements *elementCatalog,
 	actions *actionRegistry,
 	captcha map[string]CaptchaProvider,
@@ -484,12 +484,7 @@ func (s *Service) DeleteAction(ctx context.Context, actor security.Actor, formID
 func (s *Service) AvailableElementTypes() []ElementTypeMetadata { return s.elements.Metadata() }
 func (s *Service) AvailableActionTypes() []ActionTypeMetadata   { return s.actions.Metadata() }
 
-func (s *Service) AvailableFieldTypes() []field.TypeCode {
-	if catalog, ok := s.fieldTypes.(interface{ FieldTypes() []field.TypeCode }); ok {
-		return catalog.FieldTypes()
-	}
-	return []field.TypeCode{field.TypeString, field.TypeInteger, field.TypeFloat, field.TypeCheckbox, field.TypeRadio, field.TypeSelect, field.TypeTextarea, field.TypeEmail, field.TypePhone, field.TypeFile, field.TypeJSON, FieldTypeCaptcha, FieldTypeConsent, FieldTypeUpload}
-}
+func (s *Service) AvailableFieldTypes() []field.TypeCode { return s.fieldTypes.FieldTypes() }
 
 func (s *Service) validateImage(ctx context.Context, actor security.Actor, raw json.RawMessage) error {
 	var config struct {
@@ -608,5 +603,15 @@ func fieldsByResultPosition(items []FormField) []FormField {
 		}
 		return result[i].ResultPosition < result[j].ResultPosition
 	})
+	return result
+}
+
+func (s *Service) AvailableFieldMetadata() []field.Metadata {
+	result := []field.Metadata{}
+	for _, code := range s.AvailableFieldTypes() {
+		if item, exists := s.fieldTypes.FieldType(code); exists {
+			result = append(result, field.DescribeType(item))
+		}
+	}
 	return result
 }

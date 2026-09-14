@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -26,19 +25,6 @@ type paginationDTO struct {
 	Page    int `json:"page"`
 	PerPage int `json:"per_page"`
 	Total   int `json:"total"`
-}
-
-type fieldOptionsDTO struct {
-	Step        *float64       `json:"step,omitempty"`
-	Choices     []field.Choice `json:"choices,omitempty"`
-	Multiple    *bool          `json:"multiple,omitempty"`
-	Pattern     *string        `json:"pattern,omitempty"`
-	MIMETypes   []string       `json:"mime_types,omitempty"`
-	MaxFileSize *int64         `json:"max_file_size,omitempty"`
-	MaxFiles    *int           `json:"max_files,omitempty"`
-	Provider    *string        `json:"provider,omitempty"`
-	Text        *string        `json:"text,omitempty"`
-	URL         *string        `json:"url,omitempty"`
 }
 
 type fieldPayload struct {
@@ -71,7 +57,7 @@ type editorResponse struct {
 	Layout         []LayoutNode            `json:"layout"`
 	Statuses       []Status                `json:"statuses"`
 	Actions        []Action                `json:"actions"`
-	FieldTypes     []field.TypeCode        `json:"available_field_types"`
+	FieldTypes     []field.Metadata        `json:"available_field_types"`
 	ElementTypes   []ElementTypeMetadata   `json:"available_element_types"`
 	ContainerTypes []ContainerTypeMetadata `json:"available_container_types"`
 	ActionTypes    []ActionTypeMetadata    `json:"available_action_types"`
@@ -288,7 +274,7 @@ func (h *formsHTTP) editor(response http.ResponseWriter, request *http.Request) 
 			actionTypes = append(actionTypes, ActionTypeMetadata{Code: action.ActionType, Label: action.ActionType, Available: false})
 		}
 	}
-	writeJSON(response, http.StatusOK, editorResponse{detail.Form, fields, detail.Elements, detail.Layout, detail.Statuses, detail.Actions, h.service.AvailableFieldTypes(), h.service.AvailableElementTypes(), AvailableContainerTypes(), actionTypes})
+	writeJSON(response, http.StatusOK, editorResponse{detail.Form, fields, detail.Elements, detail.Layout, detail.Statuses, detail.Actions, h.service.AvailableFieldMetadata(), h.service.AvailableElementTypes(), AvailableContainerTypes(), actionTypes})
 }
 
 func (h *formsHTTP) createField(response http.ResponseWriter, request *http.Request) {
@@ -720,238 +706,19 @@ func (h *formsHTTP) deleteNested(response http.ResponseWriter, request *http.Req
 }
 
 func (p fieldPayload) field() (FormField, error) {
-	options, err := decodeFieldOptions(p.Type, p.Options)
+	options, err := DecodeFieldOptions(p.Type, p.Options)
 	if err != nil {
 		return FormField{}, err
 	}
 	return FormField{Code: p.Code, Type: p.Type, Label: p.Label, Required: p.Required, Rules: append([]string(nil), p.Rules...), Options: options, Editor: p.Editor, VisibleWhen: cloneVisibleWhen(p.VisibleWhen), ResultLabel: p.ResultLabel, ShowInResults: p.ShowInResults, ShowOnSite: p.ShowOnSite, ResultPosition: p.ResultPosition}, nil
 }
 
-func decodeFieldOptions(code field.TypeCode, raw json.RawMessage) (any, error) {
-	if code == field.TypeFile {
-		if len(raw) == 0 || string(raw) == "null" {
-			return field.FileOptions{}, nil
-		}
-		var options field.FileOptions
-		decoder := json.NewDecoder(strings.NewReader(string(raw)))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&options); err != nil {
-			return nil, fmt.Errorf("%w: file options are invalid", ErrInvalid)
-		}
-		return options, nil
-	}
-	var options *fieldOptionsDTO
-	if len(raw) > 0 && string(raw) != "null" {
-		options = &fieldOptionsDTO{}
-		decoder := json.NewDecoder(strings.NewReader(string(raw)))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(options); err != nil {
-			if isBuiltInFieldType(code) {
-				return nil, fmt.Errorf("%w: field options are invalid", ErrInvalid)
-			}
-			var custom any
-			if json.Unmarshal(raw, &custom) != nil {
-				return nil, fmt.Errorf("%w: field options are invalid", ErrInvalid)
-			}
-			return custom, nil
-		}
-	}
-	switch code {
-	case field.TypeString, field.TypeTextarea, field.TypeEmail, field.TypeCheckbox, field.TypeJSON:
-		if options != nil {
-			return nil, fmt.Errorf("%w: field type %q does not support options", ErrInvalid, code)
-		}
-		return nil, nil
-	case field.TypeInteger:
-		result := field.IntegerOptions{}
-		if options != nil && options.Step != nil {
-			if math.Trunc(*options.Step) != *options.Step {
-				return nil, ErrInvalid
-			}
-			value := int64(*options.Step)
-			result.Step = &value
-		}
-		return result, nil
-	case field.TypeFloat:
-		result := field.FloatOptions{}
-		if options != nil {
-			result.Step = options.Step
-		}
-		return result, nil
-	case field.TypeRadio:
-		if options == nil {
-			return nil, ErrInvalid
-		}
-		return field.RadioOptions{Choices: append([]field.Choice(nil), options.Choices...)}, nil
-	case field.TypeSelect:
-		if options == nil {
-			return nil, ErrInvalid
-		}
-		return field.SelectOptions{Choices: append([]field.Choice(nil), options.Choices...), Multiple: options.Multiple != nil && *options.Multiple}, nil
-	case field.TypePhone:
-		result := field.PhoneOptions{}
-		if options != nil && options.Pattern != nil {
-			result.Pattern = *options.Pattern
-		}
-		return result, nil
-	case FieldTypeCaptcha:
-		result := CaptchaOptions{}
-		if options != nil && options.Provider != nil {
-			result.Provider = *options.Provider
-		}
-		return result, nil
-	case FieldTypeConsent:
-		result := ConsentOptions{}
-		if options != nil {
-			if options.Text != nil {
-				result.Text = *options.Text
-			}
-			if options.URL != nil {
-				result.URL = *options.URL
-			}
-		}
-		return result, nil
-	case FieldTypeUpload:
-		result := UploadOptions{}
-		if options != nil {
-			result.MIMETypes = append([]string(nil), options.MIMETypes...)
-			if options.MaxFileSize != nil {
-				result.MaxFileSize = *options.MaxFileSize
-			}
-			result.Multiple = options.Multiple != nil && *options.Multiple
-			if options.MaxFiles != nil {
-				result.MaxFiles = *options.MaxFiles
-			}
-		}
-		return result, nil
-	default:
-		if len(raw) == 0 || string(raw) == "null" {
-			return nil, nil
-		}
-		var custom any
-		if json.Unmarshal(raw, &custom) != nil {
-			return nil, fmt.Errorf("%w: field options are invalid", ErrInvalid)
-		}
-		return custom, nil
-	}
-}
-
-func isBuiltInFieldType(code field.TypeCode) bool {
-	switch code {
-	case field.TypeString, field.TypeInteger, field.TypeFloat, field.TypeCheckbox, field.TypeRadio, field.TypeSelect,
-		field.TypeTextarea, field.TypeEmail, field.TypePhone, field.TypeFile, field.TypeJSON,
-		FieldTypeCaptcha, FieldTypeConsent, FieldTypeUpload:
-		return true
-	default:
-		return false
-	}
-}
-
 func toFieldResponse(item FormField) (fieldResponse, error) {
-	options, err := encodeFieldOptions(item.Type, item.Options)
+	options, err := field.EncodeOptionsJSON(item.Options)
 	if err != nil {
 		return fieldResponse{}, err
 	}
 	return fieldResponse{ID: item.ID, FormID: item.FormID, fieldPayload: fieldPayload{Code: item.Code, Type: item.Type, Label: item.Label, Required: item.Required, Rules: append([]string(nil), item.Rules...), Options: options, Editor: item.Editor, VisibleWhen: cloneVisibleWhen(item.VisibleWhen), ResultLabel: item.ResultLabel, ShowInResults: item.ShowInResults, ShowOnSite: item.ShowOnSite, ResultPosition: item.ResultPosition}, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}, nil
-}
-
-func encodeFieldOptions(code field.TypeCode, value any) (json.RawMessage, error) {
-	marshal := func(options *fieldOptionsDTO) (json.RawMessage, error) {
-		if options == nil {
-			return nil, nil
-		}
-		raw, err := json.Marshal(options)
-		return json.RawMessage(raw), err
-	}
-	switch code {
-	case field.TypeString, field.TypeTextarea, field.TypeEmail, field.TypeCheckbox, field.TypeJSON:
-		if value != nil {
-			return nil, ErrInvalid
-		}
-		return nil, nil
-	case field.TypeInteger:
-		options, ok := value.(field.IntegerOptions)
-		if value == nil {
-			ok = true
-		}
-		if !ok {
-			return nil, ErrInvalid
-		}
-		result := &fieldOptionsDTO{}
-		if options.Step != nil {
-			step := float64(*options.Step)
-			result.Step = &step
-		}
-		return marshal(result)
-	case field.TypeFloat:
-		options, ok := value.(field.FloatOptions)
-		if value == nil {
-			ok = true
-		}
-		if !ok {
-			return nil, ErrInvalid
-		}
-		return marshal(&fieldOptionsDTO{Step: options.Step})
-	case field.TypeRadio:
-		options, ok := value.(field.RadioOptions)
-		if !ok {
-			return nil, ErrInvalid
-		}
-		return marshal(&fieldOptionsDTO{Choices: append([]field.Choice(nil), options.Choices...)})
-	case field.TypeSelect:
-		options, ok := value.(field.SelectOptions)
-		if !ok {
-			return nil, ErrInvalid
-		}
-		multiple := options.Multiple
-		return marshal(&fieldOptionsDTO{Choices: append([]field.Choice(nil), options.Choices...), Multiple: &multiple})
-	case field.TypePhone:
-		options, ok := value.(field.PhoneOptions)
-		if value == nil {
-			ok = true
-		}
-		if !ok {
-			return nil, ErrInvalid
-		}
-		pattern := options.Pattern
-		return marshal(&fieldOptionsDTO{Pattern: &pattern})
-	case field.TypeFile:
-		options, ok := value.(field.FileOptions)
-		if value == nil {
-			ok = true
-		}
-		if !ok {
-			return nil, ErrInvalid
-		}
-		return json.Marshal(options)
-	case FieldTypeCaptcha:
-		options, err := captchaOptions(value)
-		if err != nil {
-			return nil, err
-		}
-		provider := options.Provider
-		return marshal(&fieldOptionsDTO{Provider: &provider})
-	case FieldTypeConsent:
-		options, err := consentOptions(value)
-		if err != nil {
-			return nil, err
-		}
-		text, url := options.Text, options.URL
-		return marshal(&fieldOptionsDTO{Text: &text, URL: &url})
-	case FieldTypeUpload:
-		options, err := uploadOptions(value)
-		if err != nil {
-			return nil, err
-		}
-		multiple, maxSize, maxFiles := options.Multiple, options.MaxFileSize, options.MaxFiles
-		return marshal(&fieldOptionsDTO{MIMETypes: append([]string(nil), options.MIMETypes...), Multiple: &multiple, MaxFileSize: &maxSize, MaxFiles: &maxFiles})
-	default:
-		if value == nil {
-			return nil, nil
-		}
-		raw, err := json.Marshal(value)
-		return json.RawMessage(raw), err
-	}
 }
 
 func pageQuery(request *http.Request) (PageQuery, error) {

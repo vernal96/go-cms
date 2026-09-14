@@ -36,7 +36,7 @@ func (mailActionType) Code() string { return MailActionTypeCode }
 func (mailActionType) Metadata() ActionTypeMetadata {
 	return ActionTypeMetadata{
 		Code: MailActionTypeCode, Label: "Письмо", EditorCode: "forms.mail",
-		Fields: []ConfigField{{Key: "template_code", Label: "Шаблон Mail", Type: "string", Required: true}},
+		Fields: []field.ConfigField{{Key: "template_code", Label: "Шаблон Mail", Type: "string", Required: true}},
 	}
 }
 

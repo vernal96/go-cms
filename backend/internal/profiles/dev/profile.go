@@ -19,69 +19,23 @@ import (
 
 const ProfileCode kernel.ProfileCode = "dev"
 
-var Profile = kernel.Profile{
-	Code:       ProfileCode,
-	Name:       "Разработка",
-	Params:     Params(),
-	EditorTabs: ParamEditorTabs(),
-	Templates:  devtemplates.All(),
-	WidgetViews: []widget.View{
-		widgetviews.ContentCompact,
-		widgetviews.ContentArticle,
-	},
-	Modules: []kernel.ProfileModule{
-		{
-			Module: core.Module{},
-			Config: core.Config{
-				RepositoryCacheTTL: 5 * time.Minute,
-			},
-			Caches: []cache.Binding{
-				{
-					Alias: core.DurableCacheAlias,
-					Code:  projectcache.FilesystemCode,
-				},
-				{
-					Alias: core.HotCacheAlias,
-					Code:  projectcache.RedisCode,
-				},
-			},
-		},
-		{
-			Module: seo.Module{},
-		},
-		{
-			Module: admin.Module{},
-		},
-	},
-}
-
-func ProfileWithMailAndForms(
+func Profile(
 	mailConfig mail.Config,
 	formsConfig forms.Config,
 	spoolStorage filesystem.Code,
 ) kernel.Profile {
-	result := Profile
-	result.Modules = append([]kernel.ProfileModule(nil), Profile.Modules...)
-	mailModule := kernel.ProfileModule{
-		Module: mail.Module{},
-		Config: mailConfig,
-		Filesystems: []filesystem.Binding{{
-			Alias: mail.SpoolFilesystemAlias,
-			Code:  spoolStorage,
-		}},
+	return kernel.Profile{
+		Code: ProfileCode, Name: "Разработка", Params: Params(), EditorTabs: ParamEditorTabs(),
+		Templates: devtemplates.All(), WidgetViews: []widget.View{widgetviews.ContentCompact, widgetviews.ContentArticle},
+		Modules: []kernel.ProfileModule{
+			{Module: core.Module{}, Config: core.Config{RepositoryCacheTTL: 5 * time.Minute}, Caches: []cache.Binding{
+				{Alias: core.DurableCacheAlias, Code: projectcache.FilesystemCode},
+				{Alias: core.HotCacheAlias, Code: projectcache.RedisCode},
+			}},
+			{Module: seo.Module{}},
+			{Module: mail.Module{}, Config: mailConfig, Filesystems: []filesystem.Binding{{Alias: mail.SpoolFilesystemAlias, Code: spoolStorage}}},
+			{Module: forms.Module{}, Config: formsConfig, Filesystems: []filesystem.Binding{{Alias: forms.SpoolFilesystemAlias, Code: spoolStorage}}},
+			{Module: admin.Module{}},
+		},
 	}
-	formsModule := kernel.ProfileModule{
-		Module: forms.Module{},
-		Config: formsConfig,
-		Filesystems: []filesystem.Binding{{
-			Alias: forms.SpoolFilesystemAlias,
-			Code:  spoolStorage,
-		}},
-	}
-	adminIndex := len(result.Modules) - 1
-	result.Modules = append(result.Modules, kernel.ProfileModule{}, kernel.ProfileModule{})
-	copy(result.Modules[adminIndex+2:], result.Modules[adminIndex:])
-	result.Modules[adminIndex] = mailModule
-	result.Modules[adminIndex+1] = formsModule
-	return result
 }

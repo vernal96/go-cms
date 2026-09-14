@@ -89,6 +89,7 @@ export interface FieldChoice {
 }
 
 export interface FieldOptions {
+  [key: string]: unknown
   step?: number
   choices?: FieldChoice[]
   multiple?: boolean
@@ -587,4 +588,22 @@ export interface PermissionDefinition {
 export interface PermissionCatalogResponse {
   items: PermissionDefinition[]
   can_manage: boolean
+}
+
+export interface ConfigField {
+ default?: unknown
+ key: string
+ label: string
+ type: string
+ required: boolean
+ editor?: string
+ rules?: string[]
+ options?: FieldOptions
+}
+export interface FieldTypeMetadata {
+ code: string
+ label: string
+ editor?: string
+ options: ConfigField[]
+ options_editor?: string
 }

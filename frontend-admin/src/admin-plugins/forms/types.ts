@@ -1,12 +1,11 @@
-import type { Pagination } from '../../types/admin'
+import type { Pagination, ConfigField, FieldTypeMetadata } from '../../types/admin'
 
-export type FormsFieldType =
-  | 'string' | 'integer' | 'float' | 'checkbox' | 'radio' | 'select'
-  | 'textarea' | 'email' | 'phone' | 'json'
-  | 'forms.captcha' | 'forms.consent' | 'forms.upload'
+export type FormsFieldType = string
 
 export interface FormsChoice { value: string; label: string }
 export interface FormsFieldOptions {
+  [key: string]: unknown
+  storages?: string[]
   step?: number
   choices?: FormsChoice[]
   multiple?: boolean
@@ -51,7 +50,7 @@ export interface FormRecord {
 }
 export type FormPayload = Pick<FormRecord, 'code' | 'name' | 'description' | 'enabled'>
 
-export type ElementType = 'text' | 'heading' | 'image' | 'submit_button'
+export type ElementType = string
 export interface FormElement {
   id: number
   form_id: number
@@ -62,6 +61,7 @@ export interface FormElement {
   updated_at: string
 }
 export interface ElementTypeMetadata {
+  editor_code?: string
   code: ElementType
   label: string
   fields: ActionConfigField[]
@@ -110,13 +110,13 @@ export interface FormAction {
   created_at: string
   updated_at: string
 }
-export interface ActionConfigField { key: string; label: string; type: string; required: boolean }
+export type ActionConfigField = ConfigField
 export interface ActionTypeMetadata {
-  code: string
-  label: string
-  available: boolean
-  editor_code?: string
-  fields?: ActionConfigField[]
+ code: string
+ label: string
+ available: boolean
+ editor_code?: string
+ fields?: ConfigField[]
 }
 
 export interface FormEditorResponse {
@@ -126,7 +126,7 @@ export interface FormEditorResponse {
   layout: LayoutNode[]
   statuses: FormStatus[]
   actions: FormAction[]
-  available_field_types: FormsFieldType[]
+  available_field_types: FieldTypeMetadata[]
   available_element_types: ElementTypeMetadata[]
   available_container_types: ContainerTypeMetadata[]
   available_action_types: ActionTypeMetadata[]

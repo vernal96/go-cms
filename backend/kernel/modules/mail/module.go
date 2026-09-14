@@ -226,21 +226,7 @@ func (r *Runtime) runSpoolCleanup(ctx context.Context) (resultErr error) {
 		}
 		return err
 	}
-	if err := cleanup(); err != nil && ctx.Err() == nil {
-		return err
-	}
-	ticker := time.NewTicker(r.spoolCleanupInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			if err := cleanup(); err != nil && ctx.Err() == nil {
-				return err
-			}
-		}
-	}
+	return background.RunPeriodic(ctx, r.spoolCleanupInterval, func(context.Context) error { return cleanup() })
 }
 
 type uploadDiskCatalog interface {
@@ -268,21 +254,7 @@ func (r *Runtime) runRetention(ctx context.Context) error {
 		_, err := r.service.repository.Cleanup(ctx, r.service.siteID, r.retention, r.cleanupBatchSize)
 		return err
 	}
-	if err := cleanup(); err != nil && ctx.Err() == nil {
-		return err
-	}
-	ticker := time.NewTicker(r.cleanupInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			if err := cleanup(); err != nil && ctx.Err() == nil {
-				return err
-			}
-		}
-	}
+	return background.RunPeriodic(ctx, r.cleanupInterval, func(context.Context) error { return cleanup() })
 }
 
 func (r *Runtime) AdminNavigation() []adminui.NavigationItem {

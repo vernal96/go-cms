@@ -160,7 +160,15 @@ func (r *Runtime) Forms() *Service             { return r.service }
 func (r *Runtime) RegisterActionType(actionType ActionType) error {
 	return r.actions.Register(actionType)
 }
-func (r *Runtime) FinalizeRuntimeBuild(context.Context) error { return r.actions.Seal() }
+func (r *Runtime) RegisterElementType(element ElementType) error {
+	return r.service.elements.Register(element)
+}
+func (r *Runtime) FinalizeRuntimeBuild(context.Context) error {
+	if err := r.actions.Seal(); err != nil {
+		return err
+	}
+	return r.service.elements.Seal()
+}
 func (r *Runtime) SiteManagementHTTP() httptransport.SiteManagementContribution {
 	return httptransport.SiteManagementContribution{Path: "forms", Handler: r.managementHTTP}
 }
@@ -229,21 +237,7 @@ func (r *Runtime) runSpoolCleanup(ctx context.Context) (resultErr error) {
 		}
 		return err
 	}
-	if err := cleanup(); err != nil && ctx.Err() == nil {
-		return err
-	}
-	ticker := time.NewTicker(r.config.SpoolCleanupInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			if err := cleanup(); err != nil && ctx.Err() == nil {
-				return err
-			}
-		}
-	}
+	return background.RunPeriodic(ctx, r.config.SpoolCleanupInterval, func(context.Context) error { return cleanup() })
 }
 
 func (r *Runtime) AdminNavigation() []adminui.NavigationItem {

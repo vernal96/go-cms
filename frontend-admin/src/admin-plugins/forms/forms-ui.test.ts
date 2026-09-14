@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import { adminPluginRegistryKey } from '../context'
+import { AdminPluginRegistry } from '../registry'
+import MailActionEditor from './MailActionEditor.vue'
 
 import { config, enableAutoUnmount, flushPromises, mount, shallowMount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -42,7 +45,7 @@ const editor: FormEditorResponse = {
     { id: 13, form_id: 9, kind: 'element', element_id: 4, position: 3 },
   ],
   statuses: [{ id: 5, form_id: 9, code: 'new', name: 'Новый', color: '#409eff', position: 0, is_default: true, created_at: '', updated_at: '' }],
-  actions: [], available_field_types: ['string', 'email', 'forms.captcha', 'forms.consent', 'forms.upload'],
+  actions: [], available_field_types: ['string', 'email', 'forms.captcha', 'forms.consent', 'forms.upload'].map(code => ({code,label:code,options:[]})),
   available_element_types: [{ code: 'text', label: 'Текст', fields: [] }, { code: 'submit_button', label: 'Кнопка', fields: [] }],
   available_container_types: [{ code: 'group', label: 'Группа' }, { code: 'slide', label: 'Слайд' }],
   available_action_types: [{ code: 'mail', label: 'Письмо', available: true, editor_code: 'forms.mail', fields: [] }],
@@ -102,7 +105,7 @@ describe('Forms admin UI', () => {
       subject: '', content_type: 'text', text_body: '', html_body: '', attachments: [],
       variables: [{ key: 'email', type: 'email', label: 'Email', required: true, rules: [] }], created_at: '', updated_at: '',
     }], pagination: { page: 1, per_page: 100, total: 1 } })))
-    const wrapper = mount(FormActionDialog, { props: {
+    const wrapper = mount(FormActionDialog, { global:{provide:{[adminPluginRegistryKey as symbol]:new AdminPluginRegistry([{code:'forms',configEditors:{'forms.mail':MailActionEditor}}])}}, props: {
       modelValue: true, action: { id: 1, form_id: 9, code: 'mail', name: 'Письмо', enabled: true, trigger: { type: 'submitted' }, action_type: 'mail', config: { template_code: 'feedback', values: { email: 'email' }, attachments: [] }, position: 0, created_at: '', updated_at: '' },
       actionTypes: editor.available_action_types, fields: [...editor.fields, { ...editor.fields[2]!, id: 8, code: 'files', type: 'forms.upload', label: 'Файлы' }], statuses: editor.statuses,
       accessToken: 'token', siteID: 5, permissions, nextPosition: 0,

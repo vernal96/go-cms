@@ -70,34 +70,34 @@ type VisibleWhen struct {
 }
 
 type IntegerOptions struct {
-	Step *int64
+	Step *int64 `json:"step,omitempty"`
 }
 
 type FloatOptions struct {
-	Step *float64
+	Step *float64 `json:"step,omitempty"`
 }
 
 type Choice struct {
-	Value string
-	Label string
+	Value string `json:"value"`
+	Label string `json:"label"`
 }
 
 type RadioOptions struct {
-	Choices []Choice
+	Choices []Choice `json:"choices"`
 }
 
 type SelectOptions struct {
-	Choices  []Choice
-	Multiple bool
+	Choices  []Choice `json:"choices"`
+	Multiple bool     `json:"multiple"`
 }
 
 type PhoneOptions struct {
-	Pattern string
+	Pattern string `json:"pattern,omitempty"`
 }
 
 type FileOptions struct {
-	Storages  []filesystem.Code
-	MIMETypes []string
+	Storages  []filesystem.Code `json:"storages,omitempty"`
+	MIMETypes []string          `json:"mime_types,omitempty"`
 }
 
 type Type interface {
@@ -126,7 +126,7 @@ type StoredValue struct {
 	Key      string
 	Position int
 	Kind     StorageKind
-	Multiple bool
+	Multiple bool `json:"multiple"`
 	Value    any
 }
 
@@ -327,4 +327,28 @@ func nilInterface(value any) bool {
 	default:
 		return false
 	}
+}
+
+// Types is a local immutable-by-convention collection; it is never a global registry.
+type Types []Type
+
+func (types Types) FieldType(code TypeCode) (Type, bool) {
+	for _, item := range types {
+		if item.Code() == code {
+			return item, true
+		}
+	}
+	return nil, false
+}
+func (types Types) FieldTypes() []TypeCode {
+	result := make([]TypeCode, len(types))
+	for i, item := range types {
+		result[i] = item.Code()
+	}
+	return result
+}
+
+type TypeCatalog interface {
+	TypeResolver
+	FieldTypes() []TypeCode
 }

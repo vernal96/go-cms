@@ -69,6 +69,11 @@ Physical disks are individual Go declarations under `backend/internal/filesystem
 See [filesystem declarations](backend/internal/filesystems/README.md) for registration,
 code-only configuration, and mixing Go values with individual environment settings.
 
+## Developer extensions
+
+See [creating profiles, modules, fields, widgets and Forms extensions](backend/examples/extensions/README.md)
+for the declaration contracts and a compilable module example.
+
 ## Checks
 
 ```bash

@@ -1,4 +1,4 @@
-package admin
+package field_test
 
 import (
 	"encoding/json"
@@ -26,7 +26,7 @@ func TestFieldDefinitionsSerializeAllOptions(t *testing.T) {
 		{Key: "html", Type: field.TypeString, Label: "HTML", Editor: "html", VisibleWhen: &field.VisibleWhen{Field: "enabled", Value: true}},
 	}
 
-	result, err := fieldDefinitions(definitions)
+	result, err := field.DescribeDefinitions(definitions, standardResolver())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestFieldDefinitionsSerializeAllOptions(t *testing.T) {
 	phoneOptions := decoded[8]["options"].(map[string]any)
 	fileOptions := decoded[9]["options"].(map[string]any)
 	if integerOptions["step"] != float64(2) || floatOptions["step"] != 0.25 ||
-		selectOptions["multiple"] != true || phoneOptions["pattern"] != e164Pattern ||
+		selectOptions["multiple"] != true || len(phoneOptions) != 0 ||
 		fileOptions["storages"].([]any)[0] != "public" || fileOptions["mime_types"].([]any)[0] != "image/*" {
 		t.Fatalf("serialized options = %#v %#v %#v %#v %#v", integerOptions, floatOptions, selectOptions, phoneOptions, fileOptions)
 	}
@@ -57,7 +57,7 @@ func TestFieldDefinitionsSerializeAllOptions(t *testing.T) {
 }
 
 func TestFieldDefinitionRejectsUnknownType(t *testing.T) {
-	_, err := fieldDefinition(field.Definition{Key: "future", Type: "future", Label: "Future"})
+	_, err := field.Describe(field.Definition{Key: "future", Type: "future", Label: "Future"}, standardResolver())
 	if err == nil {
 		t.Fatal("unknown field type was accepted")
 	}

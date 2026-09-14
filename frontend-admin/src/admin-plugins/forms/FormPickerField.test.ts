@@ -79,14 +79,14 @@ describe('Forms widget editors', () => {
   })
 
   it('keeps public visibility independent of admin columns and locks transient fields', async () => {
-    const wrapper = mount(FormFieldEditor, { props: { disabled: false, initialType: 'email', fields: [], availableTypes: ['email'] } })
+    const wrapper = mount(FormFieldEditor, { props: { disabled: false, initialType: 'email', fields: [], availableTypes: ['email'].map(code => ({code,label:code,options:[]})) } })
     await flushPromises()
     const row = wrapper.findAll('.el-form-item').find((item) => item.text().includes('Показывать на сайте'))!
     row.findComponent(ElSwitch).vm.$emit('update:modelValue', true)
     await flushPromises()
     expect((wrapper.vm as unknown as { payload: () => unknown }).payload()).toMatchObject({ show_on_site: true, show_in_results: false })
     wrapper.unmount()
-    const captcha = mount(FormFieldEditor, { props: { disabled: false, initialType: 'forms.captcha', fields: [], availableTypes: ['forms.captcha'] } })
+    const captcha = mount(FormFieldEditor, { props: { disabled: false, initialType: 'forms.captcha', fields: [], availableTypes: ['forms.captcha'].map(code => ({code,label:code,options:[]})) } })
     await flushPromises()
     const publicRow = captcha.findAll('.el-form-item').find((item) => item.text().includes('Показывать на сайте'))!
     expect(publicRow.findComponent(ElSwitch).props('disabled')).toBe(true)

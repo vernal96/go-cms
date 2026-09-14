@@ -11,43 +11,47 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	corewidgets "github.com/vernal96/go-cms/kernel/modules/core/widgets"
+	"github.com/vernal96/go-cms/kernel/modules/forms"
+	"github.com/vernal96/go-cms/kernel/modules/mail"
 	"github.com/vernal96/go-cms/kernel/modules/seo"
 )
 
+var profile = dev.Profile(mail.Config{}, forms.Config{}, "private")
+
 func TestProfileContainsRequiredModulesInOrder(t *testing.T) {
-	if len(dev.Profile.Modules) != 3 {
-		t.Fatalf("profile module count = %d", len(dev.Profile.Modules))
+	if len(profile.Modules) != 5 {
+		t.Fatalf("profile module count = %d", len(profile.Modules))
 	}
-	if dev.Profile.Modules[0].Module.Code() != core.ModuleCode {
+	if profile.Modules[0].Module.Code() != core.ModuleCode {
 		t.Fatalf(
 			"first profile module = %q",
-			dev.Profile.Modules[0].Module.Code(),
+			profile.Modules[0].Module.Code(),
 		)
 	}
-	if dev.Profile.Modules[1].Module.Code() != seo.ModuleCode {
+	if profile.Modules[1].Module.Code() != seo.ModuleCode {
 		t.Fatalf(
 			"second profile module = %q",
-			dev.Profile.Modules[1].Module.Code(),
+			profile.Modules[1].Module.Code(),
 		)
 	}
-	if dev.Profile.Modules[2].Module.Code() != admin.ModuleCode {
+	if profile.Modules[4].Module.Code() != admin.ModuleCode {
 		t.Fatalf(
 			"third profile module = %q",
-			dev.Profile.Modules[2].Module.Code(),
+			profile.Modules[4].Module.Code(),
 		)
 	}
 }
 
 func TestProfileExposesDynamicParamsAndTemplateFields(t *testing.T) {
-	if len(dev.Profile.Params) != 10 {
-		t.Fatalf("profile params = %d", len(dev.Profile.Params))
+	if len(profile.Params) != 10 {
+		t.Fatalf("profile params = %d", len(profile.Params))
 	}
 	wantTypes := map[field.TypeCode]bool{
 		field.TypeString: false, field.TypeInteger: false, field.TypeFloat: false,
 		field.TypeCheckbox: false, field.TypeRadio: false, field.TypeSelect: false,
 		field.TypeTextarea: false, field.TypeEmail: false, field.TypePhone: false,
 	}
-	for _, definition := range dev.Profile.Params {
+	for _, definition := range profile.Params {
 		wantTypes[definition.Type] = true
 	}
 	for code, found := range wantTypes {
@@ -61,15 +65,15 @@ func TestProfileExposesDynamicParamsAndTemplateFields(t *testing.T) {
 		{Code: "text", Label: "Текст", Fields: []string{"textarea_value"}},
 		{Code: "contacts", Label: "Контакты", Fields: []string{"email_value", "phone_value"}},
 	}
-	if !reflect.DeepEqual(dev.Profile.EditorTabs, wantProfileTabs) {
-		t.Fatalf("profile editor tabs = %#v", dev.Profile.EditorTabs)
+	if !reflect.DeepEqual(profile.EditorTabs, wantProfileTabs) {
+		t.Fatalf("profile editor tabs = %#v", profile.EditorTabs)
 	}
-	if len(dev.Profile.Templates) != 2 ||
-		dev.Profile.Templates[0].Code != "page" || len(dev.Profile.Templates[0].Fields) != 4 ||
-		dev.Profile.Templates[1].Code != "landing" || len(dev.Profile.Templates[1].Fields) != 5 {
-		t.Fatalf("templates = %#v", dev.Profile.Templates)
+	if len(profile.Templates) != 2 ||
+		profile.Templates[0].Code != "page" || len(profile.Templates[0].Fields) != 4 ||
+		profile.Templates[1].Code != "landing" || len(profile.Templates[1].Fields) != 5 {
+		t.Fatalf("templates = %#v", profile.Templates)
 	}
-	page := dev.Profile.Templates[0]
+	page := profile.Templates[0]
 	wantPageTabs := []field.EditorTab{
 		{Code: "content", Label: "Контент", Fields: []string{"page_title", "page_text", "show_title"}},
 		{Code: "layout", Label: "Макет", Fields: []string{"layout"}},
@@ -82,8 +86,8 @@ func TestProfileExposesDynamicParamsAndTemplateFields(t *testing.T) {
 		{Code: "layout", Label: "Макет", Fields: []string{"columns", "content_width"}},
 		{Code: "audience", Label: "Аудитория", Fields: []string{"audiences"}},
 	}
-	if !reflect.DeepEqual(dev.Profile.Templates[1].EditorTabs, wantLandingTabs) {
-		t.Fatalf("landing editor tabs = %#v", dev.Profile.Templates[1].EditorTabs)
+	if !reflect.DeepEqual(profile.Templates[1].EditorTabs, wantLandingTabs) {
+		t.Fatalf("landing editor tabs = %#v", profile.Templates[1].EditorTabs)
 	}
 	if len(page.Layout.Body) != 2 || len(page.Layout.Sidebar) != 1 {
 		t.Fatalf("page widget layout = %#v", page.Layout)
@@ -95,9 +99,9 @@ func TestProfileExposesDynamicParamsAndTemplateFields(t *testing.T) {
 		!bodySlotOK || !sidebarSlotOK {
 		t.Fatalf("page widget layout = %#v", page.Layout)
 	}
-	if len(dev.Profile.WidgetViews) != 2 ||
-		dev.Profile.WidgetViews[0] != widgetviews.ContentCompact ||
-		dev.Profile.WidgetViews[1] != widgetviews.ContentArticle {
-		t.Fatalf("widget views = %#v", dev.Profile.WidgetViews)
+	if len(profile.WidgetViews) != 2 ||
+		profile.WidgetViews[0] != widgetviews.ContentCompact ||
+		profile.WidgetViews[1] != widgetviews.ContentArticle {
+		t.Fatalf("widget views = %#v", profile.WidgetViews)
 	}
 }

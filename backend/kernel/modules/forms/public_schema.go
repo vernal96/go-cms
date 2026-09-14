@@ -21,7 +21,7 @@ func (s *Service) publicSchema(ctx context.Context, detail FormDetail) (PublicFo
 	var err error
 	fields := make([]publicField, len(detail.Fields))
 	for index, item := range detail.Fields {
-		options, optionErr := encodeFieldOptions(item.Type, item.Options)
+		options, optionErr := field.EncodeOptionsJSON(item.Options)
 		if optionErr != nil {
 			return PublicFormSchema{}, optionErr
 		}

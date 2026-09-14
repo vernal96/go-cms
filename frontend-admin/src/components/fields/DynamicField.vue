@@ -23,6 +23,7 @@ const props = defineProps<{
 const registry = inject(adminPluginRegistryKey, undefined)
 const customEditor = computed(() => props.field.editor ? registry?.fieldEditor(props.field.editor) : undefined)
 const model = defineModel<unknown>()
+const control = computed(() => props.field.editor || props.field.type)
 const resourceIDs = computed<number[]>(() => Array.isArray(model.value) ? model.value.filter((item): item is number => typeof item === 'number') : [])
 </script>
 
@@ -33,41 +34,41 @@ const resourceIDs = computed<number[]>(() => Array.isArray(model.value) ? model.
 	<select-field v-else-if="field.editor === 'resource-template'" v-model="model" :choices="(resourceTemplates ?? []).map((item) => ({ value: item.code, label: item.label }))" :multiple="false" />
 	<resource-picker-field v-else-if="field.editor === 'resource-picker'" :model-value="typeof model === 'number' ? model : undefined" :site-id="siteId ?? 0" :access-token="accessToken ?? ''" @update:model-value="model = $event" />
 	<resource-picker-field v-else-if="field.editor === 'resource-multi-picker'" :model-value="resourceIDs" :site-id="siteId ?? 0" :access-token="accessToken ?? ''" multiple @update:model-value="model = $event" />
-	<json-field v-else-if="field.type === 'json'" v-model="model" />
+	<json-field v-else-if="control === 'json'" v-model="model" />
   <text-field
     v-else-if="
-      field.type === 'string' ||
-      field.type === 'email' ||
-      field.type === 'phone'
+      control === 'string' ||
+      control === 'email' ||
+      control === 'phone'
     "
     v-model="model"
-    :kind="field.type"
+    :kind="control as 'string' | 'email' | 'phone'"
   />
   <number-field
-    v-else-if="field.type === 'int' || field.type === 'float'"
+    v-else-if="control === 'int' || control === 'float'"
     v-model="model"
-    :kind="field.type"
+    :kind="control as 'int' | 'float'"
     :step="field.options?.step"
   />
   <checkbox-field
-    v-else-if="field.type === 'checkbox'"
+    v-else-if="control === 'checkbox'"
     v-model="model"
     :label="field.label"
   />
   <radio-field
-    v-else-if="field.type === 'radio'"
+    v-else-if="control === 'radio'"
     v-model="model"
     :choices="field.options?.choices ?? []"
   />
   <select-field
-    v-else-if="field.type === 'select'"
+    v-else-if="control === 'select'"
     v-model="model"
     :choices="field.options?.choices ?? []"
     :multiple="field.options?.multiple ?? false"
   />
-  <textarea-field v-else-if="field.type === 'textarea'" v-model="model" />
+  <textarea-field v-else-if="control === 'textarea'" v-model="model" />
   <file-field
-    v-else-if="field.type === 'file'"
+    v-else-if="control === 'file'"
     v-model="model"
     :storages="field.options?.storages"
     :mime-types="field.options?.mime_types"

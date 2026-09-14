@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,27 +18,13 @@ import (
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
 )
 
-type variableOptionsDTO struct {
-	Step      *float64            `json:"step,omitempty"`
-	Choices   []variableChoiceDTO `json:"choices,omitempty"`
-	Multiple  *bool               `json:"multiple,omitempty"`
-	Pattern   *string             `json:"pattern,omitempty"`
-	Storages  []filesystem.Code   `json:"storages,omitempty"`
-	MIMETypes []string            `json:"mime_types,omitempty"`
-}
-
-type variableChoiceDTO struct {
-	Value string `json:"value"`
-	Label string `json:"label"`
-}
-
 type variableDTO struct {
-	Key      string              `json:"key"`
-	Type     field.TypeCode      `json:"type"`
-	Label    string              `json:"label"`
-	Required bool                `json:"required"`
-	Rules    []string            `json:"rules"`
-	Options  *variableOptionsDTO `json:"options,omitempty"`
+	Key      string          `json:"key"`
+	Type     field.TypeCode  `json:"type"`
+	Label    string          `json:"label"`
+	Required bool            `json:"required"`
+	Rules    []string        `json:"rules"`
+	Options  json.RawMessage `json:"options,omitempty"`
 }
 
 type templatePayload struct {
@@ -435,57 +420,12 @@ func (p templatePayload) template() (Template, error) {
 }
 
 func (v variableDTO) definition() (field.Definition, error) {
-	required := v.Required
-	definition := field.Definition{Key: v.Key, Type: v.Type, Label: v.Label, Required: &required, Rules: append([]string(nil), v.Rules...)}
-	options := v.Options
-	switch v.Type {
-	case field.TypeString, field.TypeTextarea, field.TypeEmail, field.TypeCheckbox:
-		if options != nil {
-			return field.Definition{}, fmt.Errorf("%w: variable %q does not support options", ErrInvalid, v.Key)
-		}
-	case field.TypeInteger:
-		value := field.IntegerOptions{}
-		if options != nil && options.Step != nil {
-			if math.Trunc(*options.Step) != *options.Step {
-				return field.Definition{}, fmt.Errorf("%w: integer step is invalid", ErrInvalid)
-			}
-			step := int64(*options.Step)
-			value.Step = &step
-		}
-		definition.Options = value
-	case field.TypeFloat:
-		value := field.FloatOptions{}
-		if options != nil {
-			value.Step = options.Step
-		}
-		definition.Options = value
-	case field.TypeRadio:
-		if options == nil {
-			return field.Definition{}, fmt.Errorf("%w: radio choices are missing", ErrInvalid)
-		}
-		definition.Options = field.RadioOptions{Choices: choicesFromDTO(options.Choices)}
-	case field.TypeSelect:
-		if options == nil {
-			return field.Definition{}, fmt.Errorf("%w: select choices are missing", ErrInvalid)
-		}
-		definition.Options = field.SelectOptions{Choices: choicesFromDTO(options.Choices), Multiple: options.Multiple != nil && *options.Multiple}
-	case field.TypePhone:
-		value := field.PhoneOptions{}
-		if options != nil && options.Pattern != nil {
-			value.Pattern = *options.Pattern
-		}
-		definition.Options = value
-	case field.TypeFile:
-		value := field.FileOptions{}
-		if options != nil {
-			value.Storages = append([]filesystem.Code(nil), options.Storages...)
-			value.MIMETypes = append([]string(nil), options.MIMETypes...)
-		}
-		definition.Options = value
-	default:
-		return field.Definition{}, fmt.Errorf("%w: unsupported variable type %q", ErrInvalid, v.Type)
+	options, err := field.DecodeOptionsJSON(v.Type, v.Options)
+	if err != nil {
+		return field.Definition{}, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	return definition, nil
+	required := v.Required
+	return field.Definition{Key: v.Key, Type: v.Type, Label: v.Label, Required: &required, Rules: append([]string{}, v.Rules...), Options: options}, nil
 }
 
 func toTemplateResponse(item Template) (templateResponse, error) {
@@ -501,75 +441,11 @@ func toTemplateResponse(item Template) (templateResponse, error) {
 }
 
 func toVariableDTO(definition field.Definition) (variableDTO, error) {
-	required := definition.Required != nil && *definition.Required
-	result := variableDTO{Key: definition.Key, Type: definition.Type, Label: definition.Label, Required: required, Rules: append([]string(nil), definition.Rules...)}
-	switch definition.Type {
-	case field.TypeString, field.TypeTextarea, field.TypeEmail, field.TypeCheckbox:
-	case field.TypeInteger:
-		options, ok := definition.Options.(field.IntegerOptions)
-		if !ok {
-			return variableDTO{}, errors.New("stored integer variable options are invalid")
-		}
-		result.Options = &variableOptionsDTO{}
-		if options.Step != nil {
-			step := float64(*options.Step)
-			result.Options.Step = &step
-		}
-	case field.TypeFloat:
-		options, ok := definition.Options.(field.FloatOptions)
-		if !ok {
-			return variableDTO{}, errors.New("stored float variable options are invalid")
-		}
-		result.Options = &variableOptionsDTO{Step: options.Step}
-	case field.TypeRadio:
-		options, ok := definition.Options.(field.RadioOptions)
-		if !ok {
-			return variableDTO{}, errors.New("stored radio variable options are invalid")
-		}
-		result.Options = &variableOptionsDTO{Choices: choicesToDTO(options.Choices)}
-	case field.TypeSelect:
-		options, ok := definition.Options.(field.SelectOptions)
-		if !ok {
-			return variableDTO{}, errors.New("stored select variable options are invalid")
-		}
-		multiple := options.Multiple
-		result.Options = &variableOptionsDTO{Choices: choicesToDTO(options.Choices), Multiple: &multiple}
-	case field.TypePhone:
-		options, ok := definition.Options.(field.PhoneOptions)
-		if !ok {
-			return variableDTO{}, errors.New("stored phone variable options are invalid")
-		}
-		pattern := options.Pattern
-		result.Options = &variableOptionsDTO{Pattern: &pattern}
-	case field.TypeFile:
-		options, err := field.FileOptionsValue(definition.Options)
-		if err != nil {
-			return variableDTO{}, err
-		}
-		result.Options = &variableOptionsDTO{Storages: append([]filesystem.Code(nil), options.Storages...), MIMETypes: append([]string(nil), options.MIMETypes...)}
-	default:
-		return variableDTO{}, errors.New("stored variable type is unsupported")
+	options, err := field.EncodeOptionsJSON(definition.Options)
+	if err != nil {
+		return variableDTO{}, err
 	}
-	if result.Rules == nil {
-		result.Rules = []string{}
-	}
-	return result, nil
-}
-
-func choicesFromDTO(items []variableChoiceDTO) []field.Choice {
-	result := make([]field.Choice, len(items))
-	for index, item := range items {
-		result[index] = field.Choice{Value: item.Value, Label: item.Label}
-	}
-	return result
-}
-
-func choicesToDTO(items []field.Choice) []variableChoiceDTO {
-	result := make([]variableChoiceDTO, len(items))
-	for index, item := range items {
-		result[index] = variableChoiceDTO{Value: item.Value, Label: item.Label}
-	}
-	return result
+	return variableDTO{Key: definition.Key, Type: definition.Type, Label: definition.Label, Required: definition.Required != nil && *definition.Required, Rules: append([]string{}, definition.Rules...), Options: options}, nil
 }
 
 func pageQuery(request *http.Request) (PageQuery, error) {

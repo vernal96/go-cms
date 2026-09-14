@@ -210,7 +210,7 @@ func (c Config) Application() appkernel.Definition {
 			c.Mail.Application(),
 			c.Forms.Application(),
 		},
-		Profiles: []kernel.Profile{dev.ProfileWithMailAndForms(
+		Profiles: []kernel.Profile{dev.Profile(
 			c.Mail.ModuleConfig(),
 			c.Forms.ModuleConfig(),
 			c.Files.InternalStorage,

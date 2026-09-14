@@ -43,12 +43,12 @@ const dirty = computed(() => canUpdate.value && (creating.value || editorDirty.v
 const selectedNode = computed(() => nodes.value.find(node => node.id === selectedID.value))
 const data = computed(() => treeNodes(nodes.value))
 const typeOptions = computed(() => {
-  if (kind.value === 'field') return props.detail.available_field_types.map(code => ({ code, label: fieldTypeLabels[code] ?? code }))
+  if (kind.value === 'field') return props.detail.available_field_types.map(({code,label}) => ({code,label}))
   if (kind.value === 'element') return props.detail.available_element_types.filter(item => item.code !== 'submit_button').map(item => ({ code: item.code, label: item.label }))
   if (kind.value === 'container') return props.detail.available_container_types
   return []
 })
-const fieldTypeLabels: Record<string, string> = { string: 'Строка', integer: 'Целое число', float: 'Число', checkbox: 'Флаг', radio: 'Один вариант', select: 'Список', textarea: 'Многострочный текст', email: 'Email', phone: 'Телефон', json: 'JSON', 'forms.captcha': 'CAPTCHA', 'forms.consent': 'Согласие', 'forms.upload': 'Загрузка файлов' }
+
 const parentOptions = computed(() => nodes.value.filter(node => node.kind === 'container' && selectedID.value !== null && canPlace(nodes.value, selectedID.value, node.id)))
 watch(() => props.detail.layout, value => { nodes.value = clone(value) }, { immediate: true })
 
@@ -58,7 +58,7 @@ function nodeLabel(node: LayoutNode): string {
   return String(node.config?.label || props.detail.available_container_types.find(item => item.code === node.container_type)?.label || node.container_type)
 }
 function nodeType(node: LayoutNode): string {
-  if (node.kind === 'field') { const code = props.detail.fields.find(item => item.id === node.field_id)?.type ?? ''; return `Поле · ${fieldTypeLabels[code] ?? code}` }
+  if (node.kind === 'field') { const code = props.detail.fields.find(item => item.id === node.field_id)?.type ?? ''; return `Поле · ${props.detail.available_field_types.find(item => item.code === code)?.label ?? code}` }
   if (node.kind === 'element') { const code = props.detail.elements.find(item => item.id === node.element_id)?.type; return `Элемент · ${props.detail.available_element_types.find(item => item.code === code)?.label ?? code}` }
   return `Контейнер · ${props.detail.available_container_types.find(item => item.code === node.container_type)?.label ?? node.container_type}`
 }
@@ -246,8 +246,8 @@ defineExpose({ ensureLeave })
             <el-form-item label="Категория" required><el-select v-model="kind" placeholder="Выберите категорию" @change="changeKind"><el-option label="Элемент" value="element" /><el-option label="Поле" value="field" /><el-option label="Контейнер" value="container" /></el-select></el-form-item>
             <el-form-item v-if="kind" label="Тип" required><el-select v-model="type" placeholder="Выберите тип" filterable @change="changeType"><el-option v-for="option in typeOptions" :key="option.code" :label="option.label" :value="option.code" /></el-select></el-form-item>
           </el-form>
-          <form-field-editor v-if="kind === 'field' && (field || type)" ref="fieldEditor" :key="editorKey" :field="field" :fields="detail.fields" :available-types="detail.available_field_types" :initial-type="type as FormsFieldType" :disabled="!canUpdate || busy || unsynced" @dirty="editorDirty = $event" />
-          <form-element-editor v-if="kind === 'element' && (element || type)" ref="elementEditor" :key="editorKey" :element="element" :available-types="detail.available_element_types" :initial-type="type as ElementType" :access-token="accessToken" :permissions="permissions" :disabled="!canUpdate || busy || unsynced" @dirty="editorDirty = $event" />
+          <form-field-editor v-if="kind === 'field' && (field || type)" ref="fieldEditor" :key="editorKey" :field="field" :fields="detail.fields" :available-types="detail.available_field_types" :initial-type="type as FormsFieldType" :disabled="!canUpdate || busy || unsynced" :access-token="accessToken" :site-id="detail.form.site_id" @dirty="editorDirty = $event" />
+          <form-element-editor v-if="kind === 'element' && (element || type)" ref="elementEditor" :key="editorKey" :element="element" :available-types="detail.available_element_types" :initial-type="type as ElementType" :site-id="detail.form.site_id" :access-token="accessToken" :permissions="permissions" :disabled="!canUpdate || busy || unsynced" @dirty="editorDirty = $event" />
           <el-form v-if="kind === 'container' && (selectedNode || type)" label-position="top" :disabled="!canUpdate || busy || unsynced">
             <el-form-item v-if="selectedNode" label="Тип"><span>{{ nodeType(selectedNode) }}</span></el-form-item>
             <el-form-item label="Название"><el-input v-model="label" placeholder="Необязательно" /></el-form-item>

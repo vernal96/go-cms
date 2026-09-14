@@ -356,7 +356,7 @@ func (r *RuntimeRegistry) addFieldType(
 		return fmt.Errorf("field type %q already exists", code)
 	}
 
-	r.fieldTypes[code] = fieldType
+	r.fieldTypes[code] = field.SnapshotType(fieldType)
 	return nil
 }
 
