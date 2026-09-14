@@ -3,7 +3,6 @@ package dev
 import (
 	"time"
 
-	"github.com/vernal96/go-cms/internal/connectors/corefiles"
 	"github.com/vernal96/go-cms/internal/connectors/projectcache"
 	devtemplates "github.com/vernal96/go-cms/internal/profiles/dev/templates"
 	"github.com/vernal96/go-cms/internal/profiles/dev/widgetviews"
@@ -56,11 +55,29 @@ var Profile = kernel.Profile{
 	},
 }
 
-func ProfileWithMailAndForms(mailConfig mail.Config, formsConfig forms.Config) kernel.Profile {
+func ProfileWithMailAndForms(
+	mailConfig mail.Config,
+	formsConfig forms.Config,
+	spoolStorage filesystem.Code,
+) kernel.Profile {
 	result := Profile
 	result.Modules = append([]kernel.ProfileModule(nil), Profile.Modules...)
-	mailModule := kernel.ProfileModule{Module: mail.Module{}, Config: mailConfig, Filesystems: []filesystem.Binding{{Alias: mail.SpoolFilesystemAlias, Code: corefiles.PrivateCode}}}
-	formsModule := kernel.ProfileModule{Module: forms.Module{}, Config: formsConfig, Filesystems: []filesystem.Binding{{Alias: forms.SpoolFilesystemAlias, Code: corefiles.PrivateCode}}}
+	mailModule := kernel.ProfileModule{
+		Module: mail.Module{},
+		Config: mailConfig,
+		Filesystems: []filesystem.Binding{{
+			Alias: mail.SpoolFilesystemAlias,
+			Code:  spoolStorage,
+		}},
+	}
+	formsModule := kernel.ProfileModule{
+		Module: forms.Module{},
+		Config: formsConfig,
+		Filesystems: []filesystem.Binding{{
+			Alias: forms.SpoolFilesystemAlias,
+			Code:  spoolStorage,
+		}},
+	}
 	adminIndex := len(result.Modules) - 1
 	result.Modules = append(result.Modules, kernel.ProfileModule{}, kernel.ProfileModule{})
 	copy(result.Modules[adminIndex+2:], result.Modules[adminIndex:])
