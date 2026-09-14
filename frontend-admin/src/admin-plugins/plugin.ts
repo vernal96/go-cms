@@ -10,5 +10,6 @@ export interface AdminRouteDefinition {
 export interface AdminPlugin {
   code: string
   routes?: AdminRouteDefinition[]
+  fieldEditors?: Record<string, Component>
   icons?: Record<string, Component>
 }

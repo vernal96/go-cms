@@ -32,6 +32,7 @@ CREATE TABLE forms.fields
     editor          TEXT        NOT NULL DEFAULT '',
     visible_when    JSONB       NULL,
     result_label    TEXT        NOT NULL DEFAULT '',
+    show_on_site    BOOLEAN     NOT NULL DEFAULT FALSE CHECK (NOT show_on_site OR type NOT IN ('forms.captcha', 'forms.upload')),
     show_in_results BOOLEAN     NOT NULL DEFAULT FALSE,
     result_position INTEGER     NOT NULL DEFAULT 0 CHECK (result_position >= 0),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),

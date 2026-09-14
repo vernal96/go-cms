@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, inject } from 'vue'
 import { ElAlert } from 'element-plus'
+import { adminPluginRegistryKey } from '../../admin-plugins/context'
 import type { FieldDefinition } from '../../types/admin'
 import CheckboxField from './CheckboxField.vue'
 import NumberField from './NumberField.vue'
@@ -13,18 +14,22 @@ import JsonField from './JsonField.vue'
 import ResourcePickerField from './ResourcePickerField.vue'
 import RichTextEditor from '../RichTextEditor.vue'
 
-defineProps<{
+const props = defineProps<{
 	field: FieldDefinition
 	siteId?: number
 	accessToken?: string
 	resourceTemplates?: Array<{ code: string; label: string }>
 }>()
+const registry = inject(adminPluginRegistryKey, undefined)
+const customEditor = computed(() => props.field.editor ? registry?.fieldEditor(props.field.editor) : undefined)
 const model = defineModel<unknown>()
 const resourceIDs = computed<number[]>(() => Array.isArray(model.value) ? model.value.filter((item): item is number => typeof item === 'number') : [])
 </script>
 
 <template>
-	<rich-text-editor v-if="field.editor === 'html'" :model-value="typeof model === 'string' ? model : ''" @update:model-value="model = $event" />
+	<component v-if="customEditor" :is="customEditor" v-model="model" :field="field" :site-id="siteId" :access-token="accessToken" />
+	<el-alert v-else-if="field.editor?.includes('.')" type="error" :closable="false" :title="`Редактор «${field.editor}» недоступен.`" />
+	<rich-text-editor v-else-if="field.editor === 'html'" :model-value="typeof model === 'string' ? model : ''" @update:model-value="model = $event" />
 	<select-field v-else-if="field.editor === 'resource-template'" v-model="model" :choices="(resourceTemplates ?? []).map((item) => ({ value: item.code, label: item.label }))" :multiple="false" />
 	<resource-picker-field v-else-if="field.editor === 'resource-picker'" :model-value="typeof model === 'number' ? model : undefined" :site-id="siteId ?? 0" :access-token="accessToken ?? ''" @update:model-value="model = $event" />
 	<resource-picker-field v-else-if="field.editor === 'resource-multi-picker'" :model-value="resourceIDs" :site-id="siteId ?? 0" :access-token="accessToken ?? ''" multiple @update:model-value="model = $event" />

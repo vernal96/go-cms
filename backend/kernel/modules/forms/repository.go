@@ -69,6 +69,7 @@ type Repository interface {
 
 	CreateResult(context.Context, SubmissionRecord) (ResultDetail, error)
 	ListResults(context.Context, site.ID, ResultQuery, []string) (ResultSummaryPage, error)
+	ListPublicResults(context.Context, site.ID, FormID, PageQuery) (PublicResultsPage, error)
 	ResultDetail(context.Context, site.ID, ResultID) (ResultDetail, error)
 	ChangeResultStatus(context.Context, ResultStatusChange) (ResultDetail, error)
 	DeleteResult(context.Context, site.ID, ResultID) ([]string, error)

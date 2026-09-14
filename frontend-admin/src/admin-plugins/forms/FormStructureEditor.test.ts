@@ -14,7 +14,7 @@ afterEach(() => vi.resetAllMocks())
 function fixture(): FormEditorResponse {
   return {
     form: { id: 9, site_id: 5, code: 'test', name: 'Test', description: '', enabled: true, created_at: '', updated_at: '' },
-    fields: [{ id: 1, form_id: 9, code: 'email', type: 'email', label: 'Email', required: false, rules: [], result_label: '', show_in_results: true, result_position: 0, created_at: '', updated_at: '' }],
+    fields: [{ id: 1, form_id: 9, code: 'email', type: 'email', label: 'Email', required: false, rules: [], result_label: '', show_in_results: true, show_on_site: false, result_position: 0, created_at: '', updated_at: '' }],
     elements: [], statuses: [], actions: [],
     layout: [{ id: 10, form_id: 9, kind: 'field', field_id: 1, position: 0 }, { id: 11, form_id: 9, kind: 'container', container_type: 'group', position: 1, config: { label: 'Контакты' } }],
     available_field_types: ['email', 'string'], available_element_types: [{ code: 'text', label: 'Текст', fields: [] }], available_container_types: [{ code: 'group', label: 'Группа' }, { code: 'slide', label: 'Слайд' }], available_action_types: [],

@@ -51,6 +51,7 @@ type fieldPayload struct {
 	Editor         field.EditorCode   `json:"editor,omitempty"`
 	VisibleWhen    *field.VisibleWhen `json:"visible_when,omitempty"`
 	ResultLabel    string             `json:"result_label"`
+	ShowOnSite     bool               `json:"show_on_site"`
 	ShowInResults  bool               `json:"show_in_results"`
 	ResultPosition int                `json:"result_position"`
 }
@@ -723,7 +724,7 @@ func (p fieldPayload) field() (FormField, error) {
 	if err != nil {
 		return FormField{}, err
 	}
-	return FormField{Code: p.Code, Type: p.Type, Label: p.Label, Required: p.Required, Rules: append([]string(nil), p.Rules...), Options: options, Editor: p.Editor, VisibleWhen: cloneVisibleWhen(p.VisibleWhen), ResultLabel: p.ResultLabel, ShowInResults: p.ShowInResults, ResultPosition: p.ResultPosition}, nil
+	return FormField{Code: p.Code, Type: p.Type, Label: p.Label, Required: p.Required, Rules: append([]string(nil), p.Rules...), Options: options, Editor: p.Editor, VisibleWhen: cloneVisibleWhen(p.VisibleWhen), ResultLabel: p.ResultLabel, ShowInResults: p.ShowInResults, ShowOnSite: p.ShowOnSite, ResultPosition: p.ResultPosition}, nil
 }
 
 func decodeFieldOptions(code field.TypeCode, raw json.RawMessage) (any, error) {
@@ -851,7 +852,7 @@ func toFieldResponse(item FormField) (fieldResponse, error) {
 	if err != nil {
 		return fieldResponse{}, err
 	}
-	return fieldResponse{ID: item.ID, FormID: item.FormID, fieldPayload: fieldPayload{Code: item.Code, Type: item.Type, Label: item.Label, Required: item.Required, Rules: append([]string(nil), item.Rules...), Options: options, Editor: item.Editor, VisibleWhen: cloneVisibleWhen(item.VisibleWhen), ResultLabel: item.ResultLabel, ShowInResults: item.ShowInResults, ResultPosition: item.ResultPosition}, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}, nil
+	return fieldResponse{ID: item.ID, FormID: item.FormID, fieldPayload: fieldPayload{Code: item.Code, Type: item.Type, Label: item.Label, Required: item.Required, Rules: append([]string(nil), item.Rules...), Options: options, Editor: item.Editor, VisibleWhen: cloneVisibleWhen(item.VisibleWhen), ResultLabel: item.ResultLabel, ShowInResults: item.ShowInResults, ShowOnSite: item.ShowOnSite, ResultPosition: item.ResultPosition}, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}, nil
 }
 
 func encodeFieldOptions(code field.TypeCode, value any) (json.RawMessage, error) {
@@ -1060,38 +1061,15 @@ func newPublicHTTPBuilder(service *Service) httptransport.Builder {
 			if err := registrar.Route(httptransport.Route{Name: "forms.schema", Method: http.MethodGet, Pattern: "/forms/{code}", Handler: http.HandlerFunc(h.schema)}); err != nil {
 				return err
 			}
+			if err := registrar.Route(httptransport.Route{Name: "forms.results", Method: http.MethodGet, Pattern: "/forms/{code}/results", Handler: http.HandlerFunc(h.results)}); err != nil {
+				return err
+			}
 			return registrar.Route(httptransport.Route{Name: "forms.submit", Method: http.MethodPost, Pattern: "/forms/{code}/submit", Handler: http.HandlerFunc(h.submit)})
 		}}, nil
 	})
 }
 
 type publicFormsHTTP struct{ service *Service }
-type publicField struct {
-	Code        string             `json:"code"`
-	Type        field.TypeCode     `json:"type"`
-	Label       string             `json:"label"`
-	Required    bool               `json:"required"`
-	Rules       []string           `json:"rules"`
-	Options     json.RawMessage    `json:"options,omitempty"`
-	Editor      field.EditorCode   `json:"editor,omitempty"`
-	VisibleWhen *field.VisibleWhen `json:"visible_when,omitempty"`
-	Captcha     map[string]any     `json:"captcha,omitempty"`
-}
-type publicElement struct {
-	Code   string          `json:"code"`
-	Type   ElementTypeCode `json:"type"`
-	Config any             `json:"config"`
-}
-type publicLayoutNode struct {
-	Key           string          `json:"key"`
-	Parent        string          `json:"parent,omitempty"`
-	Kind          LayoutKind      `json:"kind"`
-	FieldCode     string          `json:"field_code,omitempty"`
-	ElementCode   string          `json:"element_code,omitempty"`
-	ContainerType ContainerType   `json:"container_type,omitempty"`
-	Position      int             `json:"position"`
-	Config        json.RawMessage `json:"config,omitempty"`
-}
 
 func (h *publicFormsHTTP) schema(response http.ResponseWriter, request *http.Request) {
 	detail, err := h.service.PublicForm(request.Context(), chi.URLParam(request, "code"))
@@ -1099,70 +1077,12 @@ func (h *publicFormsHTTP) schema(response http.ResponseWriter, request *http.Req
 		writePublicError(response, err)
 		return
 	}
-	fields := make([]publicField, len(detail.Fields))
-	for index, item := range detail.Fields {
-		options, optionErr := encodeFieldOptions(item.Type, item.Options)
-		if optionErr != nil {
-			writePublicError(response, optionErr)
-			return
-		}
-		fields[index] = publicField{Code: item.Code, Type: item.Type, Label: item.Label, Required: item.Required, Rules: append([]string(nil), item.Rules...), Options: options, Editor: item.Editor, VisibleWhen: cloneVisibleWhen(item.VisibleWhen)}
-		if item.Type == FieldTypeCaptcha {
-			fields[index].Captcha, err = h.service.CaptchaPublicConfig(request.Context(), item)
-			if err != nil {
-				writePublicError(response, err)
-				return
-			}
-		}
+	schema, err := h.service.publicSchema(request.Context(), detail)
+	if err != nil {
+		writePublicError(response, err)
+		return
 	}
-	elements := make([]publicElement, len(detail.Elements))
-	elementCodes := make(map[ElementID]string, len(detail.Elements))
-	for index, item := range detail.Elements {
-		elementCodes[item.ID] = item.Code
-		var config any
-		if item.Type == ElementImage {
-			var raw map[string]any
-			if json.Unmarshal(item.Config, &raw) != nil {
-				writePublicError(response, ErrInvalid)
-				return
-			}
-			url, urlErr := h.service.PublicImageURL(request.Context(), item.Config)
-			if urlErr != nil {
-				writePublicError(response, ErrNotFound)
-				return
-			}
-			delete(raw, "file_id")
-			raw["url"] = url
-			config = raw
-		} else if json.Unmarshal(item.Config, &config) != nil {
-			writePublicError(response, ErrInvalid)
-			return
-		}
-		elements[index] = publicElement{Code: item.Code, Type: item.Type, Config: config}
-	}
-	fieldCodes := make(map[FieldID]string, len(detail.Fields))
-	for _, item := range detail.Fields {
-		fieldCodes[item.ID] = item.Code
-	}
-	keys := make(map[LayoutNodeID]string, len(detail.Layout))
-	for index, item := range detail.Layout {
-		keys[item.ID] = fmt.Sprintf("n%d", index+1)
-	}
-	layout := make([]publicLayoutNode, len(detail.Layout))
-	for index, item := range detail.Layout {
-		node := publicLayoutNode{Key: keys[item.ID], Kind: item.Kind, ContainerType: item.ContainerType, Position: item.Position, Config: item.Config}
-		if item.ParentID != nil {
-			node.Parent = keys[*item.ParentID]
-		}
-		if item.FieldID != nil {
-			node.FieldCode = fieldCodes[*item.FieldID]
-		}
-		if item.ElementID != nil {
-			node.ElementCode = elementCodes[*item.ElementID]
-		}
-		layout[index] = node
-	}
-	writeJSON(response, http.StatusOK, map[string]any{"code": detail.Form.Code, "name": detail.Form.Name, "description": detail.Form.Description, "fields": fields, "elements": elements, "layout": layout})
+	writeJSON(response, http.StatusOK, schema)
 }
 
 func (h *publicFormsHTTP) submit(response http.ResponseWriter, request *http.Request) {

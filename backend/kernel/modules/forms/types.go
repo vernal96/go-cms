@@ -94,6 +94,7 @@ type FormField struct {
 	Editor         field.EditorCode   `json:"editor,omitempty"`
 	VisibleWhen    *field.VisibleWhen `json:"visible_when,omitempty"`
 	ResultLabel    string             `json:"result_label"`
+	ShowOnSite     bool               `json:"show_on_site"`
 	ShowInResults  bool               `json:"show_in_results"`
 	ResultPosition int                `json:"result_position"`
 	CreatedAt      time.Time          `json:"created_at"`

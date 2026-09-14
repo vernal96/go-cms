@@ -36,6 +36,13 @@ describe('AdminPluginRegistry', () => {
     ])).toThrow(/icon is registered more than once/i)
   })
 
+  it('owns module field editors and rejects another module namespace', () => {
+    const registry = new AdminPluginRegistry([{ code: 'forms', fieldEditors: { 'forms.form-picker': view } }])
+    expect(registry.fieldEditor('forms.form-picker')).toBe(view)
+    expect(registry.fieldEditor('missing.editor')).toBeUndefined()
+    expect(() => new AdminPluginRegistry([{ code: 'forms', fieldEditors: { 'mail.editor': view } }])).toThrow(/invalid field editor/i)
+  })
+
   it('registers every Mail navigation target and icon', () => {
     expect(adminPluginRegistry.icon('mail')).toBeDefined()
     expect(adminPluginRegistry.icon('forms')).toBeDefined()

@@ -30,9 +30,9 @@ function router() { return createRouter({ history: createMemoryHistory(), routes
 const editor: FormEditorResponse = {
   form: { id: 9, site_id: 5, code: 'feedback', name: 'Обратная связь', description: '', enabled: true, created_at: '', updated_at: '' },
   fields: [
-    { id: 1, form_id: 9, code: 'privacy_consent', type: 'forms.consent', label: 'Согласие', required: true, rules: [], options: {}, result_label: 'Согласие', show_in_results: true, result_position: 0, created_at: '', updated_at: '' },
-    { id: 2, form_id: 9, code: 'captcha', type: 'forms.captcha', label: 'CAPTCHA', required: true, rules: [], options: {}, result_label: '', show_in_results: false, result_position: 1, created_at: '', updated_at: '' },
-    { id: 3, form_id: 9, code: 'email', type: 'email', label: 'Email', required: true, rules: [], result_label: 'Контакт', show_in_results: true, result_position: 2, created_at: '', updated_at: '' },
+    { id: 1, form_id: 9, code: 'privacy_consent', type: 'forms.consent', label: 'Согласие', required: true, rules: [], options: {}, result_label: 'Согласие', show_in_results: true, show_on_site: false, result_position: 0, created_at: '', updated_at: '' },
+    { id: 2, form_id: 9, code: 'captcha', type: 'forms.captcha', label: 'CAPTCHA', required: true, rules: [], options: {}, result_label: '', show_in_results: false, show_on_site: false, result_position: 1, created_at: '', updated_at: '' },
+    { id: 3, form_id: 9, code: 'email', type: 'email', label: 'Email', required: true, rules: [], result_label: 'Контакт', show_in_results: true, show_on_site: false, result_position: 2, created_at: '', updated_at: '' },
   ],
   elements: [{ id: 4, form_id: 9, code: 'submit', type: 'submit_button', config: { label: 'Отправить' }, created_at: '', updated_at: '' }],
   layout: [

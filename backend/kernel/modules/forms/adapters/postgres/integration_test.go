@@ -2,10 +2,12 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,6 +260,107 @@ func TestPostgresFormsSiteIsolationResultsActionsAndCascade(t *testing.T) {
 	if _, err := repository.ChangeResultStatus(ctx, forms.ResultStatusChange{SiteID: siteIDs[0], ResultID: created.Result.ID, FromStatusID: first.Statuses[0].ID, ToStatusID: second.Statuses[0].ID}); !errors.Is(err, forms.ErrConflict) {
 		t.Fatalf("cross-form status change error = %v", err)
 	}
+
+	t.Run("public result projection and historical identity", func(t *testing.T) {
+		sid, fid := siteIDs[1], second.Form.ID
+		public, _, err := repository.CreateField(ctx, sid, fid, forms.FormField{Code: "answer", Type: field.TypeInteger, Label: "Ответ", ShowOnSite: true, ResultPosition: 2}, forms.LayoutPlacement{Position: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		private, _, err := repository.CreateField(ctx, sid, fid, forms.FormField{Code: "secret", Type: field.TypeString, Label: "Secret", ShowInResults: true, ResultPosition: 3}, forms.LayoutPlacement{Position: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		disabledPublic := public
+		disabledPublic.ShowOnSite = false
+		if _, err := repository.UpdateField(ctx, sid, disabledPublic); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repository.UpdateField(ctx, sid, public); err != nil {
+			t.Fatal(err)
+		}
+		status, err := repository.CreateStatus(ctx, sid, fid, forms.Status{Code: "done", Name: "Готово", Position: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for n := int64(1); n <= 3; n++ {
+			statusID := second.Statuses[0].ID
+			if n == 2 {
+				statusID = status.ID
+			}
+			_, err := repository.CreateResult(ctx, forms.SubmissionRecord{
+				Result: forms.Result{SiteID: sid, FormID: fid, FormCode: second.Form.Code, FormName: second.Form.Name, StatusID: statusID, UserAgent: "private-agent", ClientAddress: "private-address"},
+				Values: []forms.ResultValue{
+					{FieldID: &public.ID, FieldCode: public.Code, FieldLabel: public.Label, FieldType: public.Type, StorageKind: field.StorageInteger, Value: n},
+					{FieldID: &private.ID, FieldCode: private.Code, FieldLabel: private.Label, FieldType: private.Type, StorageKind: field.StorageString, Value: "private-value"},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		page, err := repository.ListPublicResults(ctx, sid, fid, forms.PageQuery{Page: 1, PerPage: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Columns) != 1 || page.Columns[0].Label != "Ответ" || len(page.Items) != 2 || page.Pagination.Total != 3 || page.Pagination.Pages != 2 || page.Items[0].Values["answer"] != int64(3) {
+			t.Fatalf("first page: %#v", page)
+		}
+		raw, _ := json.Marshal(page)
+		for _, secret := range []string{"private-agent", "private-address", "private-value", "secret", "site_id", "form_id", "status_id", "action_executions"} {
+			if strings.Contains(string(raw), secret) {
+				t.Fatalf("public leak %s: %s", secret, raw)
+			}
+		}
+		page, err = repository.ListPublicResults(ctx, sid, fid, forms.PageQuery{Page: 2, PerPage: 2})
+		if err != nil || len(page.Items) != 1 || page.Items[0].Values["answer"] != int64(1) {
+			t.Fatalf("next page: %#v %v", page, err)
+		}
+		page, err = repository.ListPublicResults(ctx, sid, fid, forms.PageQuery{Page: 9, PerPage: 2})
+		if err != nil || len(page.Items) != 0 || page.Pagination.Total != 3 || page.Pagination.Pages != 2 {
+			t.Fatalf("past end: %#v %v", page, err)
+		}
+		if _, err := repository.ListPublicResults(ctx, siteIDs[0], fid, forms.PageQuery{Page: 1, PerPage: 2}); !errors.Is(err, forms.ErrNotFound) {
+			t.Fatalf("site isolation: %v", err)
+		}
+		if _, err := repository.SetFormEnabled(ctx, sid, fid, false, nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repository.ListPublicResults(ctx, sid, fid, forms.PageQuery{Page: 1, PerPage: 2}); !errors.Is(err, forms.ErrNotFound) {
+			t.Fatalf("disabled: %v", err)
+		}
+		if _, err := repository.SetFormEnabled(ctx, sid, fid, true, nil); err != nil {
+			t.Fatal(err)
+		}
+		public.Code, public.ResultLabel = "renamed", "Публичный ответ"
+		if _, err := repository.UpdateField(ctx, sid, public); err != nil {
+			t.Fatal(err)
+		}
+		page, err = repository.ListPublicResults(ctx, sid, fid, forms.PageQuery{Page: 1, PerPage: 2})
+		if err != nil || page.Columns[0].Label != "Публичный ответ" || page.Items[0].Values["renamed"] != int64(3) {
+			t.Fatalf("renamed: %#v %v", page, err)
+		}
+		public.ShowOnSite = false
+		if _, err := repository.UpdateField(ctx, sid, public); err != nil {
+			t.Fatal(err)
+		}
+		page, err = repository.ListPublicResults(ctx, sid, fid, forms.PageQuery{Page: 1, PerPage: 2})
+		if err != nil || len(page.Columns) != 0 || len(page.Items[0].Values) != 0 {
+			t.Fatalf("unpublished: %#v %v", page, err)
+		}
+		if err := repository.DeleteField(ctx, sid, fid, public.ID); err != nil {
+			t.Fatal(err)
+		}
+		public.ID = 0
+		public.ShowOnSite = true
+		if _, _, err := repository.CreateField(ctx, sid, fid, public, forms.LayoutPlacement{Position: 1}); err != nil {
+			t.Fatal(err)
+		}
+		page, err = repository.ListPublicResults(ctx, sid, fid, forms.PageQuery{Page: 1, PerPage: 2})
+		if err != nil || len(page.Columns) != 1 || len(page.Items[0].Values) != 0 {
+			t.Fatalf("reused code leaked history: %#v %v", page, err)
+		}
+	})
 
 	if _, err := connector.Pool().Exec(ctx, `UPDATE core.sites SET profile_code='without-forms' WHERE id=$1;`, siteIDs[1]); err != nil {
 		t.Fatal(err)

@@ -31,6 +31,7 @@ export interface FormField {
   editor?: string
   visible_when?: FormsVisibleWhen
   result_label: string
+  show_on_site: boolean
   show_in_results: boolean
   result_position: number
   created_at: string

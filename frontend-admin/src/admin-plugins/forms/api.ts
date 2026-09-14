@@ -13,6 +13,9 @@ export function listForms(token: string, siteID: number, page = 1, perPage = 20,
   if (search.trim()) query.set('search', search.trim())
   return adminRequest(`${formsRoot(siteID)}?${query}`, token)
 }
+export function getForm(token: string, siteID: number, formID: number): Promise<FormRecord> {
+  return adminRequest(`${formsRoot(siteID)}/${formID}`, token)
+}
 export function createForm(token: string, siteID: number, payload: FormPayload): Promise<FormRecord> {
   return adminRequest(formsRoot(siteID), token, { method: 'POST', body: JSON.stringify(payload) })
 }

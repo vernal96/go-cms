@@ -45,6 +45,9 @@ func validateForm(item Form) error {
 }
 
 func validateFormField(item FormField, resolver field.TypeResolver) error {
+	if item.ShowOnSite && (item.Type == FieldTypeCaptcha || item.Type == FieldTypeUpload) {
+		return fmt.Errorf("%w: transient fields cannot be published", ErrInvalid)
+	}
 	if item.FormID <= 0 {
 		return fmt.Errorf("%w: field form is invalid", ErrInvalid)
 	}

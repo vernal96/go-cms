@@ -145,6 +145,10 @@ func (formsTestEventBus) Consume(context.Context, eventbus.Subscription, eventbu
 
 type actionRegistryModule struct{ runtime *Runtime }
 
+func (actionRegistryModule) Registry() kernel.ModuleRegistry {
+	return kernel.ModuleRegistry{FieldTypes: field.StandardTypes()}
+}
+
 func (actionRegistryModule) Code() kernel.ModuleCode { return ModuleCode }
 func (m actionRegistryModule) Build(context.Context, kernel.ModuleContext) (kernel.ModuleRuntime, error) {
 	return m.runtime, nil

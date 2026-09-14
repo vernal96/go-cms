@@ -14,11 +14,12 @@ const typeLabels: Record<string, string> = {
 }
 const state = reactive({
   code: '', type: 'string' as FormsFieldType, label: '', required: false, rules: '', editor: '',
-  result_label: '', show_in_results: false, result_position: 0,
+  result_label: '', show_in_results: false, show_on_site: false, result_position: 0,
   visible_field: '', visible_value: '', step: undefined as number | undefined, choices: '', multiple: false,
   pattern: '', mime_types: '', max_file_size: undefined as number | undefined, max_files: undefined as number | undefined,
   provider: '', consent_text: '', consent_url: '',
 })
+watch(() => state.type, (type) => { if (type === 'forms.captcha' || type === 'forms.upload') state.show_on_site = false })
 const editing = computed(() => Boolean(props.field))
 const locked = computed(() => props.field?.code === 'privacy_consent' || props.field?.code === 'captcha')
 const controllers = computed(() => props.fields.filter((item) => item.id !== props.field?.id && item.type !== 'forms.captcha' && item.type !== 'forms.upload'))
@@ -33,7 +34,7 @@ function reset(): void {
   Object.assign(state, {
     code: item?.code ?? '', type: item?.type ?? props.initialType, label: item?.label ?? '', required: item?.required ?? false,
     rules: item?.rules?.join(', ') ?? '', editor: item?.editor ?? '', result_label: item?.result_label ?? '',
-    show_in_results: item?.show_in_results ?? false, result_position: item?.result_position ?? props.fields.length,
+    show_in_results: item?.show_in_results ?? false, show_on_site: item?.show_on_site ?? false, result_position: item?.result_position ?? props.fields.length,
     visible_field: item?.visible_when?.field ?? '', visible_value: stringifyCondition(item?.visible_when?.value),
     step: options.step, choices: (options.choices ?? []).map((choice) => `${choice.value}|${choice.label}`).join('\n'),
     multiple: options.multiple ?? false, pattern: options.pattern ?? '', mime_types: (options.mime_types ?? []).join(', '),
@@ -66,7 +67,7 @@ function payload(): FormFieldPayload {
     code: state.code.trim(), type: state.type, label: state.label.trim(), required: state.required,
     rules: state.rules.split(',').map((item) => item.trim()).filter(Boolean), options: options(), editor: state.editor.trim(),
     visible_when: state.visible_field ? { field: state.visible_field, value: conditionValue() } : undefined,
-    result_label: state.result_label.trim(), show_in_results: state.show_in_results, result_position: state.result_position,
+    result_label: state.result_label.trim(), show_in_results: state.show_in_results, show_on_site: state.show_on_site, result_position: state.result_position,
   }
 }
 defineExpose({ payload })
@@ -99,6 +100,7 @@ defineExpose({ payload })
       <el-form-item v-if="state.visible_field" label="Равно значению"><el-input v-model="state.visible_value" placeholder="Значение или JSON: true, 10" /></el-form-item>
       <el-form-item label="Подпись в результатах"><el-input v-model="state.result_label" placeholder="По умолчанию — подпись поля" /></el-form-item>
       <el-form-item label="Колонка в списке результатов"><el-switch v-model="state.show_in_results" /></el-form-item>
+      <el-form-item label="Показывать на сайте"><el-switch v-model="state.show_on_site" :disabled="state.type === 'forms.captcha' || state.type === 'forms.upload'" /></el-form-item>
       <el-form-item label="Позиция в результатах"><el-input-number v-model="state.result_position" :min="0" /></el-form-item>
     </el-form>
 
