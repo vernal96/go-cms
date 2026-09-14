@@ -123,11 +123,11 @@ func (m *Files) BrowseFilesystem(
 		return FilesystemListing{}, err
 	}
 	return FilesystemListing{
-		Disk: filesystemDiskDTO(filesystem.DiskInfo{
+		Disk: FilesystemDiskDTO{
 			Code:       listing.Storage,
-			Label:      diskLabel(m.files, listing.Storage),
+			Label:      string(listing.Storage),
 			Visibility: listing.Visibility,
-		}),
+		},
 		Folder: folder, Breadcrumbs: breadcrumbs, Items: items, Permissions: permissions,
 	}, nil
 }
@@ -257,18 +257,6 @@ func (m *Files) filePermissions(ctx context.Context, actor security.Actor) (Perm
 
 func filesystemDiskDTO(item filesystem.DiskInfo) FilesystemDiskDTO {
 	return FilesystemDiskDTO{Code: item.Code, Label: item.Label, Visibility: item.Visibility}
-}
-
-func diskLabel(files file.ManagementService, code filesystem.Code) string {
-	items, err := files.Disks(context.Background(), security.System())
-	if err == nil {
-		for _, item := range items {
-			if item.Code == code {
-				return item.Label
-			}
-		}
-	}
-	return string(code)
 }
 
 func folderItemDTO(item file.Folder, count *int) FilesystemItemDTO {
