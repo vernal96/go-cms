@@ -49,13 +49,14 @@ type Repository interface {
 	SetFormEnabled(context.Context, site.ID, FormID, bool, *security.UserID) (Form, error)
 	DeleteForm(context.Context, site.ID, FormID) ([]string, error)
 
-	CreateField(context.Context, site.ID, FormID, FormField) (FormField, LayoutNode, error)
+	CreateField(context.Context, site.ID, FormID, FormField, LayoutPlacement) (FormField, LayoutNode, error)
 	UpdateField(context.Context, site.ID, FormField) (FormField, error)
 	DeleteField(context.Context, site.ID, FormID, FieldID) error
-	CreateElement(context.Context, site.ID, FormID, Element) (Element, LayoutNode, error)
+	CreateElement(context.Context, site.ID, FormID, Element, LayoutPlacement) (Element, LayoutNode, error)
 	UpdateElement(context.Context, site.ID, Element) (Element, error)
 	DeleteElement(context.Context, site.ID, FormID, ElementID) error
 	CreateContainer(context.Context, site.ID, FormID, LayoutNode) (LayoutNode, error)
+	DeleteContainer(context.Context, site.ID, FormID, LayoutNodeID) error
 	ReplaceLayout(context.Context, site.ID, FormID, []LayoutNode) ([]LayoutNode, error)
 
 	CreateStatus(context.Context, site.ID, FormID, Status) (Status, error)

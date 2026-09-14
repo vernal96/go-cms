@@ -67,7 +67,7 @@ function save(): void {
 </script>
 
 <template>
-  <el-dialog :model-value="modelValue" :title="action ? 'Действие' : 'Новое действие'" width="min(780px, 96vw)" @update:model-value="emit('update:modelValue', $event)">
+  <el-dialog class="forms-mail-dialog" :model-value="modelValue" :title="action ? 'Действие' : 'Новое действие'" width="min(780px, 96vw)" @update:model-value="emit('update:modelValue', $event)">
     <el-form label-position="top" class="action-editor" @submit.prevent="save">
       <el-form-item label="Название" required><el-input v-model="state.name" /></el-form-item>
       <el-form-item label="Код" required><el-input v-model="state.code" /></el-form-item>

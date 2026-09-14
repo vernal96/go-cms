@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSelectedSite } from '../../composables/use-selected-site'
 import FormActionDialog from './FormActionDialog.vue'
 import FormBuilderView from './FormBuilderView.vue'
-import FormFieldDialog from './FormFieldDialog.vue'
+import FormStructureEditor from './FormStructureEditor.vue'
 import FormsListView from './FormsListView.vue'
 import FormsResultsView from './FormsResultsView.vue'
 import type { FormEditorResponse } from './types'
@@ -44,6 +44,7 @@ const editor: FormEditorResponse = {
   statuses: [{ id: 5, form_id: 9, code: 'new', name: 'Новый', color: '#409eff', position: 0, is_default: true, created_at: '', updated_at: '' }],
   actions: [], available_field_types: ['string', 'email', 'forms.captcha', 'forms.consent', 'forms.upload'],
   available_element_types: [{ code: 'text', label: 'Текст', fields: [] }, { code: 'submit_button', label: 'Кнопка', fields: [] }],
+  available_container_types: [{ code: 'group', label: 'Группа' }, { code: 'slide', label: 'Слайд' }],
   available_action_types: [{ code: 'mail', label: 'Письмо', available: true, editor_code: 'forms.mail', fields: [] }],
 }
 
@@ -53,6 +54,7 @@ const tableStubs = {
   ElButton: { name: 'ElButton', template: '<button><slot /></button>' },
 }
 const builderStubs = {
+  FormStructureEditor: { name: 'FormStructureEditor', props: ['detail'], methods: { ensureLeave: async () => true }, template: '<div />' },
   ...tableStubs,
   ElTabs: { name: 'ElTabs', template: '<div><slot /></div>' },
   ElTabPane: { name: 'ElTabPane', props: ['label', 'name'], template: '<section><slot /></section>' },
@@ -85,9 +87,9 @@ describe('Forms admin UI', () => {
     const instanceRouter = router(); await instanceRouter.push({ name: 'forms.edit', params: { formId: 9 } }); await instanceRouter.isReady()
     const wrapper = shallowMount(FormBuilderView, { props: { accessToken: 'token', permissions }, global: { plugins: [instanceRouter], stubs: builderStubs } })
     await flushPromises()
-    expect(wrapper.findAllComponents({ name: 'ElTabPane' }).map((item) => item.props('label'))).toEqual(['Поля', 'Элементы', 'Структура', 'Статусы', 'Действия'])
-    expect(wrapper.getComponent(FormFieldDialog).props('fields')).toEqual(editor.fields)
-    expect(wrapper.getComponent(FormFieldDialog).props('fields')).toEqual(expect.arrayContaining([
+    expect(wrapper.findAllComponents({ name: 'ElTabPane' }).map((item) => item.props('label'))).toEqual(['Структура', 'Статусы', 'Действия'])
+    expect(wrapper.getComponent(FormStructureEditor).props('detail').fields).toEqual(editor.fields)
+    expect(wrapper.getComponent(FormStructureEditor).props('detail').fields).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'privacy_consent', required: true, show_in_results: true, result_label: 'Согласие' }),
       expect.objectContaining({ code: 'captcha', required: true }),
     ]))

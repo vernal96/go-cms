@@ -1492,3 +1492,37 @@ input {
     height: 124px;
   }
 }
+
+
+/* Forms and Mail pages flow from the top, regardless of the workspace height. */
+.workspace-page.forms-mail-page {
+  display: grid;
+  align-content: start;
+  align-items: start;
+  grid-auto-rows: max-content;
+  gap: 16px;
+  min-width: 0;
+}
+.forms-mail-page > .page-header { margin-bottom: 0; gap: 16px; }
+.forms-mail-page > .page-header > div { min-width: 0; }
+.forms-mail-page .el-card, .forms-mail-page .el-tabs, .forms-mail-page .el-tab-pane { min-width: 0; }
+.forms-mail-page .forms-list-tools { align-items: center; width: 100%; }
+.forms-mail-page .result-filters { align-items: start; grid-auto-rows: max-content; }
+.forms-mail-page .result-filters > * { min-width: 0; }
+.forms-mail-dialog.el-dialog {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 32px);
+  margin-top: 16px;
+  margin-bottom: 16px;
+}
+.forms-mail-dialog .el-dialog__body { overflow-y: auto; min-height: 0; }
+.forms-mail-dialog .el-dialog__header, .forms-mail-dialog .el-dialog__footer { flex-shrink: 0; }
+.forms-mail-dialog .el-dialog__footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.forms-mail-dialog .el-dialog__footer .el-button { margin-left: 0; }
+.forms-mail-dialog .el-select { width: 100%; }
+@media (max-width: 560px) {
+  .forms-mail-page > .page-header { align-items: flex-start; }
+  .forms-mail-page .status-control .el-select { min-width: 0; width: 100%; }
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgerrcode"
@@ -394,10 +395,24 @@ func lockOwnedForm(ctx context.Context, tx pgx.Tx, siteID site.ID, formID forms.
 	return mapNotFound(err)
 }
 
-func nextContentPosition(ctx context.Context, tx pgx.Tx, formID forms.FormID) (int, error) {
-	var position int
-	err := tx.QueryRow(ctx, `SELECT coalesce(min(n.position) FILTER (WHERE f.code=$2 OR e.type=$3),coalesce(max(n.position)+1,0)) FROM forms.layout_nodes n LEFT JOIN forms.fields f ON f.id=n.field_id LEFT JOIN forms.elements e ON e.id=n.element_id WHERE n.form_id=$1 AND n.parent_id IS NULL;`, formID, forms.MandatoryCaptchaCode, forms.ElementSubmitButton).Scan(&position)
-	return position, err
+func validatePlacement(ctx context.Context, tx pgx.Tx, formID forms.FormID, placement forms.LayoutPlacement) error {
+	if placement.ParentID != nil {
+		var kind forms.LayoutKind
+		if err := tx.QueryRow(ctx, `SELECT kind FROM forms.layout_nodes WHERE id=$1 AND form_id=$2;`, *placement.ParentID, formID).Scan(&kind); err != nil {
+			return mapNotFound(err)
+		}
+		if kind != forms.LayoutContainer {
+			return forms.ErrInvalid
+		}
+	}
+	var count int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM forms.layout_nodes WHERE form_id=$1 AND parent_id IS NOT DISTINCT FROM $2;`, formID, placement.ParentID).Scan(&count); err != nil {
+		return err
+	}
+	if placement.Position < 0 || placement.Position > count {
+		return forms.ErrInvalid
+	}
+	return nil
 }
 
 func shiftSiblingPositions(ctx context.Context, tx pgx.Tx, formID forms.FormID, parentID *forms.LayoutNodeID, from, delta int) error {
@@ -418,7 +433,7 @@ func shiftSiblingPositions(ctx context.Context, tx pgx.Tx, formID forms.FormID, 
 	return err
 }
 
-func (r *Repository) CreateField(ctx context.Context, siteID site.ID, formID forms.FormID, item forms.FormField) (_ forms.FormField, _ forms.LayoutNode, resultErr error) {
+func (r *Repository) CreateField(ctx context.Context, siteID site.ID, formID forms.FormID, item forms.FormField, placement forms.LayoutPlacement) (_ forms.FormField, _ forms.LayoutNode, resultErr error) {
 	tx, err := r.connector.Pool().Begin(ctx)
 	if err != nil {
 		return forms.FormField{}, forms.LayoutNode{}, err
@@ -427,11 +442,10 @@ func (r *Repository) CreateField(ctx context.Context, siteID site.ID, formID for
 	if err := lockOwnedForm(ctx, tx, siteID, formID); err != nil {
 		return forms.FormField{}, forms.LayoutNode{}, err
 	}
-	position, err := nextContentPosition(ctx, tx, formID)
-	if err != nil {
+	if err := validatePlacement(ctx, tx, formID, placement); err != nil {
 		return forms.FormField{}, forms.LayoutNode{}, err
 	}
-	if err := shiftSiblingPositions(ctx, tx, formID, nil, position, 1); err != nil {
+	if err := shiftSiblingPositions(ctx, tx, formID, placement.ParentID, placement.Position, 1); err != nil {
 		return forms.FormField{}, forms.LayoutNode{}, err
 	}
 	item.FormID = formID
@@ -439,7 +453,7 @@ func (r *Repository) CreateField(ctx context.Context, siteID site.ID, formID for
 	if err != nil {
 		return forms.FormField{}, forms.LayoutNode{}, err
 	}
-	node, err := insertLayout(ctx, tx, forms.LayoutNode{FormID: formID, Kind: forms.LayoutField, FieldID: &created.ID, Position: position})
+	node, err := insertLayout(ctx, tx, forms.LayoutNode{FormID: formID, Kind: forms.LayoutField, FieldID: &created.ID, ParentID: placement.ParentID, Position: placement.Position})
 	if err != nil {
 		return forms.FormField{}, forms.LayoutNode{}, err
 	}
@@ -497,7 +511,7 @@ func (r *Repository) DeleteField(ctx context.Context, siteID site.ID, formID for
 	return resultErr
 }
 
-func (r *Repository) CreateElement(ctx context.Context, siteID site.ID, formID forms.FormID, item forms.Element) (_ forms.Element, _ forms.LayoutNode, resultErr error) {
+func (r *Repository) CreateElement(ctx context.Context, siteID site.ID, formID forms.FormID, item forms.Element, placement forms.LayoutPlacement) (_ forms.Element, _ forms.LayoutNode, resultErr error) {
 	tx, err := r.connector.Pool().Begin(ctx)
 	if err != nil {
 		return forms.Element{}, forms.LayoutNode{}, err
@@ -506,11 +520,10 @@ func (r *Repository) CreateElement(ctx context.Context, siteID site.ID, formID f
 	if err := lockOwnedForm(ctx, tx, siteID, formID); err != nil {
 		return forms.Element{}, forms.LayoutNode{}, err
 	}
-	position, err := nextContentPosition(ctx, tx, formID)
-	if err != nil {
+	if err := validatePlacement(ctx, tx, formID, placement); err != nil {
 		return forms.Element{}, forms.LayoutNode{}, err
 	}
-	if err := shiftSiblingPositions(ctx, tx, formID, nil, position, 1); err != nil {
+	if err := shiftSiblingPositions(ctx, tx, formID, placement.ParentID, placement.Position, 1); err != nil {
 		return forms.Element{}, forms.LayoutNode{}, err
 	}
 	item.FormID = formID
@@ -518,7 +531,7 @@ func (r *Repository) CreateElement(ctx context.Context, siteID site.ID, formID f
 	if err != nil {
 		return forms.Element{}, forms.LayoutNode{}, err
 	}
-	node, err := insertLayout(ctx, tx, forms.LayoutNode{FormID: formID, Kind: forms.LayoutElement, ElementID: &created.ID, Position: position})
+	node, err := insertLayout(ctx, tx, forms.LayoutNode{FormID: formID, Kind: forms.LayoutElement, ElementID: &created.ID, ParentID: placement.ParentID, Position: placement.Position})
 	if err != nil {
 		return forms.Element{}, forms.LayoutNode{}, err
 	}
@@ -576,15 +589,8 @@ func (r *Repository) CreateContainer(ctx context.Context, siteID site.ID, formID
 	if err := lockOwnedForm(ctx, tx, siteID, formID); err != nil {
 		return forms.LayoutNode{}, err
 	}
-	if item.ParentID != nil {
-		var kind forms.LayoutKind
-		var owner forms.FormID
-		if err := tx.QueryRow(ctx, `SELECT kind,form_id FROM forms.layout_nodes WHERE id=$1;`, *item.ParentID).Scan(&kind, &owner); err != nil {
-			return forms.LayoutNode{}, mapNotFound(err)
-		}
-		if kind != forms.LayoutContainer || owner != formID {
-			return forms.LayoutNode{}, forms.ErrInvalid
-		}
+	if err := validatePlacement(ctx, tx, formID, forms.LayoutPlacement{ParentID: item.ParentID, Position: item.Position}); err != nil {
+		return forms.LayoutNode{}, err
 	}
 	if err := shiftSiblingPositions(ctx, tx, formID, item.ParentID, item.Position, 1); err != nil {
 		return forms.LayoutNode{}, err
@@ -598,6 +604,79 @@ func (r *Repository) CreateContainer(ctx context.Context, siteID site.ID, formID
 		return forms.LayoutNode{}, err
 	}
 	return created, nil
+}
+
+// DeleteContainer unwraps its direct children before deleting the container,
+// so the parent foreign key never cascades into retained content.
+func (r *Repository) DeleteContainer(ctx context.Context, siteID site.ID, formID forms.FormID, id forms.LayoutNodeID) (resultErr error) {
+	tx, err := r.connector.Pool().Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(ctx, tx, &resultErr)
+	if err := lockOwnedForm(ctx, tx, siteID, formID); err != nil {
+		return err
+	}
+	nodes, err := listLayout(ctx, tx, formID)
+	if err != nil {
+		return err
+	}
+	var target *forms.LayoutNode
+	for i := range nodes {
+		if nodes[i].ID == id {
+			target = &nodes[i]
+			break
+		}
+	}
+	if target == nil {
+		return forms.ErrNotFound
+	}
+	if target.Kind != forms.LayoutContainer {
+		return forms.ErrInvalid
+	}
+	sameParent := func(a, b *forms.LayoutNodeID) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
+	var siblings, children []forms.LayoutNode
+	for _, node := range nodes {
+		if sameParent(node.ParentID, target.ParentID) {
+			siblings = append(siblings, node)
+		}
+		if node.ParentID != nil && *node.ParentID == id {
+			children = append(children, node)
+		}
+	}
+	sort.Slice(siblings, func(i, j int) bool { return siblings[i].Position < siblings[j].Position })
+	sort.Slice(children, func(i, j int) bool { return children[i].Position < children[j].Position })
+	var desired []forms.LayoutNode
+	for _, node := range siblings {
+		if node.ID == id {
+			desired = append(desired, children...)
+		} else {
+			desired = append(desired, node)
+		}
+	}
+	// Vacate the destination positions, including the deleted container's position.
+	if _, err := tx.Exec(ctx, `WITH moved AS (SELECT id,row_number() OVER (ORDER BY id) AS n FROM forms.layout_nodes WHERE form_id=$1)
+ UPDATE forms.layout_nodes SET position=1000000000+moved.n FROM moved WHERE layout_nodes.id=moved.id;`, formID); err != nil {
+		return err
+	}
+	for position, node := range desired {
+		if _, err := tx.Exec(ctx, `UPDATE forms.layout_nodes SET parent_id=$3,position=$4 WHERE form_id=$1 AND id=$2;`, formID, node.ID, target.ParentID, position); err != nil {
+			return mapWriteError(err)
+		}
+	}
+	// Restore the positions of all other branches, including grandchildren.
+	for _, node := range nodes {
+		if node.ID == id || sameParent(node.ParentID, target.ParentID) || node.ParentID != nil && *node.ParentID == id {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE forms.layout_nodes SET position=$3 WHERE form_id=$1 AND id=$2;`, formID, node.ID, node.Position); err != nil {
+			return mapWriteError(err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM forms.layout_nodes WHERE form_id=$1 AND id=$2;`, formID, id); err != nil {
+		return mapWriteError(err)
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) ReplaceLayout(ctx context.Context, siteID site.ID, formID forms.FormID, items []forms.LayoutNode) (_ []forms.LayoutNode, resultErr error) {

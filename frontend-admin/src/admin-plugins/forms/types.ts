@@ -68,6 +68,8 @@ export interface ElementTypeMetadata {
 
 export type LayoutKind = 'field' | 'element' | 'container'
 export type ContainerType = 'group' | 'slide'
+export interface LayoutPlacement { parent_id: number | null; position: number }
+export interface ContainerTypeMetadata { code: ContainerType; label: string }
 export interface LayoutNode {
   id: number
   form_id: number
@@ -125,6 +127,7 @@ export interface FormEditorResponse {
   actions: FormAction[]
   available_field_types: FormsFieldType[]
   available_element_types: ElementTypeMetadata[]
+  available_container_types: ContainerTypeMetadata[]
   available_action_types: ActionTypeMetadata[]
 }
 export interface FormsListResponse { items: FormRecord[]; pagination: Pagination }

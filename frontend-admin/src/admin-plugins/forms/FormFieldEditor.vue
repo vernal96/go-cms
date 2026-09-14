@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
-import { ElButton, ElDialog, ElForm, ElFormItem, ElInput, ElInputNumber, ElOption, ElSelect, ElSwitch } from 'element-plus'
+import { computed, onMounted, reactive, watch } from 'vue'
+import { ElForm, ElFormItem, ElInput, ElInputNumber, ElOption, ElSelect, ElSwitch } from 'element-plus'
 import type { FormField, FormFieldPayload, FormsFieldOptions, FormsFieldType } from './types'
 
-const props = defineProps<{ modelValue: boolean; field?: FormField | null; fields: FormField[]; availableTypes: FormsFieldType[] }>()
-const emit = defineEmits<{ 'update:modelValue': [value: boolean]; save: [payload: FormFieldPayload] }>()
+const props = defineProps<{ disabled: boolean; initialType: FormsFieldType; field?: FormField | null; fields: FormField[]; availableTypes: FormsFieldType[] }>()
+const emit = defineEmits<{ dirty: [value: boolean] }>()
+let baseline = ''
 const typeLabels: Record<string, string> = {
   string: 'Строка', integer: 'Целое число', float: 'Число', checkbox: 'Флаг', radio: 'Один вариант', select: 'Список',
   textarea: 'Многострочный текст', email: 'Email', phone: 'Телефон', json: 'JSON',
@@ -30,8 +31,8 @@ function reset(): void {
   const item = props.field
   const options = item?.options ?? {}
   Object.assign(state, {
-    code: item?.code ?? '', type: item?.type ?? 'string', label: item?.label ?? '', required: item?.required ?? false,
-    rules: item?.rules.join(', ') ?? '', editor: item?.editor ?? '', result_label: item?.result_label ?? '',
+    code: item?.code ?? '', type: item?.type ?? props.initialType, label: item?.label ?? '', required: item?.required ?? false,
+    rules: item?.rules?.join(', ') ?? '', editor: item?.editor ?? '', result_label: item?.result_label ?? '',
     show_in_results: item?.show_in_results ?? false, result_position: item?.result_position ?? props.fields.length,
     visible_field: item?.visible_when?.field ?? '', visible_value: stringifyCondition(item?.visible_when?.value),
     step: options.step, choices: (options.choices ?? []).map((choice) => `${choice.value}|${choice.label}`).join('\n'),
@@ -40,7 +41,8 @@ function reset(): void {
     consent_text: options.text ?? '', consent_url: options.url ?? '',
   })
 }
-watch(() => [props.modelValue, props.field] as const, ([open]) => { if (open) reset() }, { deep: true })
+onMounted(() => { reset(); baseline = JSON.stringify(state); emit('dirty', false) })
+watch(state, () => emit('dirty', JSON.stringify(state) !== baseline), { deep: true, flush: 'sync' })
 
 function conditionValue(): unknown {
   const raw = state.visible_value.trim()
@@ -59,20 +61,21 @@ function options(): FormsFieldOptions | undefined {
     default: return undefined
   }
 }
-function save(): void {
-  emit('save', {
+function payload(): FormFieldPayload {
+  return {
     code: state.code.trim(), type: state.type, label: state.label.trim(), required: state.required,
     rules: state.rules.split(',').map((item) => item.trim()).filter(Boolean), options: options(), editor: state.editor.trim(),
     visible_when: state.visible_field ? { field: state.visible_field, value: conditionValue() } : undefined,
     result_label: state.result_label.trim(), show_in_results: state.show_in_results, result_position: state.result_position,
-  })
+  }
 }
+defineExpose({ payload })
 </script>
 
 <template>
-  <el-dialog :model-value="modelValue" :title="editing ? 'Поле формы' : 'Новое поле'" width="min(760px, 96vw)" @update:model-value="emit('update:modelValue', $event)">
-    <el-form label-position="top" class="field-editor" @submit.prevent="save">
-      <el-form-item label="Тип" required><el-select v-model="state.type" :disabled="locked"><el-option v-for="type in availableTypes" :key="type" :value="type" :label="typeLabels[type] ?? type" /></el-select></el-form-item>
+
+    <el-form label-position="top" :disabled="disabled" class="field-editor" @submit.prevent>
+      <el-form-item v-if="editing" label="Тип" required><el-select v-model="state.type" :disabled="locked"><el-option v-for="type in availableTypes" :key="type" :value="type" :label="typeLabels[type] ?? type" /></el-select></el-form-item>
       <el-form-item label="Код" required><el-input v-model="state.code" :disabled="locked" /></el-form-item>
       <el-form-item label="Подпись" required><el-input v-model="state.label" /></el-form-item>
       <el-form-item label="Обязательное"><el-switch v-model="state.required" :disabled="locked" /></el-form-item>
@@ -98,8 +101,8 @@ function save(): void {
       <el-form-item label="Колонка в списке результатов"><el-switch v-model="state.show_in_results" /></el-form-item>
       <el-form-item label="Позиция в результатах"><el-input-number v-model="state.result_position" :min="0" /></el-form-item>
     </el-form>
-    <template #footer><el-button @click="emit('update:modelValue', false)">Отмена</el-button><el-button type="primary" @click="save">Сохранить</el-button></template>
-  </el-dialog>
+
+
 </template>
 
-<style scoped>.field-editor{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}.field-editor :deep(.el-select),.field-editor :deep(.el-input-number){width:100%}@media(max-width:680px){.field-editor{grid-template-columns:1fr}}</style>
+<style scoped>.field-editor{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:0 16px}.field-editor :deep(.el-select),.field-editor :deep(.el-input-number){width:100%}@media(max-width:680px){.field-editor{grid-template-columns:1fr}}</style>

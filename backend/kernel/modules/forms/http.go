@@ -64,15 +64,16 @@ type fieldResponse struct {
 }
 
 type editorResponse struct {
-	Form         Form                  `json:"form"`
-	Fields       []fieldResponse       `json:"fields"`
-	Elements     []Element             `json:"elements"`
-	Layout       []LayoutNode          `json:"layout"`
-	Statuses     []Status              `json:"statuses"`
-	Actions      []Action              `json:"actions"`
-	FieldTypes   []field.TypeCode      `json:"available_field_types"`
-	ElementTypes []ElementTypeMetadata `json:"available_element_types"`
-	ActionTypes  []ActionTypeMetadata  `json:"available_action_types"`
+	Form           Form                    `json:"form"`
+	Fields         []fieldResponse         `json:"fields"`
+	Elements       []Element               `json:"elements"`
+	Layout         []LayoutNode            `json:"layout"`
+	Statuses       []Status                `json:"statuses"`
+	Actions        []Action                `json:"actions"`
+	FieldTypes     []field.TypeCode        `json:"available_field_types"`
+	ElementTypes   []ElementTypeMetadata   `json:"available_element_types"`
+	ContainerTypes []ContainerTypeMetadata `json:"available_container_types"`
+	ActionTypes    []ActionTypeMetadata    `json:"available_action_types"`
 }
 
 func NewManagementHTTPHandler(service *Service) (http.Handler, error) {
@@ -95,6 +96,7 @@ func NewManagementHTTPHandler(service *Service) (http.Handler, error) {
 	router.Patch("/forms/{formID}/elements/{elementID}", h.updateElement)
 	router.Delete("/forms/{formID}/elements/{elementID}", h.deleteElement)
 	router.Post("/forms/{formID}/containers", h.createContainer)
+	router.Delete("/forms/{formID}/containers/{nodeID}", h.deleteContainer)
 	router.Put("/forms/{formID}/layout", h.replaceLayout)
 	router.Post("/forms/{formID}/statuses", h.createStatus)
 	router.Patch("/forms/{formID}/statuses/{statusID}", h.updateStatus)
@@ -285,7 +287,7 @@ func (h *formsHTTP) editor(response http.ResponseWriter, request *http.Request) 
 			actionTypes = append(actionTypes, ActionTypeMetadata{Code: action.ActionType, Label: action.ActionType, Available: false})
 		}
 	}
-	writeJSON(response, http.StatusOK, editorResponse{detail.Form, fields, detail.Elements, detail.Layout, detail.Statuses, detail.Actions, h.service.AvailableFieldTypes(), h.service.AvailableElementTypes(), actionTypes})
+	writeJSON(response, http.StatusOK, editorResponse{detail.Form, fields, detail.Elements, detail.Layout, detail.Statuses, detail.Actions, h.service.AvailableFieldTypes(), h.service.AvailableElementTypes(), AvailableContainerTypes(), actionTypes})
 }
 
 func (h *formsHTTP) createField(response http.ResponseWriter, request *http.Request) {
@@ -294,7 +296,10 @@ func (h *formsHTTP) createField(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	formID, err := pathID[FormID](request, "formID")
-	var payload fieldPayload
+	var payload struct {
+		fieldPayload
+		LayoutPlacement
+	}
 	if err == nil {
 		err = decodeJSONRequest(request, &payload)
 	}
@@ -305,7 +310,7 @@ func (h *formsHTTP) createField(response http.ResponseWriter, request *http.Requ
 	var result FormField
 	var node LayoutNode
 	if err == nil {
-		result, node, err = h.service.CreateField(request.Context(), actor, formID, item)
+		result, node, err = h.service.CreateField(request.Context(), actor, formID, item, payload.LayoutPlacement)
 	}
 	if err != nil {
 		writeManagementError(response, err)
@@ -374,14 +379,17 @@ func (h *formsHTTP) createElement(response http.ResponseWriter, request *http.Re
 		return
 	}
 	formID, err := pathID[FormID](request, "formID")
-	var payload elementPayload
+	var payload struct {
+		elementPayload
+		LayoutPlacement
+	}
 	if err == nil {
 		err = decodeJSONRequest(request, &payload)
 	}
 	var item Element
 	var node LayoutNode
 	if err == nil {
-		item, node, err = h.service.CreateElement(request.Context(), actor, formID, Element{Code: payload.Code, Type: payload.Type, Config: payload.Config})
+		item, node, err = h.service.CreateElement(request.Context(), actor, formID, Element{Code: payload.Code, Type: payload.Type, Config: payload.Config}, payload.LayoutPlacement)
 	}
 	if err != nil {
 		writeManagementError(response, err)
@@ -446,6 +454,12 @@ func (h *formsHTTP) createContainer(response http.ResponseWriter, request *http.
 		return
 	}
 	writeJSON(response, http.StatusCreated, item)
+}
+
+func (h *formsHTTP) deleteContainer(response http.ResponseWriter, request *http.Request) {
+	h.deleteNested(response, request, "nodeID", func(ctx context.Context, actor security.Actor, formID FormID, id int64) error {
+		return h.service.DeleteContainer(ctx, actor, formID, LayoutNodeID(id))
+	})
 }
 
 func (h *formsHTTP) replaceLayout(response http.ResponseWriter, request *http.Request) {

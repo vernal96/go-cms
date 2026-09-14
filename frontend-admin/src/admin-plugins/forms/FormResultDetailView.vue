@@ -23,7 +23,7 @@ watch(() => selected.selectedSite.value?.id, () => void load()); onMounted(() =>
 </script>
 <template>
   <access-denied-view v-if="!permissions.has('forms.result.read')" @switch-user="emit('unauthorized')" />
-  <section v-else class="workspace-page result-detail-page" v-loading="loading">
+  <section v-else class="workspace-page forms-mail-page result-detail-page" v-loading="loading">
     <header class="page-header"><div><h1>Результат #{{ resultID }}</h1><p v-if="detail">{{ detail.result.form_name }} · {{ new Date(detail.result.created_at).toLocaleString() }}</p></div><span><el-button @click="router.push({ name: 'forms.results' })">К результатам</el-button> <el-button v-if="permissions.has('forms.result.delete')" type="danger" plain @click="remove">Удалить</el-button></span></header>
     <el-alert v-if="error" type="error" :closable="false" :title="error" show-icon />
     <template v-if="detail">

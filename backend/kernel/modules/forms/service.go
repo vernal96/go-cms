@@ -186,7 +186,7 @@ func (s *Service) DeleteForm(ctx context.Context, actor security.Actor, id FormI
 	return s.deleteSpoolReferences(context.WithoutCancel(ctx), keys)
 }
 
-func (s *Service) CreateField(ctx context.Context, actor security.Actor, formID FormID, item FormField) (FormField, LayoutNode, error) {
+func (s *Service) CreateField(ctx context.Context, actor security.Actor, formID FormID, item FormField, placement LayoutPlacement) (FormField, LayoutNode, error) {
 	if err := s.authorizer.Check(ctx, actor, FormUpdatePermission); err != nil {
 		return FormField{}, LayoutNode{}, err
 	}
@@ -201,7 +201,7 @@ func (s *Service) CreateField(ctx context.Context, actor security.Actor, formID 
 	if err := validateFieldConditions(append(detail.Fields, item), s.fieldTypes); err != nil {
 		return FormField{}, LayoutNode{}, err
 	}
-	return s.repository.CreateField(ctx, s.siteID, formID, item)
+	return s.repository.CreateField(ctx, s.siteID, formID, item, placement)
 }
 
 func (s *Service) UpdateField(ctx context.Context, actor security.Actor, formID FormID, item FormField) (FormField, error) {
@@ -264,7 +264,7 @@ func (s *Service) DeleteField(ctx context.Context, actor security.Actor, formID 
 	return s.repository.DeleteField(ctx, s.siteID, formID, id)
 }
 
-func (s *Service) CreateElement(ctx context.Context, actor security.Actor, formID FormID, item Element) (Element, LayoutNode, error) {
+func (s *Service) CreateElement(ctx context.Context, actor security.Actor, formID FormID, item Element, placement LayoutPlacement) (Element, LayoutNode, error) {
 	if err := s.authorizer.Check(ctx, actor, FormUpdatePermission); err != nil {
 		return Element{}, LayoutNode{}, err
 	}
@@ -288,7 +288,7 @@ func (s *Service) CreateElement(ctx context.Context, actor security.Actor, formI
 			}
 		}
 	}
-	return s.repository.CreateElement(ctx, s.siteID, formID, item)
+	return s.repository.CreateElement(ctx, s.siteID, formID, item, placement)
 }
 
 func (s *Service) UpdateElement(ctx context.Context, actor security.Actor, formID FormID, item Element) (Element, error) {
@@ -354,6 +354,13 @@ func (s *Service) CreateContainer(ctx context.Context, actor security.Actor, for
 		return LayoutNode{}, fmt.Errorf("%w: container config is invalid", ErrInvalid)
 	}
 	return s.repository.CreateContainer(ctx, s.siteID, formID, item)
+}
+
+func (s *Service) DeleteContainer(ctx context.Context, actor security.Actor, formID FormID, id LayoutNodeID) error {
+	if err := s.authorizer.Check(ctx, actor, FormUpdatePermission); err != nil {
+		return err
+	}
+	return s.repository.DeleteContainer(ctx, s.siteID, formID, id)
 }
 
 func (s *Service) ReplaceLayout(ctx context.Context, actor security.Actor, formID FormID, desired []LayoutNode) ([]LayoutNode, error) {

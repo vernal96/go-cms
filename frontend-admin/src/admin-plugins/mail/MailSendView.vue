@@ -87,7 +87,7 @@ onMounted(() => void load())
 
 <template>
   <access-denied-view v-if="!permissions.has('mail.message.create')" @switch-user="emit('unauthorized')" />
-  <section v-else class="workspace-page mail-send-page" v-loading="loading">
+  <section v-else class="workspace-page forms-mail-page mail-send-page" v-loading="loading">
     <header class="page-header"><div><h1>Отправить письмо</h1><p>Предпросмотр обязателен; доставка после постановки в очередь выполняется асинхронно</p></div></header>
     <el-alert v-if="!selected.selectedSite.value" type="warning" :closable="false" title="Выберите сайт в боковой панели." />
     <el-alert v-if="error" type="error" :closable="false" :title="error" show-icon />

@@ -100,10 +100,111 @@ func TestPostgresFormsSiteIsolationResultsActionsAndCascade(t *testing.T) {
 		t.Fatalf("cross-site form read error = %v", err)
 	}
 
-	email, _, err := repository.CreateField(ctx, siteIDs[0], first.Form.ID, forms.FormField{Code: "email", Type: field.TypeEmail, Label: "Email", ResultLabel: "Контакт", ShowInResults: true, ResultPosition: 2})
+	email, _, err := repository.CreateField(ctx, siteIDs[0], first.Form.ID, forms.FormField{Code: "email", Type: field.TypeEmail, Label: "Email", ResultLabel: "Контакт", ShowInResults: true, ResultPosition: 2}, forms.LayoutPlacement{Position: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	t.Run("atomic layout placement and container unwrapping", func(t *testing.T) {
+		formID := first.Form.ID
+		outer, err := repository.CreateContainer(ctx, siteIDs[0], formID, forms.LayoutNode{Kind: forms.LayoutContainer, ContainerType: forms.ContainerGroup, Position: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		inner, err := repository.CreateContainer(ctx, siteIDs[0], formID, forms.LayoutNode{Kind: forms.LayoutContainer, ContainerType: forms.ContainerSlide, ParentID: &outer.ID, Position: 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, child, err := repository.CreateField(ctx, siteIDs[0], formID, forms.FormField{Code: "nested", Type: field.TypeString, Label: "Nested"}, forms.LayoutPlacement{ParentID: &inner.ID, Position: 0})
+		if err != nil || child.ParentID == nil || *child.ParentID != inner.ID {
+			t.Fatalf("nested field: %#v %v", child, err)
+		}
+		_, heading, err := repository.CreateElement(ctx, siteIDs[0], formID, forms.Element{Code: "heading", Type: forms.ElementHeading, Config: []byte(`{"text":"Heading","level":2}`)}, forms.LayoutPlacement{ParentID: &outer.ID, Position: 1})
+		if err != nil || heading.ParentID == nil || *heading.ParentID != outer.ID {
+			t.Fatalf("nested element: %#v %v", heading, err)
+		}
+		foreign := second.Layout[0].ID
+		for _, parent := range []forms.LayoutNodeID{foreign, child.ID, 999999999} {
+			_, _, err := repository.CreateField(ctx, siteIDs[0], formID, forms.FormField{Code: "invalid", Type: field.TypeString, Label: "Invalid"}, forms.LayoutPlacement{ParentID: &parent})
+			if err == nil {
+				t.Fatal("accepted invalid parent", parent)
+			}
+		}
+		if _, _, err := repository.CreateElement(ctx, siteIDs[0], formID, forms.Element{Code: "invalid", Type: forms.ElementText, Config: []byte(`{"content":"Invalid"}`)}, forms.LayoutPlacement{Position: 999}); !errors.Is(err, forms.ErrInvalid) {
+			t.Fatalf("invalid position: %v", err)
+		}
+		if err := repository.DeleteContainer(ctx, siteIDs[1], formID, outer.ID); !errors.Is(err, forms.ErrNotFound) {
+			t.Fatalf("cross-site delete: %v", err)
+		}
+		if err := repository.DeleteContainer(ctx, siteIDs[0], formID, child.ID); !errors.Is(err, forms.ErrInvalid) {
+			t.Fatalf("delete field as container: %v", err)
+		}
+		before, err := repository.FormDetail(ctx, siteIDs[0], formID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(before.Fields) != 4 || len(before.Elements) != 2 {
+			t.Fatalf("failed create left content: %#v", before)
+		}
+		if err := repository.DeleteContainer(ctx, siteIDs[0], formID, outer.ID); err != nil {
+			t.Fatal(err)
+		}
+		after, err := repository.FormDetail(ctx, siteIDs[0], formID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(after.Fields) != len(before.Fields) || len(after.Elements) != len(before.Elements) || len(after.Layout) != len(before.Layout)-1 {
+			t.Fatalf("unwrap lost content: %#v", after)
+		}
+		for _, node := range after.Layout {
+			if node.ID == inner.ID && (node.ParentID != nil || node.Position != 1) {
+				t.Fatalf("promoted branch: %#v", node)
+			}
+			if node.ID == heading.ID && (node.ParentID != nil || node.Position != 2) {
+				t.Fatalf("promoted heading: %#v", node)
+			}
+			if node.ID == child.ID && (node.ParentID == nil || *node.ParentID != inner.ID || node.Position != 0) {
+				t.Fatalf("grandchild changed: %#v", node)
+			}
+		}
+		// Unwrap required nodes too: their identities and payloads must survive.
+		for i := range after.Layout {
+			if after.Layout[i].ID == first.Layout[0].ID {
+				after.Layout[i].ParentID = &inner.ID
+				after.Layout[i].Position = 1
+			}
+		}
+		positions := map[forms.LayoutNodeID]int{}
+		for i := range after.Layout {
+			var parent forms.LayoutNodeID
+			if after.Layout[i].ParentID != nil {
+				parent = *after.Layout[i].ParentID
+			}
+			after.Layout[i].Position = positions[parent]
+			positions[parent]++
+		}
+		if _, err := repository.ReplaceLayout(ctx, siteIDs[0], formID, after.Layout); err != nil {
+			t.Fatal(err)
+		}
+		if err := repository.DeleteContainer(ctx, siteIDs[0], formID, inner.ID); err != nil {
+			t.Fatal(err)
+		}
+		final, err := repository.FormDetail(ctx, siteIDs[0], formID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(final.Fields) != len(before.Fields) || len(final.Layout) != len(before.Layout)-2 {
+			t.Fatalf("required node lost: %#v", final)
+		}
+		empty, err := repository.CreateContainer(ctx, siteIDs[0], formID, forms.LayoutNode{Kind: forms.LayoutContainer, ContainerType: forms.ContainerGroup, Position: 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := repository.DeleteContainer(ctx, siteIDs[0], formID, empty.ID); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	action, err := repository.CreateAction(ctx, siteIDs[0], first.Form.ID, forms.Action{Code: "notify", Name: "Notify", Enabled: true, Trigger: forms.Trigger{Type: forms.TriggerSubmitted}, ActionType: "test", Config: []byte(`{}`)})
 	if err != nil {
 		t.Fatal(err)

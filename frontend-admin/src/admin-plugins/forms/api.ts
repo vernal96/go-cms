@@ -1,7 +1,7 @@
 import { adminRequest, adminRequestVoid } from '../../api/admin-api'
 import type {
   FormAction, FormEditorResponse, FormElement, FormField, FormFieldPayload, FormPayload,
-  FormRecord, FormStatus, FormsListResponse, LayoutNode, ResultDetailResponse,
+  FormRecord, FormStatus, FormsListResponse, LayoutNode, LayoutPlacement, ResultDetailResponse,
   ResultsResponse,
 } from './types'
 
@@ -28,7 +28,7 @@ export function deleteForm(token: string, siteID: number, formID: number): Promi
 export function getFormEditor(token: string, siteID: number, formID: number): Promise<FormEditorResponse> {
   return adminRequest(`${formsRoot(siteID)}/${formID}/editor`, token)
 }
-export function createField(token: string, siteID: number, formID: number, payload: FormFieldPayload): Promise<{ field: FormField; layout_node: LayoutNode }> {
+export function createField(token: string, siteID: number, formID: number, payload: FormFieldPayload & LayoutPlacement): Promise<{ field: FormField; layout_node: LayoutNode }> {
   return adminRequest(`${formsRoot(siteID)}/${formID}/fields`, token, { method: 'POST', body: JSON.stringify(payload) })
 }
 export function updateField(token: string, siteID: number, formID: number, fieldID: number, payload: FormFieldPayload): Promise<FormField> {
@@ -37,7 +37,7 @@ export function updateField(token: string, siteID: number, formID: number, field
 export function deleteField(token: string, siteID: number, formID: number, fieldID: number): Promise<void> {
   return adminRequestVoid(`${formsRoot(siteID)}/${formID}/fields/${fieldID}`, token, { method: 'DELETE' })
 }
-export function createElement(token: string, siteID: number, formID: number, payload: Pick<FormElement, 'code' | 'type' | 'config'>): Promise<{ element: FormElement; layout_node: LayoutNode }> {
+export function createElement(token: string, siteID: number, formID: number, payload: Pick<FormElement, 'code' | 'type' | 'config'> & LayoutPlacement): Promise<{ element: FormElement; layout_node: LayoutNode }> {
   return adminRequest(`${formsRoot(siteID)}/${formID}/elements`, token, { method: 'POST', body: JSON.stringify(payload) })
 }
 export function updateElement(token: string, siteID: number, formID: number, elementID: number, payload: Pick<FormElement, 'code' | 'type' | 'config'>): Promise<FormElement> {
@@ -86,4 +86,8 @@ export function changeResultStatus(token: string, siteID: number, resultID: numb
 }
 export function deleteResult(token: string, siteID: number, resultID: number): Promise<void> {
   return adminRequestVoid(`${root(siteID)}/results/${resultID}`, token, { method: 'DELETE' })
+}
+
+export function deleteContainer(token: string, siteID: number, formID: number, nodeID: number): Promise<void> {
+  return adminRequestVoid(`${formsRoot(siteID)}/${formID}/containers/${nodeID}`, token, { method: 'DELETE' })
 }

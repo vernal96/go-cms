@@ -81,7 +81,7 @@ onMounted(() => void load())
 
 <template>
   <access-denied-view v-if="!permissions.has('forms.form.read')" @switch-user="emit('unauthorized')" />
-  <section v-else class="workspace-page forms-list-page">
+  <section v-else class="workspace-page forms-mail-page forms-list-page">
     <header class="page-header"><div><h1>Формы</h1><p>Конструктор публичных форм и обработка результатов</p></div>
       <el-button v-if="permissions.has('forms.form.create')" type="primary" :icon="Plus" @click="openCreate">Создать форму</el-button>
     </header>
@@ -103,7 +103,7 @@ onMounted(() => void load())
     </el-table>
     <el-pagination v-if="total > perPage" background layout="total, prev, pager, next" :current-page="page" :page-size="perPage" :total="total" @current-change="page = $event; load()" />
 
-    <el-dialog v-model="createOpen" title="Новая форма" width="min(560px, 94vw)" destroy-on-close>
+    <el-dialog class="forms-mail-dialog" v-model="createOpen" title="Новая форма" width="min(560px, 94vw)" destroy-on-close>
       <el-form label-position="top" @submit.prevent="submitCreate">
         <el-form-item label="Название" required><el-input v-model="form.name" /></el-form-item>
         <el-form-item label="Код" required><el-input v-model="form.code" placeholder="feedback" /></el-form-item>

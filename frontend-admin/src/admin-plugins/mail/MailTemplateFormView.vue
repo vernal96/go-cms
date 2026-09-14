@@ -176,7 +176,7 @@ onMounted(() => void load())
 
 <template>
   <access-denied-view v-if="!canAccess" @switch-user="emit('unauthorized')" />
-  <section v-else class="workspace-page mail-template-form" v-loading="loading">
+  <section v-else class="workspace-page forms-mail-page mail-template-form" v-loading="loading">
     <header class="page-header">
       <div><h1>{{ editing ? 'Редактирование шаблона' : 'Новый шаблон' }}</h1><p>Адреса, содержимое, переменные и вложения</p></div>
       <div class="page-actions">

@@ -73,7 +73,7 @@ onMounted(() => void load())
 
 <template>
   <access-denied-view v-if="!permissions.has('mail.message.read')" @switch-user="emit('unauthorized')" />
-  <section v-else class="workspace-page mail-history-page">
+  <section v-else class="workspace-page forms-mail-page mail-history-page">
     <header class="page-header"><div><h1>История писем</h1><p>Неизменяемые снимки сообщений и результаты попыток доставки</p></div></header>
     <el-alert v-if="!selected.selectedSite.value" type="warning" :closable="false" title="Выберите сайт в боковой панели." />
     <el-alert v-else-if="error" type="error" :closable="false" :title="error" show-icon />

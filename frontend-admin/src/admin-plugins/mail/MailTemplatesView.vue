@@ -77,7 +77,7 @@ onMounted(() => void load())
 
 <template>
   <access-denied-view v-if="!permissions.has('mail.template.read')" @switch-user="emit('unauthorized')" />
-  <section v-else class="workspace-page mail-list-page">
+  <section v-else class="workspace-page forms-mail-page mail-list-page">
     <header class="page-header">
       <div><h1>Шаблоны писем</h1><p>Site-scoped адреса, содержимое, переменные и вложения</p></div>
       <el-button v-if="permissions.has('mail.template.create')" type="primary" :icon="Plus" @click="router.push({ name: 'mail.templates.create' })">Создать шаблон</el-button>

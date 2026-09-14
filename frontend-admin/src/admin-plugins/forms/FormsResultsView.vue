@@ -26,7 +26,7 @@ onMounted(async () => { await loadForms(); await load() })
 </script>
 <template>
   <access-denied-view v-if="!permissions.has('forms.result.read')" @switch-user="emit('unauthorized')" />
-  <section v-else class="workspace-page forms-results-page">
+  <section v-else class="workspace-page forms-mail-page forms-results-page">
     <header class="page-header"><div><h1>Результаты форм</h1><p>Ответы, бизнес-статусы и история асинхронных действий</p></div></header>
     <el-alert v-if="!selected.selectedSite.value" type="warning" :closable="false" title="Выберите сайт в боковой панели." />
     <el-alert v-else-if="error" type="error" :closable="false" :title="error" show-icon />

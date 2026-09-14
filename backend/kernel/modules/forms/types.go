@@ -134,6 +134,21 @@ type Element struct {
 	UpdatedAt time.Time       `json:"updated_at"`
 }
 
+// LayoutPlacement specifies the insertion point among a parent's children.
+type LayoutPlacement struct {
+	ParentID *LayoutNodeID `json:"parent_id"`
+	Position int           `json:"position"`
+}
+
+type ContainerTypeMetadata struct {
+	Code  ContainerType `json:"code"`
+	Label string        `json:"label"`
+}
+
+func AvailableContainerTypes() []ContainerTypeMetadata {
+	return []ContainerTypeMetadata{{ContainerGroup, "Группа"}, {ContainerSlide, "Слайд"}}
+}
+
 type LayoutNode struct {
 	ID            LayoutNodeID    `json:"id"`
 	FormID        FormID          `json:"form_id"`
