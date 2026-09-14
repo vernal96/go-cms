@@ -528,6 +528,10 @@ function matchesPicker(item: FilesystemItem): boolean {
   if (props.allowedStorages.length && !props.allowedStorages.includes(item.storage)) return false
   return !props.allowedMIMETypes.length || props.allowedMIMETypes.some((allowed) => allowed === item.mime_type || (allowed.endsWith('/*') && item.mime_type?.startsWith(allowed.slice(0, -1))))
 }
+function diskLabel(item: FilesystemDisksResponse['items'][number]): string {
+  const label = (item as { label?: string }).label?.trim()
+  return label || item.code
+}
 function itemKey(item: FilesystemItem): string { return `${item.kind}:${item.id}` }
 function reference(item: FilesystemItem): { kind: 'file' | 'folder'; id: number } { return { kind: item.kind, id: item.id } }
 function isImage(item: FilesystemItem): boolean { return item.mime_type?.startsWith('image/') ?? false }
@@ -577,7 +581,7 @@ async function readEntries(entry: FileSystemDirectoryEntry): Promise<FileSystemE
   <div class="file-explorer">
     <div class="file-toolbar">
       <el-select v-model="disk" aria-label="Диск" class="disk-select" @change="changeDisk">
-        <el-option v-for="item in visibleDisks" :key="item.code" :label="`${item.code} · ${item.visibility === 'public' ? 'публичный' : 'приватный'}`" :value="item.code" />
+        <el-option v-for="item in visibleDisks" :key="item.code" :label="`${diskLabel(item)} · ${item.visibility === 'public' ? 'публичный' : 'приватный'}`" :value="item.code" />
       </el-select>
       <el-button :icon="ArrowLeft" :disabled="!history.length" title="Назад" @click="goBack" />
       <el-button :icon="Back" :disabled="!listing?.folder" title="Вверх" @click="goUp" />
