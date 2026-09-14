@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 )
 
 type Manager struct {
 	disks     map[Code]Disk
 	order     []Disk
+	infos     []DiskInfo
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -26,7 +28,10 @@ func NewManager(
 		return nil, err
 	}
 
-	manager := &Manager{disks: make(map[Code]Disk, len(factories))}
+	manager := &Manager{
+		disks: make(map[Code]Disk, len(factories)),
+		infos: make([]DiskInfo, 0, len(factories)),
+	}
 	defer func() {
 		if resultErr != nil {
 			resultErr = errors.Join(resultErr, manager.Close())
@@ -86,7 +91,19 @@ func NewManager(
 			return nil, fmt.Errorf("ping filesystem disk %q: %w", code, err)
 		}
 
+		label := string(code)
+		if provider, ok := factory.(FactoryLabelProvider); ok {
+			if configured := strings.TrimSpace(provider.Label()); configured != "" {
+				label = configured
+			}
+		}
+
 		manager.disks[code] = disk
+		manager.infos = append(manager.infos, DiskInfo{
+			Code:       code,
+			Label:      label,
+			Visibility: disk.Visibility(),
+		})
 	}
 
 	return manager, nil
@@ -118,14 +135,7 @@ func (m *Manager) Disks() []DiskInfo {
 	if m == nil {
 		return nil
 	}
-	result := make([]DiskInfo, 0, len(m.order))
-	for _, disk := range m.order {
-		result = append(result, DiskInfo{
-			Code:       disk.Code(),
-			Visibility: disk.Visibility(),
-		})
-	}
-	return result
+	return append([]DiskInfo(nil), m.infos...)
 }
 
 func (m *Manager) Close() error {
