@@ -30,11 +30,11 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	t.Setenv("POSTGRES_DB", "cms")
 	t.Setenv("POSTGRES_USER", "cms")
 	t.Setenv("POSTGRES_PASSWORD", "secret")
-	t.Setenv("FILES_PUBLIC_DRIVER", "local")
-	t.Setenv("FILES_PUBLIC_LOCAL_ROOT", "/tmp/cms-public")
-	t.Setenv("FILES_PRIVATE_DRIVER", "s3")
-	t.Setenv("FILES_PRIVATE_S3_REGION", "us-east-1")
-	t.Setenv("FILES_PRIVATE_S3_BUCKET", "cms-private")
+	t.Setenv("FILES_DISKS", `[
+		{"code":"public","label":"Public files","driver":"local","visibility":"public","local":{"root":"/tmp/cms-public","base_url":"http://localhost:8080"}},
+		{"code":"private","label":"Private files","driver":"s3","visibility":"private","s3":{"region":"us-east-1","bucket":"cms-private"}}
+	]`)
+	t.Setenv("FILES_INTERNAL_STORAGE", "private")
 	t.Setenv("FILES_MAX_UPLOAD_SIZE", "209715200")
 	t.Setenv("FILES_UPLOAD_TIMEOUT", "12m")
 	t.Setenv("FILES_AVATAR_STORAGE", "private")
@@ -54,7 +54,7 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	t.Setenv("OUTBOX_CLEANUP_MAX_BATCHES", "40")
 	t.Setenv("MAIL_TRANSPORT_DRIVER", "null")
 	t.Setenv("MAIL_HISTORY_RETENTION", "240h")
-	t.Setenv("MAIL_UPLOAD_STORAGE", "private-mail")
+	t.Setenv("MAIL_UPLOAD_STORAGE", "private")
 	t.Setenv("MAIL_UPLOAD_PATH", "mail/uploads")
 	t.Setenv("FORMS_ACTION_MAX_ATTEMPTS", "4")
 	t.Setenv("FORMS_PUBLIC_RATE_LIMIT", "12")
@@ -81,9 +81,18 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		config.Caches.Redis.MasterName != "cms-primary" {
 		t.Fatalf("cache config = %#v", config.Caches)
 	}
-	if config.Files.MaxUploadSize != 209715200 || config.Files.UploadTimeout != 12*time.Minute ||
-		config.Files.AvatarStorage != "private" || config.Files.AvatarMaxSize != 4194304 {
-		t.Fatalf("file upload config = %#v", config.Files)
+	if len(config.Files.Disks) != 2 ||
+		config.Files.Disks[0].Code != "public" ||
+		config.Files.Disks[0].Label != "Public files" ||
+		config.Files.Disks[0].Visibility != filesystem.VisibilityPublic ||
+		config.Files.Disks[1].Code != "private" ||
+		config.Files.Disks[1].Label != "Private files" ||
+		config.Files.InternalStorage != "private" ||
+		config.Files.MaxUploadSize != 209715200 ||
+		config.Files.UploadTimeout != 12*time.Minute ||
+		config.Files.AvatarStorage != "private" ||
+		config.Files.AvatarMaxSize != 4194304 {
+		t.Fatalf("file config = %#v", config.Files)
 	}
 	if config.JWT.SigningKey !=
 		"0123456789abcdef0123456789abcdef" ||
@@ -98,7 +107,7 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		config.Outbox.CleanupMaxBatches != 40 {
 		t.Fatalf("outbox configuration = %#v", config.Outbox)
 	}
-	if config.Mail.Driver != "null" || config.Mail.HistoryRetention != 240*time.Hour || config.Mail.UploadStorage != "private-mail" || config.Mail.UploadPath != "mail/uploads" {
+	if config.Mail.Driver != "null" || config.Mail.HistoryRetention != 240*time.Hour || config.Mail.UploadStorage != "private" || config.Mail.UploadPath != "mail/uploads" {
 		t.Fatalf("mail configuration = %#v", config.Mail)
 	}
 	if config.Forms.ActionMaxAttempts != 4 || config.Forms.PublicRateLimit != 12 || config.Forms.DevelopmentCaptchaExpectedToken != "test-captcha" {
@@ -133,6 +142,10 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		definition.Filesystems[1].Code() != filesystem.Code("private") {
 		t.Fatalf("filesystem factories = %#v", definition.Filesystems)
 	}
+	labelProvider, ok := definition.Filesystems[0].(filesystem.FactoryLabelProvider)
+	if !ok || labelProvider.Label() != "Public files" {
+		t.Fatalf("public filesystem label = %#v, %t", labelProvider, ok)
+	}
 	if len(definition.Caches) != 2 ||
 		definition.Caches[0].Code() != projectcache.FilesystemCode ||
 		definition.Caches[1].Code() != projectcache.RedisCode {
@@ -152,9 +165,11 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		definition.Profiles[0].Modules[0].Caches[0].Alias != core.DurableCacheAlias ||
 		definition.Profiles[0].Modules[0].Caches[0].Code != projectcache.FilesystemCode ||
 		definition.Profiles[0].Modules[0].Caches[1].Alias != core.HotCacheAlias ||
-		definition.Profiles[0].Modules[0].Caches[1].Code != projectcache.RedisCode {
+		definition.Profiles[0].Modules[0].Caches[1].Code != projectcache.RedisCode ||
+		definition.Profiles[0].Modules[2].Filesystems[0].Code != "private" ||
+		definition.Profiles[0].Modules[3].Filesystems[0].Code != "private" {
 		t.Fatalf(
-			"core cache bindings = %#v",
+			"profile bindings = %#v",
 			definition.Profiles[0].Modules,
 		)
 	}
