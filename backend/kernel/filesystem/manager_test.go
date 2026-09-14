@@ -10,14 +10,16 @@ import (
 )
 
 type testFactory struct {
-	code filesystemCode
-	disk *testDisk
-	err  error
+	code  filesystemCode
+	label string
+	disk  *testDisk
+	err   error
 }
 
 type filesystemCode = Code
 
-func (f testFactory) Code() Code { return Code(f.code) }
+func (f testFactory) Code() Code    { return Code(f.code) }
+func (f testFactory) Label() string { return f.label }
 func (f testFactory) Open(context.Context) (Disk, error) {
 	return f.disk, f.err
 }
@@ -56,14 +58,18 @@ func TestManagerOpensResolvesAndClosesDisks(t *testing.T) {
 	private := &testDisk{code: "private", visibility: VisibilityPrivate}
 
 	manager, err := NewManager(context.Background(), []Factory{
-		testFactory{code: "public", disk: public},
-		testFactory{code: "private", disk: private},
+		testFactory{code: "public", label: "Public files", disk: public},
+		testFactory{code: "private", label: "Private files", disk: private},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if disk, exists := manager.Disk("private"); !exists || disk != private {
 		t.Fatalf("private disk = %#v, %t", disk, exists)
+	}
+	infos := manager.Disks()
+	if len(infos) != 2 || infos[0].Label != "Public files" || infos[1].Label != "Private files" {
+		t.Fatalf("disk infos = %#v", infos)
 	}
 	if public.pings.Load() != 1 || private.pings.Load() != 1 {
 		t.Fatalf("ping counts = %d, %d", public.pings.Load(), private.pings.Load())
@@ -76,6 +82,24 @@ func TestManagerOpensResolvesAndClosesDisks(t *testing.T) {
 	}
 	if public.closes.Load() != 1 || private.closes.Load() != 1 {
 		t.Fatalf("close counts = %d, %d", public.closes.Load(), private.closes.Load())
+	}
+}
+
+func TestManagerFallsBackToCodeWhenFactoryLabelIsEmpty(t *testing.T) {
+	manager, err := NewManager(context.Background(), []Factory{
+		testFactory{
+			code: "archive",
+			disk: &testDisk{code: "archive", visibility: VisibilityPrivate},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	infos := manager.Disks()
+	if len(infos) != 1 || infos[0].Label != "archive" {
+		t.Fatalf("disk infos = %#v", infos)
 	}
 }
 
