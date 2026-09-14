@@ -164,12 +164,12 @@ func (c OutboxConfig) PublisherConfig() outbox.PublisherConfig {
 }
 
 type FilesConfig struct {
-	Public        corefiles.Config `envconfig:"PUBLIC"`
-	Private       corefiles.Config `envconfig:"PRIVATE"`
-	MaxUploadSize int64            `envconfig:"MAX_UPLOAD_SIZE" default:"104857600"`
-	UploadTimeout time.Duration    `envconfig:"UPLOAD_TIMEOUT" default:"10m"`
-	AvatarStorage filesystem.Code  `envconfig:"AVATAR_STORAGE" default:"private"`
-	AvatarMaxSize int64            `envconfig:"AVATAR_MAX_SIZE" default:"5242880"`
+	Disks           corefiles.Configs  `envconfig:"DISKS" required:"true"`
+	InternalStorage filesystem.Code    `envconfig:"INTERNAL_STORAGE" default:"private"`
+	MaxUploadSize   int64              `envconfig:"MAX_UPLOAD_SIZE" default:"104857600"`
+	UploadTimeout   time.Duration      `envconfig:"UPLOAD_TIMEOUT" default:"10m"`
+	AvatarStorage   filesystem.Code    `envconfig:"AVATAR_STORAGE" default:"private"`
+	AvatarMaxSize   int64              `envconfig:"AVATAR_MAX_SIZE" default:"5242880"`
 }
 
 type ServerConfig struct {
@@ -199,16 +199,17 @@ func (c Config) Application() appkernel.Definition {
 				formspostgres.DatabaseFactory{},
 			},
 		},
-		Filesystems: []filesystem.Factory{
-			corefiles.PublicFactory(c.Files.Public),
-			corefiles.PrivateFactory(c.Files.Private),
-		},
-		Caches: c.Caches.Factories(),
+		Filesystems: c.Files.Disks.Factories(),
+		Caches:      c.Caches.Factories(),
 		ModuleApplications: []kernel.ModuleApplication{
 			c.Mail.Application(),
 			c.Forms.Application(),
 		},
-		Profiles:        []kernel.Profile{dev.ProfileWithMailAndForms(c.Mail.ModuleConfig(), c.Forms.ModuleConfig())},
+		Profiles: []kernel.Profile{dev.ProfileWithMailAndForms(
+			c.Mail.ModuleConfig(),
+			c.Forms.ModuleConfig(),
+			c.Files.InternalStorage,
+		)},
 		PasswordHasher:  argon2id.Factory{},
 		MaxUploadSize:   c.Files.MaxUploadSize,
 		UploadTimeout:   c.Files.UploadTimeout,
