@@ -861,6 +861,7 @@ func (h *publicFormsHTTP) submit(response http.ResponseWriter, request *http.Req
 		defer cancel()
 	}
 	values := map[string]any{}
+	var multipartInput map[string][]string
 	uploads := []UploadInput{}
 	closers := []io.Closer{}
 	defer func() {
@@ -873,7 +874,7 @@ func (h *publicFormsHTTP) submit(response http.ResponseWriter, request *http.Req
 	if mediaType == "multipart/form-data" {
 		if err = request.ParseMultipartForm(64 << 10); err == nil {
 			defer request.MultipartForm.RemoveAll()
-			values = multipartValues(request.MultipartForm.Value)
+			multipartInput = request.MultipartForm.Value
 			uploads, closers, err = multipartUploads(request.MultipartForm.File)
 		}
 	} else {
@@ -899,7 +900,7 @@ func (h *publicFormsHTTP) submit(response http.ResponseWriter, request *http.Req
 		writePublicError(response, errors.New("request actor is unavailable"))
 		return
 	}
-	_, err = h.service.Submit(ctx, actor, SubmitInput{FormCode: chi.URLParam(request, "code"), Values: values, Uploads: uploads, UserAgent: request.UserAgent(), ClientAddress: clientAddress(request)})
+	_, err = h.service.Submit(ctx, actor, SubmitInput{FormCode: chi.URLParam(request, "code"), Values: values, MultipartValues: multipartInput, Uploads: uploads, UserAgent: request.UserAgent(), ClientAddress: clientAddress(request)})
 	if err != nil {
 		writePublicError(response, err)
 		return
@@ -971,3 +972,34 @@ func writePublicError(response http.ResponseWriter, err error) {
 }
 
 var _ = filesystem.VisibilityPublic
+
+// Multipart has no array marker for a single repeated part. Resolve cardinality
+// from the current schema before conditional visibility and field validation.
+func normalizeMultipartLists(fields []FormField, values map[string]any, resolver field.TypeResolver) (map[string]any, error) {
+	result := make(map[string]any, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	for _, item := range fields {
+		value, exists := result[item.Code]
+		if !exists {
+			continue
+		}
+		t, exists := resolver.FieldType(item.Type)
+		if !exists {
+			return nil, fmt.Errorf("unknown field type %q", item.Type)
+		}
+		compiled, err := t.Compile(field.CompileContext{Types: resolver}, item.Options)
+		if err != nil {
+			return nil, err
+		}
+		storage, ok := compiled.(field.StorageValueType)
+		if !ok || !storage.Multiple() {
+			continue
+		}
+		if _, array := value.([]any); !array {
+			result[item.Code] = []any{value}
+		}
+	}
+	return result, nil
+}

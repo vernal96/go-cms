@@ -3,6 +3,7 @@ package field
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -150,10 +151,14 @@ func compile(
 			)
 		}
 		if rules != "" {
+			example := valueType.Example()
+			if list, ok := valueType.(listValue); ok {
+				example = list.item.Example()
+			}
 			err := safeValidate(
 				schema.validator,
 				definition.Key,
-				valueType.Example(),
+				example,
 				rules,
 			)
 			var validationErrors validator.ValidationErrors
@@ -210,14 +215,18 @@ func (s *Schema) StoredValues(values map[string]any) ([]StoredValue, error) {
 			result = append(result, stored)
 			continue
 		}
+		referenceTarget := ""
+		if reference, ok := storage.(ReferenceValueType); ok {
+			referenceTarget = reference.ReferenceTarget()
+		}
 		switch items := value.(type) {
 		case []string:
 			for position, item := range items {
-				result = append(result, StoredValue{Key: definition.Key, Position: position, Kind: storage.StorageKind(), Multiple: true, Value: item})
+				result = append(result, StoredValue{Key: definition.Key, Position: position, Kind: storage.StorageKind(), Multiple: true, Value: item, ReferenceTarget: referenceTarget})
 			}
 		case []any:
 			for position, item := range items {
-				result = append(result, StoredValue{Key: definition.Key, Position: position, Kind: storage.StorageKind(), Multiple: true, Value: item})
+				result = append(result, StoredValue{Key: definition.Key, Position: position, Kind: storage.StorageKind(), Multiple: true, Value: item, ReferenceTarget: referenceTarget})
 			}
 		default:
 			return nil, fmt.Errorf("field %q normalized multi-value has type %T", definition.Key, value)
@@ -328,6 +337,16 @@ func (s *Schema) validate(
 	for _, definition := range s.definitions {
 		compiled := s.fields[definition.Key]
 		value, exists := values[definition.Key]
+		list, isList := compiled.valueType.(listValue)
+		if isList && ((!exists && requireAll) || (exists && value == nil)) {
+			if list.min > 0 {
+				validationErrors = append(validationErrors, ValidationError{Key: definition.Key, Rule: "min_items", Param: fmt.Sprint(list.min)})
+				continue
+			}
+			if exists {
+				value = []any{}
+			}
+		}
 
 		defaults, hasDefault := compiled.valueType.(DefaultValueType)
 		if !exists && requireAll && hasDefault {
@@ -345,7 +364,7 @@ func (s *Schema) validate(
 			}
 			continue
 		}
-		if inputEmpty(value) && !hasDefault {
+		if inputEmpty(value) && !hasDefault && !isList {
 			if compiled.required {
 				validationErrors = append(
 					validationErrors,
@@ -386,34 +405,9 @@ func (s *Schema) validate(
 		}
 
 		if compiled.rules != "" {
-			err := safeValidate(
-				s.validator,
-				definition.Key,
-				normalized,
-				compiled.rules,
-			)
-			if err != nil {
-				var fieldErrors validator.ValidationErrors
-				if errors.As(err, &fieldErrors) {
-					for _, fieldError := range fieldErrors {
-						validationErrors = append(
-							validationErrors,
-							ValidationError{
-								Key:   definition.Key,
-								Rule:  fieldError.Tag(),
-								Param: fieldError.Param(),
-							},
-						)
-					}
-				} else {
-					validationErrors = append(
-						validationErrors,
-						ValidationError{
-							Key:  definition.Key,
-							Rule: "validation",
-						},
-					)
-				}
+			failures := validateValueRules(s.validator, definition.Key, normalized, compiled.rules, compiled.valueType)
+			if len(failures) > 0 {
+				validationErrors = append(validationErrors, failures...)
 				continue
 			}
 		}
@@ -518,4 +512,28 @@ func prefixedValidationErrors(prefix string, err error, fallback string) Validat
 		return ValidationErrors{{Key: prefix, Rule: rule.Rule, Param: rule.Param}}
 	}
 	return ValidationErrors{{Key: prefix, Rule: fallback}}
+}
+
+func validateValueRules(validate *validator.Validate, key string, value any, rules string, valueType ValueType) ValidationErrors {
+	if list, ok := valueType.(listValue); ok {
+		result := ValidationErrors{}
+		items := reflect.ValueOf(value)
+		for i := 0; i < items.Len(); i++ {
+			result = append(result, validateValueRules(validate, fmt.Sprintf("%s[%d]", key, i), items.Index(i).Interface(), rules, list.item)...)
+		}
+		return result
+	}
+	err := safeValidate(validate, key, value, rules)
+	if err == nil {
+		return nil
+	}
+	var fields validator.ValidationErrors
+	if !errors.As(err, &fields) {
+		return ValidationErrors{{Key: key, Rule: "validation"}}
+	}
+	result := make(ValidationErrors, 0, len(fields))
+	for _, failure := range fields {
+		result = append(result, ValidationError{Key: key, Rule: failure.Tag(), Param: failure.Param()})
+	}
+	return result
 }

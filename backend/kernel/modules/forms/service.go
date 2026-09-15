@@ -229,10 +229,9 @@ func (s *Service) UpdateField(ctx context.Context, actor security.Actor, formID 
 	if err := validateFieldConditions(replaceField(detail.Fields, item), s.fieldTypes); err != nil {
 		return FormField{}, err
 	}
-	if current.Code != item.Code {
-		if err := s.validateActionsAgainstFields(ctx, actor, detail, replaceField(detail.Fields, item)); err != nil {
-			return FormField{}, err
-		}
+	// Options can change storage cardinality even when the code/type is stable.
+	if err := s.validateActionsAgainstFields(ctx, actor, detail, replaceField(detail.Fields, item)); err != nil {
+		return FormField{}, err
 	}
 	return s.repository.UpdateField(ctx, s.siteID, item)
 }

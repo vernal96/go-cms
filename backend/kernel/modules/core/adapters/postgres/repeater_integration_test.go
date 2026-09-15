@@ -44,7 +44,9 @@ func TestPostgresRepeaterPersistenceAndReferences(t *testing.T) {
 				return m.ID
 			}
 			first, second := makeMedia(), makeMedia()
+			third, fourth := makeMedia(), makeMedia()
 			schema, err := field.CompilePersistent([]field.Definition{{Key: "slides", Type: field.TypeRepeater, Label: "Slides", Options: field.RepeaterOptions{Fields: []field.Definition{
+				{Key: "gallery", Type: field.TypeMedia, Label: "Gallery", Options: field.MediaOptions{Multiple: true}},
 				{Key: "title", Type: field.TypeString, Label: "Title"}, {Key: "image", Type: field.TypeMedia, Label: "Image"}, {Key: "file", Type: field.TypeFile, Label: "File"},
 			}, MaxItems: 10}}}, field.StandardTypes())
 			if err != nil {
@@ -69,7 +71,7 @@ func TestPostgresRepeaterPersistenceAndReferences(t *testing.T) {
 				}
 				return values, stored, files
 			}
-			initial := []any{map[string]any{"title": "First", "image": int64(first), "file": int64(f.ID)}, map[string]any{"title": "Second", "image": int64(second)}}
+			initial := []any{map[string]any{"title": "First", "image": int64(first), "file": int64(f.ID), "gallery": []any{int64(third), int64(fourth)}}, map[string]any{"title": "Second", "image": int64(second)}}
 			values, stored, files := normalize(initial)
 			path := "/"
 			root, err := db.Resources().Create(ctx, nil, resource.Resource{SiteID: siteID, Type: resourcetype.Library, Title: "Library", Path: &path, TypeSettings: map[string]any{"item_url_pattern": "/{slug}"}}, nil)
@@ -171,7 +173,7 @@ func TestPostgresRepeaterPersistenceAndReferences(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := cascade.ClearMediaReferences(ctx, tx, []int64{int64(second)}, nil); err != nil {
+			if err := cascade.ClearMediaReferences(ctx, tx, []int64{int64(second), int64(third)}, nil); err != nil {
 				tx.Rollback(ctx)
 				t.Fatal(err)
 			}
@@ -183,14 +185,18 @@ func TestPostgresRepeaterPersistenceAndReferences(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := cascade.ClearMediaReferences(ctx, tx, []int64{int64(second)}, nil); err != nil {
+			if err := cascade.ClearMediaReferences(ctx, tx, []int64{int64(second), int64(third)}, nil); err != nil {
 				tx.Rollback(ctx)
 				t.Fatal(err)
 			}
 			if err := tx.Commit(ctx); err != nil {
 				t.Fatal(err)
 			}
-			assertRows([]any{map[string]any{"title": "Second"}, initial[0]})
+			assertRows([]any{map[string]any{"title": "Second"}, map[string]any{"title": "First", "image": int64(first), "file": int64(f.ID), "gallery": []any{int64(fourth)}}})
+			var remainingPath []string
+			if err := conn.Pool().QueryRow(ctx, `SELECT value_path FROM core.resource_media_references WHERE resource_id=$1 AND media_id=$2`, id, fourth).Scan(&remainingPath); err != nil || fmt.Sprint(remainingPath) != "[1 gallery 0]" {
+				t.Fatalf("remaining path %v: %v", remainingPath, err)
+			}
 			update([]any{map[string]any{"title": "Second"}})
 			if _, err := db.Media().ByID(ctx, first); !errors.Is(err, media.ErrNotFound) {
 				t.Fatalf("removed row retained media: %v", err)

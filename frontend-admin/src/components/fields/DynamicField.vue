@@ -14,7 +14,8 @@ import TextField from './TextField.vue'
 import FileField from './FileField.vue'
 import JsonField from './JsonField.vue'
 import RepeaterField from './RepeaterField.vue'
-import type { DynamicFieldErrors } from './model'
+import { isMultipleField, type DynamicFieldErrors } from './model'
+import MultipleField from './MultipleField.vue'
 import ResourcePickerField from './ResourcePickerField.vue'
 import RichTextEditor from '../RichTextEditor.vue'
 
@@ -36,7 +37,8 @@ const resourceIDs = computed<number[]>(() => Array.isArray(model.value) ? model.
 </script>
 
 <template>
-	<component v-if="customEditor" :is="customEditor" v-model="model" :field="field" :site-id="siteId" :access-token="token" :resource-templates="resourceTemplates" />
+	<multiple-field v-if="isMultipleField(field) && control !== 'select'" v-model="model" :field="field" :errors="errors" :field-path="fieldPath" :site-id="siteId" :access-token="token" :resource-templates="resourceTemplates" />
+	<component v-else-if="customEditor" :is="customEditor" v-model="model" :field="field" :site-id="siteId" :access-token="token" :resource-templates="resourceTemplates" />
 	<el-alert v-else-if="field.editor?.includes('.')" type="error" :closable="false" :title="`Редактор «${field.editor}» недоступен.`" />
 	<rich-text-editor v-else-if="field.editor === 'html'" :model-value="typeof model === 'string' ? model : ''" @update:model-value="model = $event" />
 	<select-field v-else-if="field.editor === 'resource-template'" v-model="model" :choices="(resourceTemplates ?? []).map((item) => ({ value: item.code, label: item.label }))" :multiple="false" />
@@ -75,6 +77,9 @@ const resourceIDs = computed<number[]>(() => Array.isArray(model.value) ? model.
     v-model="model"
     :choices="field.options?.choices ?? []"
     :multiple="field.options?.multiple ?? false"
+    :min-items="Math.max(field.required ? 1 : 0, field.options?.min_items ?? 0)"
+    :max-items="field.options?.max_items ?? 0"
+    :errors="errors" :field-path="fieldPath ?? field.key"
   />
   <textarea-field v-else-if="control === 'textarea'" v-model="model" />
   <file-field

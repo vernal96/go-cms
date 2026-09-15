@@ -61,12 +61,16 @@ func validateFormField(item FormField, resolver field.TypeResolver) error {
 		return fmt.Errorf("%w: result label is invalid", ErrInvalid)
 	}
 	definition := item.Definition()
+	var err error
 	if item.Type == FieldTypeCaptcha || item.Type == FieldTypeUpload {
-		_, err := field.Compile([]field.Definition{definition}, resolver)
-		return err
+		_, err = field.Compile([]field.Definition{definition}, resolver)
+	} else {
+		_, err = field.CompilePersistent([]field.Definition{definition}, resolver)
 	}
-	_, err := field.CompilePersistent([]field.Definition{definition}, resolver)
-	return err
+	if err != nil {
+		return fmt.Errorf("%w: field %q: %v", ErrInvalid, item.Code, err)
+	}
+	return nil
 }
 
 func validateFieldConditions(items []FormField, resolver field.TypeResolver) error {

@@ -2524,7 +2524,7 @@ func ensureMediaAvailable(
 	if err := transaction.QueryRow(ctx, `
 SELECT EXISTS
 (
-    SELECT 1 FROM core.resource_media_references WHERE media_id = $1
+    SELECT 1 FROM core.resource_media_references WHERE media_id = $1 AND ($2 = 0 OR resource_id <> $2)
     UNION ALL
 
     SELECT 1
@@ -2869,7 +2869,7 @@ INSERT INTO core.resource_field_values (
 			return err
 		}
 		for _, ref := range refs {
-			if err := ensureMediaAvailable(ctx, tx, media.ID(ref.ID), 0); err != nil {
+			if err := ensureMediaAvailable(ctx, tx, media.ID(ref.ID), resourceID); err != nil {
 				return err
 			}
 			path := append([]string{}, ref.Path...)

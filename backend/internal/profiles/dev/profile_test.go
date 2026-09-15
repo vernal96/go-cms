@@ -73,12 +73,13 @@ func TestProfileExposesDynamicParamsAndTemplateFields(t *testing.T) {
 		t.Fatalf("profile editor tabs = %#v", profile.EditorTabs)
 	}
 	if len(profile.Templates) != 2 ||
-		profile.Templates[0].Code != "page" || len(profile.Templates[0].Fields) != 5 ||
+		profile.Templates[0].Code != "page" || len(profile.Templates[0].Fields) != 8 ||
 		profile.Templates[1].Code != "landing" || len(profile.Templates[1].Fields) != 6 {
 		t.Fatalf("templates = %#v", profile.Templates)
 	}
 	page := profile.Templates[0]
 	wantPageTabs := []field.EditorTab{
+		{Code: "multiple", Label: "Множественные поля", Fields: []string{"gallery", "tags", "scores"}},
 		{Code: "content", Label: "Контент", Fields: []string{"page_title", "page_text", "page_media", "show_title"}},
 		{Code: "layout", Label: "Макет", Fields: []string{"layout"}},
 	}

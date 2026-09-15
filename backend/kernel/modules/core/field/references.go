@@ -87,7 +87,7 @@ func ReferenceKey(path []string) string {
 func (v StoredValue) MediaReferences() ([]Reference, error) {
 	if v.ReferenceTarget != "" {
 		id, ok := v.Value.(int64)
-		if v.ReferenceTarget != ReferenceMedia || v.Kind != StorageReference || v.Multiple || !ok || id <= 0 {
+		if v.ReferenceTarget != ReferenceMedia || v.Kind != StorageReference || !ok || id <= 0 {
 			return nil, fmt.Errorf("invalid reference field %q", v.Key)
 		}
 		return []Reference{{Target: ReferenceMedia, ID: id}}, nil

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -359,6 +360,57 @@ func TestPostgresFormsSiteIsolationResultsActionsAndCascade(t *testing.T) {
 		page, err = repository.ListPublicResults(ctx, sid, fid, forms.PageQuery{Page: 1, PerPage: 2})
 		if err != nil || len(page.Columns) != 1 || len(page.Items[0].Values) != 0 {
 			t.Fatalf("reused code leaked history: %#v %v", page, err)
+		}
+	})
+
+	t.Run("historical multiple values remain arrays", func(t *testing.T) {
+		sid, fid := siteIDs[0], first.Form.ID
+		item, _, err := repository.CreateField(ctx, sid, fid, forms.FormField{Code: "numbers", Type: field.TypeInteger, Label: "Numbers", ShowInResults: true, ShowOnSite: true, Options: field.IntegerOptions{Multiple: true, MaxItems: 3}}, forms.LayoutPlacement{Position: 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		record, err := repository.CreateResult(ctx, forms.SubmissionRecord{Result: forms.Result{SiteID: sid, FormID: fid, FormCode: "feedback", FormName: "Feedback", StatusID: first.Statuses[0].ID}, Values: []forms.ResultValue{{FieldID: &item.ID, FieldCode: item.Code, FieldType: item.Type, FieldLabel: item.Label, ResultLabel: item.Label, StorageKind: field.StorageInteger, Multiple: true, Value: int64(7)}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(record.Values) != 1 || !record.Values[0].Multiple {
+			t.Fatalf("stored %#v", record.Values)
+		}
+		item.Options = field.IntegerOptions{}
+		if _, err := repository.UpdateField(ctx, sid, item); err != nil {
+			t.Fatal(err)
+		}
+		public, err := repository.ListPublicResults(ctx, sid, fid, forms.PageQuery{Page: 1, PerPage: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, row := range public.Items {
+			if value, ok := row.Values["numbers"]; ok {
+				found = true
+				if !reflect.DeepEqual(value, []any{int64(7)}) {
+					t.Fatalf("public %#v", value)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("missing public value")
+		}
+		summary, err := repository.ListResults(ctx, sid, forms.ResultQuery{PageQuery: forms.PageQuery{Page: 1, PerPage: 100}, FormID: fid}, []string{"numbers"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found = false
+		for _, row := range summary.Items {
+			if value, ok := row.Values["numbers"]; ok {
+				found = true
+				if !reflect.DeepEqual(value, []any{int64(7)}) {
+					t.Fatalf("summary %#v", value)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("missing summary value")
 		}
 	})
 

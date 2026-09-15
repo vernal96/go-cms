@@ -23,6 +23,9 @@ func Page() template.Definition {
 			},
 		},
 		Fields: []field.Definition{
+			{Key: "gallery", Type: field.TypeMedia, Label: "Галерея", Options: field.MediaOptions{Multiple: true, MaxItems: 10}},
+			{Key: "tags", Type: field.TypeString, Label: "Теги", Rules: []string{"max=80"}, Options: field.StringOptions{Multiple: true, MaxItems: 10}},
+			{Key: "scores", Type: field.TypeInteger, Label: "Числовые значения", Rules: []string{"min=0", "max=100"}, Options: field.IntegerOptions{Multiple: true, MaxItems: 10}},
 			{Key: "page_media", Type: field.TypeMedia, Label: "Медиа"},
 			{
 				Key:      "page_title",
@@ -55,6 +58,7 @@ func Page() template.Definition {
 			},
 		},
 		EditorTabs: []field.EditorTab{
+			{Code: "multiple", Label: "Множественные поля", Fields: []string{"gallery", "tags", "scores"}},
 			{Code: "content", Label: "Контент", Fields: []string{"page_title", "page_text", "page_media", "show_title"}},
 			{Code: "layout", Label: "Макет", Fields: []string{"layout"}},
 		},

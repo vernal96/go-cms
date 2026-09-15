@@ -9,6 +9,8 @@ export interface FormsFieldOptions {
   step?: number
   choices?: FormsChoice[]
   multiple?: boolean
+  min_items?: number
+  max_items?: number
   pattern?: string
   mime_types?: string[]
   max_file_size?: number
@@ -134,6 +136,7 @@ export interface FormEditorResponse {
 export interface FormsListResponse { items: FormRecord[]; pagination: Pagination }
 
 export interface ResultValue {
+  multiple: boolean
   id: number
   field_code: string
   field_label: string

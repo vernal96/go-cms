@@ -212,6 +212,7 @@ type Result struct {
 }
 
 type ResultValue struct {
+	Multiple    bool              `json:"multiple"`
 	ID          ResultValueID     `json:"id"`
 	ResultID    ResultID          `json:"result_id"`
 	FieldID     *FieldID          `json:"field_id,omitempty"`

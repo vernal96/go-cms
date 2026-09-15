@@ -6,10 +6,11 @@ type mediaType struct{}
 
 func (mediaType) Code() TypeCode { return TypeMedia }
 func (mediaType) Compile(ctx CompileContext, options any) (ValueType, error) {
-	if options != nil {
-		return nil, fmt.Errorf("media field does not support options")
+	config, err := DecodeOptions[MediaOptions](options)
+	if err != nil {
+		return nil, err
 	}
-	return mediaValue{}, nil
+	return withList(mediaValue{}, config.Multiple, config.MinItems, config.MaxItems, false)
 }
 
 type mediaValue struct{}

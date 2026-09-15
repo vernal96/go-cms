@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
@@ -143,16 +142,7 @@ func (t mailActionType) Execute(ctx context.Context, execution ActionExecutionCo
 		if len(items) == 0 {
 			return ActionExecutionResult{}, terminalActionError("missing_value", fmt.Errorf("mapped result field %q is missing", code))
 		}
-		sort.Slice(items, func(i, j int) bool { return items[i].Position < items[j].Position })
-		if len(items) == 1 {
-			values[variable] = items[0].Value
-		} else {
-			mapped := make([]any, len(items))
-			for index, item := range items {
-				mapped[index] = item.Value
-			}
-			values[variable] = mapped
-		}
+		values[variable] = ResultFieldValue(items)
 	}
 	attachments := []mail.TransientAttachment{}
 	closers := []io.Closer{}

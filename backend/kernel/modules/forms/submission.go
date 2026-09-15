@@ -15,11 +15,12 @@ import (
 )
 
 type SubmitInput struct {
-	FormCode      string
-	Values        map[string]any
-	Uploads       []UploadInput
-	UserAgent     string
-	ClientAddress string
+	FormCode        string
+	MultipartValues map[string][]string
+	Values          map[string]any
+	Uploads         []UploadInput
+	UserAgent       string
+	ClientAddress   string
 }
 
 func (s *Service) PublicForm(ctx context.Context, code string) (FormDetail, error) {
@@ -65,6 +66,9 @@ func (s *Service) Submit(ctx context.Context, actor security.Actor, input Submit
 	if !s.rateLimiter.Allow(rateKey, time.Now().UTC()) {
 		return ResultDetail{}, ErrRateLimited
 	}
+	if input.MultipartValues != nil {
+		input.Values = multipartValues(input.MultipartValues)
+	}
 	if err := s.validateScalarLimits(input.Values); err != nil {
 		return ResultDetail{}, err
 	}
@@ -83,6 +87,12 @@ func (s *Service) Submit(ctx context.Context, actor security.Actor, input Submit
 		return ResultDetail{}, fmt.Errorf("%w: form status configuration is invalid", ErrInvalid)
 	}
 
+	if input.MultipartValues != nil {
+		input.Values, err = normalizeMultipartLists(detail.Fields, input.Values, s.fieldTypes)
+		if err != nil {
+			return ResultDetail{}, err
+		}
+	}
 	active, err := resolveActiveFields(detail.Fields, input.Values, s.fieldTypes)
 	if err != nil {
 		return ResultDetail{}, err
@@ -152,7 +162,7 @@ func (s *Service) Submit(ctx context.Context, actor security.Actor, input Submit
 		values = append(values, ResultValue{
 			FieldID: &fieldID, FieldCode: formField.Code, FieldLabel: formField.Label,
 			ResultLabel: formField.EffectiveResultLabel(), FieldType: formField.Type,
-			StorageKind: storedValue.Kind, Position: storedValue.Position, Value: storedValue.Value,
+			Multiple: storedValue.Multiple, StorageKind: storedValue.Kind, Position: storedValue.Position, Value: storedValue.Value,
 		})
 	}
 

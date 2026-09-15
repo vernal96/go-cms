@@ -3,6 +3,8 @@ package resource
 import (
 	"context"
 	"fmt"
+	"strconv"
+
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/security"
@@ -16,7 +18,11 @@ func (s *Service) validateMediaFields(ctx context.Context, actor security.Actor,
 		}
 		for _, reference := range references {
 			id := reference.ID
-			key := field.ReferenceKey(append([]string{value.Key}, reference.Path...))
+			path := []string{value.Key}
+			if value.Multiple {
+				path = append(path, strconv.Itoa(value.Position))
+			}
+			key := field.ReferenceKey(append(path, reference.Path...))
 			resolved, err := s.media.Resolve(ctx, actor, media.ID(id))
 			if err != nil {
 				return fmt.Errorf("resolve Media field %q: %w", key, err)

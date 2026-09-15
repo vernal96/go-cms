@@ -69,11 +69,11 @@ func (r *Repository) ListPublicResults(ctx context.Context, siteID site.ID, form
 		return result, err
 	}
 	if len(ids) > 0 && len(fieldIDs) > 0 {
-		values, err := tx.Query(ctx, `SELECT id,result_id,field_id,field_code,field_label,result_label,field_type,storage_kind,position,string_value,integer_value,float_value,boolean_value,timestamp_value,reference_value,json_value FROM forms.result_values WHERE result_id=ANY($1) AND field_id=ANY($2) ORDER BY result_id,field_id,position,id`, ids, fieldIDs)
+		values, err := tx.Query(ctx, `SELECT id,result_id,field_id,field_code,field_label,result_label,field_type,storage_kind,position,is_multi,string_value,integer_value,float_value,boolean_value,timestamp_value,reference_value,json_value FROM forms.result_values WHERE result_id=ANY($1) AND field_id=ANY($2) ORDER BY result_id,field_id,position,id`, ids, fieldIDs)
 		if err != nil {
 			return result, err
 		}
-		grouped := map[forms.ResultID]map[string][]any{}
+		grouped := map[forms.ResultID]map[string][]forms.ResultValue{}
 		for values.Next() {
 			value, err := scanResultValue(values)
 			if err != nil {
@@ -88,9 +88,9 @@ func (r *Repository) ListPublicResults(ctx context.Context, siteID site.ID, form
 				continue
 			}
 			if grouped[value.ResultID] == nil {
-				grouped[value.ResultID] = map[string][]any{}
+				grouped[value.ResultID] = map[string][]forms.ResultValue{}
 			}
-			grouped[value.ResultID][code] = append(grouped[value.ResultID][code], value.Value)
+			grouped[value.ResultID][code] = append(grouped[value.ResultID][code], value)
 		}
 		values.Close()
 		if err := values.Err(); err != nil {
@@ -98,11 +98,7 @@ func (r *Repository) ListPublicResults(ctx context.Context, siteID site.ID, form
 		}
 		for id, fields := range grouped {
 			for code, items := range fields {
-				if len(items) == 1 {
-					result.Items[positions[id]].Values[code] = items[0]
-				} else {
-					result.Items[positions[id]].Values[code] = items
-				}
+				result.Items[positions[id]].Values[code] = forms.ResultFieldValue(items)
 			}
 		}
 	}

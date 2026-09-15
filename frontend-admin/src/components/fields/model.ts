@@ -19,6 +19,16 @@ const supportedTypes = new Set([
 	'json',
 ])
 
+const multipleTypes = new Set(['string', 'textarea', 'email', 'phone', 'int', 'float', 'file', 'media', 'select'])
+
+export function isMultipleField(field: FieldDefinition): boolean {
+  return multipleTypes.has(field.type) && field.options?.multiple === true
+}
+
+export function singleValueField(field: FieldDefinition): FieldDefinition {
+  return { ...field, required: true, options: { ...field.options, multiple: false, min_items: 0, max_items: 0 } }
+}
+
 export function unsupportedFieldTypes(fields: FieldDefinition[]): string[] {
   return fields
     .filter((field) => !supportedTypes.has(field.type) && !field.editor)
@@ -34,6 +44,8 @@ export function createFieldValues(
     const type = supportedTypes.has(field.editor ?? '') ? field.editor : field.type
     if (Object.hasOwn(source, field.key)) {
       result[field.key] = source[field.key]
+    } else if (isMultipleField(field)) {
+      result[field.key] = []
     } else if (type === 'checkbox') {
       result[field.key] = false
     } else if (type === 'select' && field.options?.multiple) {
@@ -63,6 +75,34 @@ export function validateFieldValues(
     }
 
     const value = values[field.key]
+    if (isMultipleField(field)) {
+      const minimum = Math.max(field.required ? 1 : 0, field.options?.min_items ?? 0)
+      const maximum = field.options?.max_items ?? 0
+      if (value !== null && value !== undefined && !Array.isArray(value)) {
+        errors[field.key] = 'Ожидается список значений.'
+        continue
+      }
+      const items: unknown[] = Array.isArray(value) ? value : []
+      if (items.length < minimum) errors[field.key] = minimum === 1 && field.required ? 'Поле обязательно.' : fieldErrorMessage('min_items', String(minimum))
+      if (maximum && items.length > maximum) errors[field.key] = fieldErrorMessage('max_items', String(maximum))
+      const seen = new Set<unknown>()
+      for (const [index, item] of items.entries()) {
+        const key = `${field.key}[${index}]`
+        Object.assign(errors, validateFieldValues([{ ...singleValueField(field), key }], { [key]: item }))
+        if (field.type === 'select' && seen.has(item)) errors[key] = fieldErrorMessage('unique', '')
+        seen.add(item)
+      }
+      continue
+    }
+    if (field.type === 'repeater' && Array.isArray(value)) {
+      for (const [index, row] of value.entries()) {
+        if (!row || typeof row !== 'object' || Array.isArray(row)) {
+          errors[`${field.key}[${index}]`] = 'Ожидается запись.'
+          continue
+        }
+        for (const [key, error] of Object.entries(validateFieldValues(field.options?.fields ?? [], row as DynamicValues))) errors[`${field.key}[${index}].${key}`] = error
+      }
+    }
     const empty = isEmpty(value)
     if (field.required && empty) {
       errors[field.key] = 'Поле обязательно.'
@@ -70,6 +110,10 @@ export function validateFieldValues(
     }
     if (empty) continue
 
+    if ((field.type === 'select' || field.type === 'radio') && !field.options?.choices?.some(choice => choice.value === value)) {
+      errors[field.key] = fieldErrorMessage('oneof', '')
+      continue
+    }
     if (
       field.type === 'email' &&
       !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value))
@@ -91,7 +135,7 @@ export function validateFieldValues(
     }
     if (
       (field.type === 'int' || field.type === 'float') &&
-      typeof value !== 'number'
+      (typeof value !== 'number' || !Number.isFinite(value) || (field.type === 'int' && !Number.isInteger(value)))
     ) {
       errors[field.key] = 'Введите число.'
       continue
@@ -137,6 +181,12 @@ export function fieldErrorMessage(rule: string, param: string): string {
       return 'Значение не соответствует требуемому формату.'
     case 'oneof':
       return 'Выбрано недопустимое значение.'
+    case 'min_items':
+      return `Минимум значений: ${param}.`
+    case 'max_items':
+      return `Максимум значений: ${param}.`
+    case 'unique':
+      return 'Значение уже выбрано.'
     case 'min':
       return `Минимальное значение: ${param}.`
     case 'max':

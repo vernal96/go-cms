@@ -73,11 +73,29 @@ type VisibleWhen struct {
 	Value any    `json:"value"`
 }
 
+// ListOptions configures an ordered list of scalar values. Zero MaxItems is unbounded.
+type ListOptions struct {
+	Multiple bool `json:"multiple,omitempty"`
+	MinItems int  `json:"min_items,omitempty"`
+	MaxItems int  `json:"max_items,omitempty"`
+}
+
+type StringOptions = ListOptions
+type MediaOptions = ListOptions
+
 type IntegerOptions struct {
+	Multiple bool `json:"multiple,omitempty"`
+	MinItems int  `json:"min_items,omitempty"`
+	MaxItems int  `json:"max_items,omitempty"`
+
 	Step *int64 `json:"step,omitempty"`
 }
 
 type FloatOptions struct {
+	Multiple bool `json:"multiple,omitempty"`
+	MinItems int  `json:"min_items,omitempty"`
+	MaxItems int  `json:"max_items,omitempty"`
+
 	Step *float64 `json:"step,omitempty"`
 }
 
@@ -93,13 +111,23 @@ type RadioOptions struct {
 type SelectOptions struct {
 	Choices  []Choice `json:"choices"`
 	Multiple bool     `json:"multiple"`
+	MinItems int      `json:"min_items,omitempty"`
+	MaxItems int      `json:"max_items,omitempty"`
 }
 
 type PhoneOptions struct {
+	Multiple bool `json:"multiple,omitempty"`
+	MinItems int  `json:"min_items,omitempty"`
+	MaxItems int  `json:"max_items,omitempty"`
+
 	Pattern string `json:"pattern,omitempty"`
 }
 
 type FileOptions struct {
+	Multiple bool `json:"multiple,omitempty"`
+	MinItems int  `json:"min_items,omitempty"`
+	MaxItems int  `json:"max_items,omitempty"`
+
 	Storages  []filesystem.Code `json:"storages,omitempty"`
 	MIMETypes []string          `json:"mime_types,omitempty"`
 }
@@ -266,6 +294,12 @@ func cloneEditorValue(value any) any {
 
 func cloneOptions(options any) any {
 	switch typed := options.(type) {
+	case *ListOptions:
+		if typed == nil {
+			return (*ListOptions)(nil)
+		}
+		result := *typed
+		return &result
 	case RepeaterOptions:
 		typed.Fields = CloneDefinitions(typed.Fields)
 		return typed

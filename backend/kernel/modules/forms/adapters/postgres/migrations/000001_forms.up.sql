@@ -133,6 +133,7 @@ CREATE TABLE forms.result_values
     field_label     TEXT    NOT NULL,
     result_label    TEXT    NOT NULL,
     field_type      TEXT    NOT NULL,
+    is_multi        BOOLEAN NOT NULL DEFAULT FALSE,
     storage_kind    TEXT    NOT NULL CHECK (storage_kind IN ('string', 'integer', 'float', 'boolean', 'timestamp', 'reference', 'json')),
     position        INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0),
     string_value    TEXT NULL,

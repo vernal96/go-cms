@@ -14,14 +14,14 @@ import (
 )
 
 func StandardTypes() Types {
-	return Types{
+	types := Types{
 		DescribedType{Type: repeaterType{}, Presentation: Metadata{Label: "Конструктор", Editor: "repeater"}},
 		DescribedType{Type: stringType{code: TypeString}, Presentation: Metadata{Label: "Строка", Editor: "string"}},
 		DescribedType{Type: integerType{}, Presentation: Metadata{Label: "Целое число", Editor: "int", Options: []ConfigField{{Key: "step", Label: "Шаг", Type: TypeInteger}}}},
 		DescribedType{Type: floatType{}, Presentation: Metadata{Label: "Дробное число", Editor: "float", Options: []ConfigField{{Key: "step", Label: "Шаг", Type: TypeFloat}}}},
 		DescribedType{Type: boolType{}, Presentation: Metadata{Label: "Флаг", Editor: "checkbox"}},
 		DescribedType{Type: choiceType{code: TypeRadio}, Presentation: Metadata{Label: "Один вариант", Editor: "radio", Options: []ConfigField{{Key: "choices", Label: "Варианты", Type: TypeJSON, Editor: "core.choices", Required: true}}}},
-		DescribedType{Type: choiceType{code: TypeSelect}, Presentation: Metadata{Label: "Список", Editor: "select", Options: []ConfigField{{Key: "choices", Label: "Варианты", Type: TypeJSON, Editor: "core.choices", Required: true}, {Key: "multiple", Label: "Несколько значений", Type: TypeCheckbox}}}},
+		DescribedType{Type: choiceType{code: TypeSelect}, Presentation: Metadata{Label: "Список", Editor: "select", Options: []ConfigField{{Key: "choices", Label: "Варианты", Type: TypeJSON, Editor: "core.choices", Required: true}}}},
 		DescribedType{Type: stringType{code: TypeTextarea}, Presentation: Metadata{Label: "Многострочный текст", Editor: "textarea"}},
 		DescribedType{Type: stringType{code: TypeEmail, rules: []string{"email"}}, Presentation: Metadata{Label: "Email", Editor: "email"}},
 		DescribedType{Type: phoneType{}, Presentation: Metadata{Label: "Телефон", Editor: "phone", Options: []ConfigField{{Key: "pattern", Label: "Шаблон", Type: TypeString}}}},
@@ -29,6 +29,18 @@ func StandardTypes() Types {
 		DescribedType{Type: mediaType{}, Presentation: Metadata{Label: "Медиа (изображение)", Editor: "media"}},
 		DescribedType{Type: jsonType{}, Presentation: Metadata{Label: "JSON", Editor: "json"}},
 	}
+	for i, item := range types {
+		switch item.Code() {
+		case TypeString, TypeTextarea, TypeEmail, TypeInteger, TypeFloat, TypePhone, TypeFile, TypeMedia, TypeSelect:
+			described := item.(DescribedType)
+			described.Presentation.Options = append(described.Presentation.Options,
+				ConfigField{Key: "multiple", Label: "Несколько значений", Type: TypeCheckbox},
+				ConfigField{Key: "min_items", Label: "Минимум значений", Type: TypeInteger},
+				ConfigField{Key: "max_items", Label: "Максимум значений (0 — без ограничения)", Type: TypeInteger})
+			types[i] = described
+		}
+	}
+	return types
 }
 
 // jsonType represents structured widget configuration. Its editor is chosen
@@ -119,7 +131,7 @@ func (fileType) Compile(ctx CompileContext, options any) (ValueType, error) {
 		}
 		seenMIME[mimeType] = struct{}{}
 	}
-	return fileValue{options: config}, nil
+	return withList(fileValue{options: config}, config.Multiple, config.MinItems, config.MaxItems, false)
 }
 
 type fileValue struct{ options FileOptions }
@@ -197,11 +209,11 @@ func (t stringType) Code() TypeCode {
 }
 
 func (t stringType) Compile(ctx CompileContext, options any) (ValueType, error) {
-	if options != nil {
-		return nil, fmt.Errorf("%s field does not support options", t.code)
+	config, err := DecodeOptions[StringOptions](options)
+	if err != nil {
+		return nil, err
 	}
-
-	return stringValue{rules: append([]string(nil), t.rules...)}, nil
+	return withList(stringValue{rules: append([]string(nil), t.rules...)}, config.Multiple, config.MinItems, config.MaxItems, false)
 }
 
 type stringValue struct {
@@ -252,7 +264,7 @@ func (integerType) Compile(ctx CompileContext, options any) (ValueType, error) {
 		return nil, errors.New("integer step must be greater than zero")
 	}
 
-	return integerValue{}, nil
+	return withList(integerValue{}, config.Multiple, config.MinItems, config.MaxItems, false)
 }
 
 type integerValue struct{}
@@ -301,7 +313,7 @@ func (floatType) Compile(ctx CompileContext, options any) (ValueType, error) {
 		return nil, errors.New("float step must be finite and greater than zero")
 	}
 
-	return floatValue{}, nil
+	return withList(floatValue{}, config.Multiple, config.MinItems, config.MaxItems, false)
 }
 
 type floatValue struct{}
@@ -388,9 +400,10 @@ func (t choiceType) Code() TypeCode {
 
 func (t choiceType) Compile(ctx CompileContext, options any) (ValueType, error) {
 	var (
-		choices  []Choice
-		multiple bool
-		err      error
+		choices            []Choice
+		multiple           bool
+		minItems, maxItems int
+		err                error
 	)
 
 	switch t.code {
@@ -409,6 +422,7 @@ func (t choiceType) Compile(ctx CompileContext, options any) (ValueType, error) 
 		} else {
 			choices = config.Choices
 			multiple = config.Multiple
+			minItems, maxItems = config.MinItems, config.MaxItems
 		}
 
 	default:
@@ -423,93 +437,29 @@ func (t choiceType) Compile(ctx CompileContext, options any) (ValueType, error) 
 		return nil, err
 	}
 
-	return choiceValue{
-		allowed:  allowed,
-		multiple: multiple,
-	}, nil
+	return withList(choiceValue{allowed: allowed}, multiple, minItems, maxItems, true)
 }
 
-type choiceValue struct {
-	allowed  map[string]struct{}
-	multiple bool
-}
+type choiceValue struct{ allowed map[string]struct{} }
 
 func (choiceValue) StorageKind() StorageKind { return StorageString }
-func (v choiceValue) Multiple() bool         { return v.multiple }
-
-func (v choiceValue) Normalize(value any) (any, error) {
-	if !v.multiple {
-		result, ok := value.(string)
-		if !ok {
-			return nil, fmt.Errorf("expected string, got %T", value)
-		}
-
-		return result, nil
-	}
-
-	switch typed := value.(type) {
-	case []string:
-		return append([]string(nil), typed...), nil
-
-	case []any:
-		result := make([]string, len(typed))
-		for index, item := range typed {
-			stringValue, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf(
-					"expected string at index %d, got %T",
-					index,
-					item,
-				)
-			}
-			result[index] = stringValue
-		}
-		return result, nil
-
-	default:
-		return nil, fmt.Errorf("expected string slice, got %T", value)
-	}
-}
-
-func (v choiceValue) Empty(value any) bool {
-	if v.multiple {
-		result, ok := value.([]string)
-		return ok && len(result) == 0
-	}
-
+func (choiceValue) Multiple() bool           { return false }
+func (choiceValue) Normalize(value any) (any, error) {
 	result, ok := value.(string)
-	return ok && result == ""
+	if !ok {
+		return nil, fmt.Errorf("expected string, got %T", value)
+	}
+	return result, nil
 }
-
+func (choiceValue) Empty(value any) bool { return value == "" }
 func (v choiceValue) Validate(value any) error {
-	if !v.multiple {
-		result := value.(string)
-		if _, exists := v.allowed[result]; !exists {
-			return RuleError{Rule: "oneof"}
-		}
-		return nil
+	if _, exists := v.allowed[value.(string)]; !exists {
+		return RuleError{Rule: "oneof"}
 	}
-
-	for _, item := range value.([]string) {
-		if _, exists := v.allowed[item]; !exists {
-			return RuleError{Rule: "oneof", Param: item}
-		}
-	}
-
 	return nil
 }
-
-func (choiceValue) Rules() []string {
-	return nil
-}
-
-func (v choiceValue) Example() any {
-	if v.multiple {
-		return []string{"example"}
-	}
-
-	return "example"
-}
+func (choiceValue) Rules() []string { return nil }
+func (choiceValue) Example() any    { return "example" }
 
 type phoneType struct{}
 
@@ -526,7 +476,7 @@ func (phoneType) Compile(ctx CompileContext, options any) (ValueType, error) {
 	result := phoneValue{}
 	if config.Pattern == "" {
 		result.rules = []string{"e164"}
-		return result, nil
+		return withList(result, config.Multiple, config.MinItems, config.MaxItems, false)
 	}
 
 	pattern, err := regexp.Compile(config.Pattern)
@@ -534,7 +484,7 @@ func (phoneType) Compile(ctx CompileContext, options any) (ValueType, error) {
 		return nil, fmt.Errorf("compile phone pattern: %w", err)
 	}
 	result.pattern = pattern
-	return result, nil
+	return withList(result, config.Multiple, config.MinItems, config.MaxItems, false)
 }
 
 type phoneValue struct {

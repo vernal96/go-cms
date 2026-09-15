@@ -957,7 +957,7 @@ func insertResultValue(ctx context.Context, tx pgx.Tx, item forms.ResultValue) (
 	var floatOut *float64
 	var boolOut *bool
 	var timeOut *time.Time
-	err = tx.QueryRow(ctx, `INSERT INTO forms.result_values(result_id,field_id,field_code,field_label,result_label,field_type,storage_kind,position,string_value,integer_value,float_value,boolean_value,timestamp_value,reference_value,json_value) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id,result_id,field_id,field_code,field_label,result_label,field_type,storage_kind,position,string_value,integer_value,float_value,boolean_value,timestamp_value,reference_value,json_value;`, item.ResultID, item.FieldID, item.FieldCode, item.FieldLabel, item.ResultLabel, item.FieldType, item.StorageKind, item.Position, stringValue, integerValue, floatValue, booleanValue, timestampValue, referenceValue, jsonValue).Scan(&created.ID, &created.ResultID, &created.FieldID, &created.FieldCode, &created.FieldLabel, &created.ResultLabel, &created.FieldType, &created.StorageKind, &created.Position, &stringOut, &integerOut, &floatOut, &boolOut, &timeOut, &referenceOut, &raw)
+	err = tx.QueryRow(ctx, `INSERT INTO forms.result_values(result_id,field_id,field_code,field_label,result_label,field_type,storage_kind,position,is_multi,string_value,integer_value,float_value,boolean_value,timestamp_value,reference_value,json_value) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id,result_id,field_id,field_code,field_label,result_label,field_type,storage_kind,position,is_multi,string_value,integer_value,float_value,boolean_value,timestamp_value,reference_value,json_value;`, item.ResultID, item.FieldID, item.FieldCode, item.FieldLabel, item.ResultLabel, item.FieldType, item.StorageKind, item.Position, item.Multiple, stringValue, integerValue, floatValue, booleanValue, timestampValue, referenceValue, jsonValue).Scan(&created.ID, &created.ResultID, &created.FieldID, &created.FieldCode, &created.FieldLabel, &created.ResultLabel, &created.FieldType, &created.StorageKind, &created.Position, &created.Multiple, &stringOut, &integerOut, &floatOut, &boolOut, &timeOut, &referenceOut, &raw)
 	if err != nil {
 		return forms.ResultValue{}, mapWriteError(err)
 	}
@@ -1082,7 +1082,7 @@ func (r *Repository) ListResults(ctx context.Context, siteID site.ID, query form
 	if err := rows.Err(); err != nil || len(ids) == 0 || len(fieldCodes) == 0 {
 		return result, err
 	}
-	valueRows, err := r.connector.Pool().Query(ctx, `SELECT id,result_id,field_id,field_code,field_label,result_label,field_type,storage_kind,position,string_value,integer_value,float_value,boolean_value,timestamp_value,reference_value,json_value FROM forms.result_values WHERE result_id=ANY($1) AND field_code=ANY($2) ORDER BY result_id,field_code,position;`, ids, fieldCodes)
+	valueRows, err := r.connector.Pool().Query(ctx, `SELECT id,result_id,field_id,field_code,field_label,result_label,field_type,storage_kind,position,is_multi,string_value,integer_value,float_value,boolean_value,timestamp_value,reference_value,json_value FROM forms.result_values WHERE result_id=ANY($1) AND field_code=ANY($2) ORDER BY result_id,field_code,position;`, ids, fieldCodes)
 	if err != nil {
 		return forms.ResultSummaryPage{}, err
 	}
@@ -1104,15 +1104,7 @@ func (r *Repository) ListResults(ctx context.Context, siteID site.ID, query form
 	}
 	for resultID, fields := range grouped {
 		for code, values := range fields {
-			if len(values) == 1 {
-				byID[resultID].Values[code] = values[0].Value
-			} else {
-				items := make([]any, len(values))
-				for index, value := range values {
-					items[index] = value.Value
-				}
-				byID[resultID].Values[code] = items
-			}
+			byID[resultID].Values[code] = forms.ResultFieldValue(values)
 		}
 	}
 	return result, valueRows.Err()
@@ -1126,7 +1118,7 @@ func scanResultValue(row rowScanner) (forms.ResultValue, error) {
 	var booleanValue *bool
 	var timestampValue *time.Time
 	var raw []byte
-	err := row.Scan(&item.ID, &item.ResultID, &item.FieldID, &item.FieldCode, &item.FieldLabel, &item.ResultLabel, &item.FieldType, &item.StorageKind, &item.Position, &stringValue, &integerValue, &floatValue, &booleanValue, &timestampValue, &referenceValue, &raw)
+	err := row.Scan(&item.ID, &item.ResultID, &item.FieldID, &item.FieldCode, &item.FieldLabel, &item.ResultLabel, &item.FieldType, &item.StorageKind, &item.Position, &item.Multiple, &stringValue, &integerValue, &floatValue, &booleanValue, &timestampValue, &referenceValue, &raw)
 	if err != nil {
 		return forms.ResultValue{}, err
 	}
@@ -1134,7 +1126,7 @@ func scanResultValue(row rowScanner) (forms.ResultValue, error) {
 	return item, err
 }
 func listResultValues(ctx context.Context, q querier, resultID forms.ResultID) ([]forms.ResultValue, error) {
-	rows, err := q.Query(ctx, `SELECT id,result_id,field_id,field_code,field_label,result_label,field_type,storage_kind,position,string_value,integer_value,float_value,boolean_value,timestamp_value,reference_value,json_value FROM forms.result_values WHERE result_id=$1 ORDER BY id;`, resultID)
+	rows, err := q.Query(ctx, `SELECT id,result_id,field_id,field_code,field_label,result_label,field_type,storage_kind,position,is_multi,string_value,integer_value,float_value,boolean_value,timestamp_value,reference_value,json_value FROM forms.result_values WHERE result_id=$1 ORDER BY id;`, resultID)
 	if err != nil {
 		return nil, err
 	}
