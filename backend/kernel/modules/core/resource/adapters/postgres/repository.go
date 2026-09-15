@@ -1600,6 +1600,14 @@ func (r *Repository) Delete(
 			return err
 		}
 	}
+	owners := make([]resource.ID, 0, len(hookStates))
+	for _, state := range hookStates {
+		owners = append(owners, state.ID)
+	}
+	fieldMedia, err := fieldMediaIDs(ctx, transaction, owners)
+	if err != nil {
+		return err
+	}
 	observedMediaIDs, exists, err := treeMediaIDs(
 		ctx,
 		transaction,
@@ -1617,6 +1625,7 @@ func (r *Repository) Delete(
 		return err
 	}
 	observedMediaIDs = append(observedMediaIDs, libraryMediaIDs...)
+	observedMediaIDs = append(observedMediaIDs, fieldMedia...)
 	if err := medialock.Lock(
 		ctx,
 		transaction,
@@ -1713,12 +1722,12 @@ WHERE item.id = ordered.id AND item.sort <> ordered.new_sort;`, deletedSiteID, d
 	}
 
 	for _, mediaID := range actualMediaIDs {
-		if _, err := transaction.Exec(ctx, `
-DELETE FROM core.media
-WHERE id = $1;
-`, mediaID); err != nil {
+		if _, err := transaction.Exec(ctx, `DELETE FROM core.media WHERE id=$1`, mediaID); err != nil {
 			return translateDeleteError(err)
 		}
+	}
+	if err := deleteUnusedMedia(ctx, transaction, fieldMedia); err != nil {
+		return err
 	}
 
 	if err := r.finishRelated(ctx, transaction, hookSiblings, nil); err != nil {
@@ -1896,7 +1905,7 @@ RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bot
 		return widget.Binding{}, err
 	}
 	if recordRevision {
-		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
+		if err := r.appendCurrentRevision(ctx, tx, resourceID, version, actorID); err != nil {
 			return widget.Binding{}, err
 		}
 	}
@@ -1967,7 +1976,7 @@ RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bot
 		return widget.Binding{}, err
 	}
 	if recordRevision {
-		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
+		if err := r.appendCurrentRevision(ctx, tx, resourceID, version, actorID); err != nil {
 			return widget.Binding{}, err
 		}
 	}
@@ -2040,7 +2049,7 @@ func (r *Repository) DeleteWidget(
 		return err
 	}
 	if recordRevision {
-		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
+		if err := r.appendCurrentRevision(ctx, tx, resourceID, version, actorID); err != nil {
 			return err
 		}
 	}
@@ -2149,7 +2158,7 @@ func (r *Repository) ReorderWidgets(
 		return nil, err
 	}
 	if recordRevision {
-		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
+		if err := r.appendCurrentRevision(ctx, tx, resourceID, version, actorID); err != nil {
 			return nil, err
 		}
 	}
@@ -2771,7 +2780,11 @@ VALUES ('resource', $1, $2, $3);`, ownerID, key, id); err != nil {
 }
 
 func replaceResourceFields(ctx context.Context, tx pgx.Tx, resourceID resource.ID, siteID site.ID, libraryID *resource.ID, values []field.StoredValue) error {
-	var mediaIDs []media.ID
+	oldMedia, err := fieldMediaIDs(ctx, tx, []resource.ID{resourceID})
+	if err != nil {
+		return err
+	}
+	mediaIDs := append([]media.ID(nil), oldMedia...)
 	for _, stored := range values {
 		if stored.ReferenceTarget == "" {
 			continue
@@ -2858,7 +2871,7 @@ INSERT INTO core.resource_field_values (
 			}
 		}
 	}
-	return nil
+	return deleteUnusedMedia(ctx, tx, oldMedia)
 }
 
 func cloneFileReferences(source map[string]file.ID) map[string]file.ID {

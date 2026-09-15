@@ -343,11 +343,17 @@ func (r *Repository) DeleteLibraryItem(ctx context.Context, id resource.ID) erro
 	if err := r.appendStateEvent(ctx, tx, resource.EventDeleted, resource.StateFromLibraryItem(item), nil); err != nil {
 		return err
 	}
-	if item.ImageMediaID != nil {
-		if err := medialock.Lock(ctx, tx, *item.ImageMediaID); err != nil {
-			return err
-		}
+	ownedMedia, err := fieldMediaIDs(ctx, tx, []resource.ID{id})
+	if err != nil {
+		return err
 	}
+	if item.ImageMediaID != nil {
+		ownedMedia = append(ownedMedia, *item.ImageMediaID)
+	}
+	if err := medialock.Lock(ctx, tx, ownedMedia...); err != nil {
+		return err
+	}
+
 	if _, err := tx.Exec(ctx, `DELETE FROM core.file_field_references WHERE owner_kind='resource' AND owner_id=$1;`, id); err != nil {
 		return translateDeleteError(err)
 	}
@@ -362,10 +368,14 @@ func (r *Repository) DeleteLibraryItem(ctx context.Context, id resource.ID) erro
 		return err
 	}
 	if item.ImageMediaID != nil {
-		if _, err := tx.Exec(ctx, `DELETE FROM core.media WHERE id=$1;`, *item.ImageMediaID); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM core.media WHERE id=$1`, *item.ImageMediaID); err != nil {
 			return translateDeleteError(err)
 		}
 	}
+	if err := deleteUnusedMedia(ctx, tx, ownedMedia); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 

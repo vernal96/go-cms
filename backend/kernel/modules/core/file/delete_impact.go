@@ -24,7 +24,7 @@ type DeleteImpact struct {
 }
 type CascadeRepository interface {
 	DeleteImpact(context.Context, []ItemReference) (DeleteImpact, error)
-	DeleteConfirmed(context.Context, []ItemReference, string, DeletePhysical) error
+	DeleteConfirmed(context.Context, *security.UserID, []ItemReference, string, DeletePhysical) error
 }
 type CascadeService interface {
 	DeleteImpact(context.Context, security.Actor, []ItemReference) (DeleteImpact, error)
@@ -70,7 +70,7 @@ func (s *service) DeleteConfirmed(ctx context.Context, actor security.Actor, ite
 	if !ok {
 		return errors.New("cascade repository unavailable")
 	}
-	if err := repo.DeleteConfirmed(ctx, items, token, s.deletePhysical); err != nil {
+	if err := repo.DeleteConfirmed(ctx, actor.AuditUserID(), items, token, s.deletePhysical); err != nil {
 		return fmt.Errorf("confirmed filesystem delete: %w", err)
 	}
 	return nil

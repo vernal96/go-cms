@@ -101,9 +101,21 @@ thumbnail profile; the current admin targets the single dev profile.
 Impact includes selected count, all affected physical files, hidden derivatives,
 Media references, blocking generic File-field references, and a snapshot token.
 The admin confirms `policy: "confirmed_media_cascade"` with `impact_token`.
-Execution locks the file tree, Media and owners, rechecks the snapshot before
-physical deletion, then removes descendants and Media. Owner image FKs clear
-Resource, LibraryItem and User references; affected resource caches invalidate.
+Execution locks the file tree, Media and owners and rechecks the snapshot,
+including owner identities. Core composes the resource and user mutation scopes;
+the file adapter calls the owner adapters inside its existing SQL transaction.
+The `media_cascade` operation clears image fields/avatars, runs owner before-hooks,
+updates versions and audit fields, records resource revisions (respecting the
+site's LibraryItem history policy), and appends outbox events and hook recipients.
+Hooks may veto the cascade but cannot rewrite its derived owner changes.
+Only after these steps succeed does deletion touch physical storage and remove
+File/Media rows. A veto or outbox failure rolls back all SQL without touching
+storage; affected resource caches invalidate at the common repository boundary.
+
+Media selected in a typed resource field belongs to that field. Replacing or
+clearing the value and permanently deleting its owner/subtree remove detached
+Media metadata in the same transaction. Still-owned Media and physical source
+Files remain intact; safe file deletion is no longer blocked by orphan metadata.
 Generic File-field references always block this cascade. Ordinary internal
 `DeleteFile`/`DeleteFolder` remain safe and reject referenced files.
 

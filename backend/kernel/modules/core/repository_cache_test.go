@@ -809,7 +809,7 @@ type cascadeCacheFixture struct {
 func (f cascadeCacheFixture) DeleteImpact(context.Context, []file.ItemReference) (file.DeleteImpact, error) {
 	return file.DeleteImpact{Token: "impact", ResourceSites: []int64{3}}, nil
 }
-func (f cascadeCacheFixture) DeleteConfirmed(context.Context, []file.ItemReference, string, file.DeletePhysical) error {
+func (f cascadeCacheFixture) DeleteConfirmed(context.Context, *security.UserID, []file.ItemReference, string, file.DeletePhysical) error {
 	f.resources.item.ImageMediaID = nil
 	return nil
 }
@@ -825,7 +825,7 @@ func TestConfirmedFileCascadeInvalidatesCachedResourceOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := &invalidatingFileRepository{cascade: cascadeCacheFixture{resources: base}, policy: policy}
-	if err := files.DeleteConfirmed(ctx, []file.ItemReference{{Kind: file.ItemFile, ID: 1}}, "impact", nil); err != nil {
+	if err := files.DeleteConfirmed(ctx, nil, []file.ItemReference{{Kind: file.ItemFile, ID: 1}}, "impact", nil); err != nil {
 		t.Fatal(err)
 	}
 	next, err := cached.ByID(ctx, 7)

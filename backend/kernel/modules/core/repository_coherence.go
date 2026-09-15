@@ -801,7 +801,7 @@ type invalidatingFileRepository struct {
 func (r *invalidatingFileRepository) DeleteImpact(ctx context.Context, items []file.ItemReference) (file.DeleteImpact, error) {
 	return r.cascade.DeleteImpact(ctx, items)
 }
-func (r *invalidatingFileRepository) DeleteConfirmed(ctx context.Context, items []file.ItemReference, token string, physical file.DeletePhysical) error {
+func (r *invalidatingFileRepository) DeleteConfirmed(ctx context.Context, actorID *security.UserID, items []file.ItemReference, token string, physical file.DeletePhysical) error {
 	impact, err := r.cascade.DeleteImpact(ctx, items)
 	if err != nil {
 		return err
@@ -814,7 +814,7 @@ func (r *invalidatingFileRepository) DeleteConfirmed(ctx context.Context, items 
 		tags = append(tags, siteResourcesTag(site.ID(id)))
 	}
 	return withRepositoryCacheWrite(r.policy, tags, func() error {
-		err := r.cascade.DeleteConfirmed(ctx, items, token, physical)
+		err := r.cascade.DeleteConfirmed(ctx, actorID, items, token, physical)
 		r.policy.invalidate(ctx, tags...)
 		return err
 	})

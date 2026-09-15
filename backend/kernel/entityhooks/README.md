@@ -81,6 +81,11 @@ Use an after handler for those reactions.
 Resources cover tree and LibraryItem creation/editing, field values, widgets,
 movement, transfer, trash, restore, revision restore and permanent deletion.
 Trash is an update. Only permanent deletion produces `resource.deleted`.
+Confirmed filesystem Media cascades also produce resource/user updates with
+operation `media_cascade`. Their before-hooks can veto the whole cascade before
+physical storage is touched; derived field/avatar clearing cannot be rewritten.
+Resource versions and configured revisions, user audit metadata, outbox events
+and recipients are persisted in the same deletion transaction.
 User operations include profile/preferences/avatar/password, blocking and groups.
 There is no user deletion operation. Login bookkeeping, password rehash during
 authentication and raw seed/migration SQL are maintenance, not business hooks.

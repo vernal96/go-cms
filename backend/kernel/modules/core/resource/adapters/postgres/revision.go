@@ -54,7 +54,7 @@ LEFT JOIN core.users u ON u.id = $7;`, resourceID, siteID, version, kind, source
 	return nil
 }
 
-func (r *Repository) appendWidgetRevision(ctx context.Context, tx pgx.Tx, resourceID resource.ID, version int64, actorID *security.UserID) error {
+func (r *Repository) appendCurrentRevision(ctx context.Context, tx pgx.Tx, resourceID resource.ID, version int64, actorID *security.UserID) error {
 	var storage resource.StorageKind
 	if err := tx.QueryRow(ctx, `SELECT storage_kind FROM core.resource_entities WHERE id=$1;`, resourceID).Scan(&storage); err != nil {
 		return translateError(err)

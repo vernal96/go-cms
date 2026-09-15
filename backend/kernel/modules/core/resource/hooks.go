@@ -42,6 +42,7 @@ const (
 	OperationTrash         Operation = "trash"
 	OperationRestore       Operation = "restore"
 	OperationDelete        Operation = "delete"
+	OperationMediaCascade  Operation = "media_cascade"
 	OperationRevision      Operation = "restore_revision"
 	OperationWidgetCreate  Operation = "widget.create"
 	OperationWidgetUpdate  Operation = "widget.update"
@@ -215,7 +216,7 @@ func validateHookChanges(operation Operation, original, next Snapshot) error {
 		a.Sort = b.Sort
 	case OperationWidgetCreate, OperationWidgetUpdate, OperationWidgetDelete, OperationWidgetReorder:
 		a.Widgets = b.Widgets
-	case OperationTransfer, OperationTrash, OperationRestore, OperationDelete:
+	case OperationTransfer, OperationTrash, OperationRestore, OperationDelete, OperationMediaCascade:
 	default:
 		return fmt.Errorf("%w: unsupported hook operation %q", ErrInvalid, operation)
 	}

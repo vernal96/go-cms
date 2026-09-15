@@ -1,8 +1,11 @@
 package postgres
 
 import (
+	"context"
 	"embed"
 	"errors"
+	"github.com/jackc/pgx/v5"
+	"github.com/vernal96/go-cms/kernel/security"
 
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
 	"github.com/vernal96/go-cms/kernel"
@@ -82,7 +85,12 @@ func NewDatabase(
 		return nil, err
 	}
 
-	files, err := filepostgres.NewRepository(connector)
+	files, err := filepostgres.NewRepository(connector, func(ctx context.Context, tx pgx.Tx, ids []int64, actorID *security.UserID) error {
+		if err := resources.ClearMediaReferences(ctx, tx, ids, actorID); err != nil {
+			return err
+		}
+		return userpostgres.ClearMediaReferences(ctx, tx, "core:"+string(connector.Code()), ids, actorID)
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -18,12 +18,17 @@ import (
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
+// MediaCascade updates owners in the file deletion transaction before storage is touched.
+type MediaCascade func(context.Context, pgx.Tx, []int64, *security.UserID) error
+
 type Repository struct {
 	connector *connectorpostgres.Connector
+	cascade   MediaCascade
 }
 
 func NewRepository(
 	connector *connectorpostgres.Connector,
+	cascade MediaCascade,
 ) (*Repository, error) {
 	if connector == nil {
 		return nil, errors.New("postgres connector is nil")
@@ -31,7 +36,10 @@ func NewRepository(
 	if connector.Pool() == nil {
 		return nil, errors.New("postgres pool is nil")
 	}
-	return &Repository{connector: connector}, nil
+	if cascade == nil {
+		return nil, errors.New("media cascade is nil")
+	}
+	return &Repository{connector: connector, cascade: cascade}, nil
 }
 
 func (r *Repository) NameAvailable(
@@ -925,17 +933,17 @@ func (r *Repository) DeleteItems(
 	items []file.ItemReference,
 	deletePhysical file.DeletePhysical,
 ) error {
-	return r.deleteItems(ctx, items, deletePhysical, "", nil)
+	return r.deleteItems(ctx, nil, items, deletePhysical, "", nil)
 }
 func (r *Repository) DeleteImpact(ctx context.Context, items []file.ItemReference) (file.DeleteImpact, error) {
 	var impact file.DeleteImpact
-	err := r.deleteItems(ctx, items, nil, "", &impact)
+	err := r.deleteItems(ctx, nil, items, nil, "", &impact)
 	return impact, err
 }
-func (r *Repository) DeleteConfirmed(ctx context.Context, items []file.ItemReference, token string, deletePhysical file.DeletePhysical) error {
-	return r.deleteItems(ctx, items, deletePhysical, token, nil)
+func (r *Repository) DeleteConfirmed(ctx context.Context, actorID *security.UserID, items []file.ItemReference, token string, deletePhysical file.DeletePhysical) error {
+	return r.deleteItems(ctx, actorID, items, deletePhysical, token, nil)
 }
-func (r *Repository) deleteItems(ctx context.Context, items []file.ItemReference, deletePhysical file.DeletePhysical, token string, preview *file.DeleteImpact) error {
+func (r *Repository) deleteItems(ctx context.Context, actorID *security.UserID, items []file.ItemReference, deletePhysical file.DeletePhysical, token string, preview *file.DeleteImpact) error {
 	if ctx == nil {
 		return errors.New("delete filesystem items context is nil")
 	}
@@ -1028,7 +1036,8 @@ FOR UPDATE OF item;
 	// Owner rows must stay stable through physical deletion and FK clearing.
 	// Acquire these locks before touching storage, so a competing move/edit
 	// either completes before the snapshot or conflicts without data loss.
-	for _, query := range []string{
+	var owners []string
+	for kind, query := range []string{
 		`SELECT id FROM core.resources WHERE image_media_id=ANY($1::bigint[]) OR id IN (SELECT resource_id FROM core.resource_media_references WHERE media_id=ANY($1::bigint[])) ORDER BY id FOR UPDATE`,
 		`SELECT id FROM core.library_items WHERE image_media_id=ANY($1::bigint[]) OR id IN (SELECT resource_id FROM core.resource_media_references WHERE media_id=ANY($1::bigint[])) ORDER BY id FOR UPDATE`,
 		`SELECT id FROM core.users WHERE avatar_media_id=ANY($1::bigint[]) ORDER BY id FOR UPDATE`,
@@ -1043,6 +1052,7 @@ FOR UPDATE OF item;
 				rows.Close()
 				return err
 			}
+			owners = append(owners, fmt.Sprintf("%d:%d", kind, id))
 		}
 		err = rows.Err()
 		rows.Close()
@@ -1060,7 +1070,7 @@ FOR UPDATE OF item;
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(string_agg(resource_id::text || ':' || field_key || ':' || position::text || ':' || media_id::text, ',' ORDER BY resource_id,field_key,position),'') FROM core.resource_media_references WHERE media_id=ANY($1::bigint[])`, mediaIDs).Scan(&mediaFields); err != nil {
 		return err
 	}
-	impact.Token = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%v/%v/%v/%v/%d/%s", items, ids, mediaIDs, impact.ResourceSites, impact.FileFieldReferences, mediaFields))))
+	impact.Token = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%v/%v/%v/%v/%d/%s/%v", items, ids, mediaIDs, impact.ResourceSites, impact.FileFieldReferences, mediaFields, owners))))
 	if preview != nil {
 		*preview = impact
 		return nil
@@ -1072,10 +1082,8 @@ FOR UPDATE OF item;
 		return file.ErrInUse
 	}
 
-	// Clear typed Media values atomically with the confirmed cascade. Their
-	// reference rows disappear through the owner-field FK.
 	if token != "" {
-		if _, err := tx.Exec(ctx, `DELETE FROM core.resource_field_values fv USING core.resource_media_references mr WHERE fv.resource_id=mr.resource_id AND fv.field_key=mr.field_key AND fv.position=mr.position AND mr.media_id=ANY($1::bigint[])`, mediaIDs); err != nil {
+		if err := r.cascade(ctx, tx, mediaIDs, actorID); err != nil {
 			return err
 		}
 	}

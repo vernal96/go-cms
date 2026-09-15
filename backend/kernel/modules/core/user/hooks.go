@@ -14,17 +14,18 @@ import (
 )
 
 const (
-	EventCreated         = "user.created"
-	EventUpdated         = "user.updated"
-	OperationCreate      = "create"
-	OperationUpdate      = "update"
-	OperationProfile     = "profile"
-	OperationPreferences = "preferences"
-	OperationAvatar      = "avatar"
-	OperationPassword    = "password"
-	OperationBlock       = "block"
-	OperationUnblock     = "unblock"
-	OperationGroups      = "groups"
+	EventCreated          = "user.created"
+	EventUpdated          = "user.updated"
+	OperationCreate       = "create"
+	OperationUpdate       = "update"
+	OperationProfile      = "profile"
+	OperationPreferences  = "preferences"
+	OperationAvatar       = "avatar"
+	OperationMediaCascade = "media_cascade"
+	OperationPassword     = "password"
+	OperationBlock        = "block"
+	OperationUnblock      = "unblock"
+	OperationGroups       = "groups"
 )
 
 type ProfileData struct {
@@ -158,7 +159,7 @@ func PrepareMutation(ctx context.Context, before *EventState, next Record, group
 		a.AccentColor = b.AccentColor
 	case OperationAvatar:
 		a.AvatarMediaID = b.AvatarMediaID
-	case OperationPassword, OperationBlock, OperationUnblock, OperationGroups:
+	case OperationPassword, OperationBlock, OperationUnblock, OperationGroups, OperationMediaCascade:
 	default:
 		return Record{}, nil, fmt.Errorf("unsupported user hook operation %q", invocation.Operation)
 	}

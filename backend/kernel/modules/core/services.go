@@ -36,6 +36,7 @@ type Services struct {
 	database    Database
 	revisions   resource.RevisionRepository
 	cachePolicy *repositoryCachePolicy
+	hooks       *entityhooks.Registry
 }
 
 // NewServices assembles the site-independent part of the core domain. Site
@@ -48,6 +49,9 @@ func NewServices(
 	cacheInvalidator cache.Invalidator,
 	hooks *entityhooks.Registry,
 ) (*Services, error) {
+	if hooks == nil {
+		hooks = entityhooks.EmptyRegistry(entityhooks.Application, "")
+	}
 	coherent, err := newCoherentDatabase(database, cacheInvalidator)
 	if err != nil {
 		return nil, err
@@ -126,6 +130,7 @@ func NewServices(
 		database:      database,
 		revisions:     revisionRepository,
 		cachePolicy:   coherent.policy,
+		hooks:         hooks,
 	}, nil
 }
 
@@ -186,6 +191,11 @@ func (s *Services) BuildContent(
 		return err
 	}
 
+	cascade, ok := s.Files.(file.CascadeService)
+	if !ok {
+		return errors.New("core file cascade service is unavailable")
+	}
+	s.Files = &cascadeFiles{ManagementService: s.Files, cascade: cascade, resources: resources, hooks: s.hooks}
 	s.Sites = catalog
 	s.Resources = resources
 	s.Revisions = revisions
