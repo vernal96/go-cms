@@ -95,6 +95,7 @@ Use the smallest set of skills that covers the actual task. A workflow skill suc
 - `go-cms-runtime-integrity`: SiteRuntime/ProfileBlueprint/reload/publication/runtime cache-coherence work.
 - `go-cms-cache`: cache contracts, stores, module cache aliases, cache keys/tags, TTL, invalidation/coherence, Remember/result caching, cache connectors or cache maintenance.
 - `go-cms-filesystem`: filesystem disks/drivers, disk code/label/visibility, project disk declarations, module filesystem aliases/bindings, CMS files/folders, local/S3 connectors, FileExplorer/file picker and storage-selection behavior.
+- `go-cms-images`: image/media processing, image editor transforms, persistent edited derivatives, restore-to-original behavior, thumbnails, thumbnail cache/delivery, FileExplorer image previews and deletion semantics for derivative image trees.
 - `go-cms-events-jobs`: domain events, transactional outbox, EventBus publishing/consumption, application background workers/jobs, retries, delivery semantics and idempotency.
 - `go-cms-templating`: reusable `{{...}}` interpolation, variable allowlists/resolvers, context-aware rendering/escaping and migration of feature-specific template engines such as SEO to shared kernel templating.
 - `go-cms-mail`: mail templates, manual/automatic sending, preview/render snapshots, SMTP/null/log transports, mail jobs, attachments, delivery attempts/history, retention, permissions and mail admin UI/API.
