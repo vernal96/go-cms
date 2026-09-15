@@ -44,6 +44,7 @@ const (
 	TypeEmail    TypeCode = "email"
 	TypePhone    TypeCode = "phone"
 	TypeFile     TypeCode = "file"
+	TypeMedia    TypeCode = "media"
 	TypeJSON     TypeCode = "json"
 )
 
@@ -122,12 +123,21 @@ type StorageValueType interface {
 	Multiple() bool
 }
 
+// ReferenceValueType identifies the entity addressed by a reference value.
+type ReferenceValueType interface {
+	StorageValueType
+	ReferenceTarget() string
+}
+
+const ReferenceMedia = "media"
+
 type StoredValue struct {
-	Key      string
-	Position int
-	Kind     StorageKind
-	Multiple bool `json:"multiple"`
-	Value    any
+	ReferenceTarget string `json:"reference_target,omitempty"`
+	Key             string
+	Position        int
+	Kind            StorageKind
+	Multiple        bool `json:"multiple"`
+	Value           any
 }
 
 type TypeResolver interface {

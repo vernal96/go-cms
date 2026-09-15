@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/vernal96/go-cms/kernel/cache"
+	"github.com/vernal96/go-cms/kernel/modules/core/file"
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
@@ -798,3 +800,36 @@ var _ site.ManagementRepository = (*siteRepositoryStub)(nil)
 var _ resource.ManagementRepository = (*resourceRepositoryStub)(nil)
 var _ resource.WidgetRepository = (*resourceRepositoryStub)(nil)
 var _ resource.LifecycleRepository = (*resourceRepositoryStub)(nil)
+
+type cascadeCacheFixture struct {
+	file.CascadeRepository
+	resources *resourceRepositoryStub
+}
+
+func (f cascadeCacheFixture) DeleteImpact(context.Context, []file.ItemReference) (file.DeleteImpact, error) {
+	return file.DeleteImpact{Token: "impact", ResourceSites: []int64{3}}, nil
+}
+func (f cascadeCacheFixture) DeleteConfirmed(context.Context, []file.ItemReference, string, file.DeletePhysical) error {
+	f.resources.item.ImageMediaID = nil
+	return nil
+}
+func TestConfirmedFileCascadeInvalidatesCachedResourceOwnership(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryCacheStore()
+	policy := newTestRepositoryCachePolicy(store)
+	id := media.ID(10)
+	base := &resourceRepositoryStub{item: resource.Resource{ID: 7, SiteID: 3, ImageMediaID: &id}}
+	cached := &cachedResourceRepository{base: base, store: store, ttl: time.Minute, policy: policy}
+	first, err := cached.ByID(ctx, 7)
+	if err != nil || first.ImageMediaID == nil {
+		t.Fatal(err)
+	}
+	files := &invalidatingFileRepository{cascade: cascadeCacheFixture{resources: base}, policy: policy}
+	if err := files.DeleteConfirmed(ctx, []file.ItemReference{{Kind: file.ItemFile, ID: 1}}, "impact", nil); err != nil {
+		t.Fatal(err)
+	}
+	next, err := cached.ByID(ctx, 7)
+	if err != nil || next.ImageMediaID != nil {
+		t.Fatal("stale media reference after cascade", err)
+	}
+}

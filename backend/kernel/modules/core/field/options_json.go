@@ -14,7 +14,7 @@ func DecodeOptionsJSON(code TypeCode, raw json.RawMessage) (any, error) {
 		raw = nil
 	}
 	switch code {
-	case TypeString, TypeTextarea, TypeEmail, TypeCheckbox, TypeJSON:
+	case TypeString, TypeTextarea, TypeEmail, TypeCheckbox, TypeJSON, TypeMedia:
 		if !empty {
 			return nil, fmt.Errorf("field type %q does not support options", code)
 		}

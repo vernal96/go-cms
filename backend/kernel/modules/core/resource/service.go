@@ -1258,6 +1258,9 @@ func (s *Service) normalize(
 		if err != nil {
 			return Resource{}, fmt.Errorf("encode resource template %q fields: %w", *payload.Template, err)
 		}
+		if err := s.validateMediaFields(ctx, actor, item.FieldValues); err != nil {
+			return Resource{}, err
+		}
 		fileReferences, err := templateRuntime.FieldSchema().FileReferences(fields)
 		if err != nil {
 			return Resource{}, fmt.Errorf("collect resource file references: %w", err)

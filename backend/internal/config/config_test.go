@@ -164,11 +164,13 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		definition.Profiles[0].Modules[3].Module.Code() != forms.ModuleCode ||
 		definition.Profiles[0].Modules[4].Module.Code() != search.ModuleCode ||
 		definition.Profiles[0].Modules[5].Module.Code() != admin.ModuleCode ||
-		len(definition.Profiles[0].Modules[0].Caches) != 2 ||
+		len(definition.Profiles[0].Modules[0].Caches) != 3 ||
 		definition.Profiles[0].Modules[0].Caches[0].Alias != core.DurableCacheAlias ||
 		definition.Profiles[0].Modules[0].Caches[0].Code != projectcache.FilesystemCode ||
 		definition.Profiles[0].Modules[0].Caches[1].Alias != core.HotCacheAlias ||
 		definition.Profiles[0].Modules[0].Caches[1].Code != projectcache.RedisCode ||
+		definition.Profiles[0].Modules[0].Caches[2].Alias != core.ThumbnailCacheAlias ||
+		definition.Profiles[0].Modules[0].Caches[2].Code != projectcache.FilesystemCode ||
 		definition.Profiles[0].Modules[2].Filesystems[0].Code != "private" ||
 		definition.Profiles[0].Modules[3].Filesystems[0].Code != "private" {
 		t.Fatalf(

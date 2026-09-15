@@ -202,8 +202,12 @@ func (a *App) boot(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := coreServices.ConfigureManagementImages(cmsFiles, a.definition.Profiles, a.caches, a.logger); err != nil {
+		return err
+	}
 
 	adminManagement, err := admin.NewManagement(admin.ManagementDependencies{
+		Images: coreServices.Images, ImageFiles: cmsFiles,
 		Profiles:           a.definition.Profiles,
 		SiteRepository:     siteManagementRepository,
 		Sites:              catalog,

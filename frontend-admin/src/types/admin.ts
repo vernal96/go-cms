@@ -82,6 +82,7 @@ export type FieldType =
   | 'email'
   | 'phone'
   | 'file'
+  | 'media'
 
 export interface FieldChoice {
   value: string
@@ -108,7 +109,8 @@ export interface FilesystemDisk {
 export interface FilesystemItem {
   kind: FilesystemItemKind
   id: number
-  parent_id: number | null
+  folder_id: number | null
+  source_file_id: number | null
   storage: string
   name: string
   mime_type?: string
@@ -132,6 +134,7 @@ export interface FilesystemListingResponse {
 }
 
 export interface ProfileAvatar {
+  media_id?: number
   file_id: number
   name: string
   mime_type: string
@@ -360,6 +363,7 @@ export interface ResourceCreatePayload {
 }
 
 export interface Resource {
+  image_media_id?: number | null
 	id: number
 	site_id: number
 	version: number
@@ -412,6 +416,7 @@ export interface ResourceLookupResponse {
 }
 
 export interface ResourceUpdatePayload {
+  image_media_id?: number | null
 	expected_version: number
   parent_id: number | null
   type: ResourceTypeCode
@@ -450,6 +455,7 @@ export interface ResourceRevision {
 export interface ResourceRevisionPage { items: ResourceRevision[]; page: number; per_page: number; total: number }
 
 export interface LibraryItem {
+  image_media_id?: number | null
 	id: number
 	version: number
   site_id: number
@@ -473,6 +479,7 @@ export interface LibraryItem {
 export interface LibraryItemDetailsResponse { item: LibraryItem; permissions: { update: boolean; delete: boolean; restore: boolean; history_read: boolean; history_delete: boolean } }
 export interface LibraryItemsResponse { items: LibraryItem[]; next_cursor: string }
 export interface LibraryItemPayload {
+  image_media_id?: number | null
 	expected_version?: number
   template_code: string | null
   title: string

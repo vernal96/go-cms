@@ -12,6 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
+	image "github.com/vernal96/go-cms/kernel/modules/core/image"
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
@@ -398,6 +400,7 @@ func (h *contentHTTP) getResource(response http.ResponseWriter, request *http.Re
 }
 
 type updateResourceRequest struct {
+	ImageMediaID     *media.ID         `json:"image_media_id"`
 	ExpectedVersion  int64             `json:"expected_version"`
 	ParentID         *resource.ID      `json:"parent_id"`
 	Type             resourcetype.Code `json:"type"`
@@ -447,6 +450,7 @@ func (h *contentHTTP) updateResource(response http.ResponseWriter, request *http
 	result, err := h.resources.UpdateResource(
 		request.Context(), actor(request), siteID, resourceID,
 		ResourceUpdateInput{
+			ImageMediaID:     payload.ImageMediaID,
 			ExpectedVersion:  payload.ExpectedVersion,
 			ParentID:         payload.ParentID,
 			Type:             payload.Type,
@@ -796,6 +800,7 @@ func (h *contentHTTP) restoreResource(response http.ResponseWriter, request *htt
 }
 
 type libraryItemRequest struct {
+	ImageMediaID    *media.ID      `json:"image_media_id"`
 	ExpectedVersion int64          `json:"expected_version"`
 	Template        *template.Code `json:"template_code"`
 	Title           string         `json:"title"`
@@ -918,7 +923,7 @@ func (h *contentHTTP) createLibraryItem(response http.ResponseWriter, request *h
 		writeValidation(response, "fields are required")
 		return
 	}
-	result, err := h.resources.CreateLibraryItem(request.Context(), actor(request), siteID, libraryID, LibraryItemCreateInput{Template: payload.Template, Title: payload.Title, Slug: payload.Slug, Annotation: payload.Annotation, Content: payload.Content, IsPublic: payload.IsPublic, IsSearchable: payload.IsSearchable, PublishedAt: payload.PublishedAt, UnpublishedAt: payload.UnpublishedAt, Fields: payload.Fields})
+	result, err := h.resources.CreateLibraryItem(request.Context(), actor(request), siteID, libraryID, LibraryItemCreateInput{ImageMediaID: payload.ImageMediaID, Template: payload.Template, Title: payload.Title, Slug: payload.Slug, Annotation: payload.Annotation, Content: payload.Content, IsPublic: payload.IsPublic, IsSearchable: payload.IsSearchable, PublishedAt: payload.PublishedAt, UnpublishedAt: payload.UnpublishedAt, Fields: payload.Fields})
 	writeResult(response, http.StatusCreated, result, err)
 }
 
@@ -948,7 +953,7 @@ func (h *contentHTTP) updateLibraryItem(response http.ResponseWriter, request *h
 		writeValidation(response, "expected_version is required")
 		return
 	}
-	result, err := h.resources.UpdateLibraryItem(request.Context(), actor(request), siteID, itemID, LibraryItemUpdateInput{ExpectedVersion: payload.ExpectedVersion, LibraryItemCreateInput: LibraryItemCreateInput{Template: payload.Template, Title: payload.Title, Slug: payload.Slug, Annotation: payload.Annotation, Content: payload.Content, PublishedAt: payload.PublishedAt, UnpublishedAt: payload.UnpublishedAt, Fields: payload.Fields}, IsPublic: payload.IsPublic, IsSearchable: payload.IsSearchable})
+	result, err := h.resources.UpdateLibraryItem(request.Context(), actor(request), siteID, itemID, LibraryItemUpdateInput{ExpectedVersion: payload.ExpectedVersion, LibraryItemCreateInput: LibraryItemCreateInput{ImageMediaID: payload.ImageMediaID, Template: payload.Template, Title: payload.Title, Slug: payload.Slug, Annotation: payload.Annotation, Content: payload.Content, PublishedAt: payload.PublishedAt, UnpublishedAt: payload.UnpublishedAt, Fields: payload.Fields}, IsPublic: payload.IsPublic, IsSearchable: payload.IsSearchable})
 	writeResult(response, http.StatusOK, result, err)
 }
 
@@ -1082,6 +1087,12 @@ func writeResult(response http.ResponseWriter, status int, result any, err error
 
 func writeManagementError(response http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, image.ErrInvalidTransform), errors.Is(err, image.ErrUnsupportedFormat), errors.Is(err, image.ErrLimit):
+		writeValidation(response, err.Error())
+	case errors.Is(err, media.ErrImageConflict):
+		httptransport.WriteJSONError(response, http.StatusConflict, "image_conflict", "image changed; reload editor")
+	case errors.Is(err, media.ErrNotFound):
+		httptransport.WriteJSONError(response, http.StatusNotFound, "not_found", "media not found")
 	case errors.Is(err, security.ErrUnauthenticated):
 		writeUnauthorized(response)
 	case errors.Is(err, security.ErrForbidden):

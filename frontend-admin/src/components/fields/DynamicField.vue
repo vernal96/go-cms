@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, inject } from 'vue'
 import { ElAlert } from 'element-plus'
+import { adminAccessTokenKey } from '../../admin-context'
+import MediaImageField from '../images/MediaImageField.vue'
 import { adminPluginRegistryKey } from '../../admin-plugins/context'
 import type { FieldDefinition } from '../../types/admin'
 import CheckboxField from './CheckboxField.vue'
@@ -20,6 +22,8 @@ const props = defineProps<{
 	accessToken?: string
 	resourceTemplates?: Array<{ code: string; label: string }>
 }>()
+const injectedToken = inject(adminAccessTokenKey)
+const token = computed(() => props.accessToken || injectedToken?.value || '')
 const registry = inject(adminPluginRegistryKey, undefined)
 const customEditor = computed(() => props.field.editor ? registry?.fieldEditor(props.field.editor) : undefined)
 const model = defineModel<unknown>()
@@ -34,6 +38,7 @@ const resourceIDs = computed<number[]>(() => Array.isArray(model.value) ? model.
 	<select-field v-else-if="field.editor === 'resource-template'" v-model="model" :choices="(resourceTemplates ?? []).map((item) => ({ value: item.code, label: item.label }))" :multiple="false" />
 	<resource-picker-field v-else-if="field.editor === 'resource-picker'" :model-value="typeof model === 'number' ? model : undefined" :site-id="siteId ?? 0" :access-token="accessToken ?? ''" @update:model-value="model = $event" />
 	<resource-picker-field v-else-if="field.editor === 'resource-multi-picker'" :model-value="resourceIDs" :site-id="siteId ?? 0" :access-token="accessToken ?? ''" multiple @update:model-value="model = $event" />
+	<media-image-field v-else-if="control === 'media'" :model-value="typeof model === 'number' ? model : null" :access-token="token" @update:model-value="model = $event" />
 	<json-field v-else-if="control === 'json'" v-model="model" />
   <text-field
     v-else-if="

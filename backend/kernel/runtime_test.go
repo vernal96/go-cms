@@ -1709,7 +1709,7 @@ func TestProfileRuntimeRejectsInvalidTemplates(t *testing.T) {
 
 func TestCoreModuleRegistersAllStandardFieldTypes(t *testing.T) {
 	registry := core.Module{}.Registry()
-	if len(registry.FieldTypes) != 11 {
+	if len(registry.FieldTypes) != 12 {
 		t.Fatalf("standard field types = %d", len(registry.FieldTypes))
 	}
 

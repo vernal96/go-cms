@@ -2,6 +2,7 @@
 
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ElMessageBox } from 'element-plus'
 import FileExplorer from './FileExplorer.vue'
 import FolderMoveDialog from './FolderMoveDialog.vue'
 
@@ -42,9 +43,9 @@ const listing = {
   breadcrumbs: [],
   permissions: { read: true, create: true, update: true, delete: true },
   items: [
-    { kind: 'folder', id: 1, parent_id: null, storage: 'public', name: 'Каталог', item_count: 0, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-02T10:00:00Z' },
-    { kind: 'file', id: 2, parent_id: null, storage: 'public', name: 'a.txt', mime_type: 'text/plain', size: 10, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-02T10:00:00Z' },
-    { kind: 'file', id: 3, parent_id: null, storage: 'public', name: 'b.txt', mime_type: 'text/plain', size: 20, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-02T10:00:00Z' },
+    { kind: 'folder', source_file_id: null, id: 1, folder_id: null, storage: 'public', name: 'Каталог', item_count: 0, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-02T10:00:00Z' },
+    { kind: 'file', source_file_id: null, id: 2, folder_id: null, storage: 'public', name: 'a.txt', mime_type: 'text/plain', size: 10, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-02T10:00:00Z' },
+    { kind: 'file', source_file_id: null, id: 3, folder_id: null, storage: 'public', name: 'b.txt', mime_type: 'text/plain', size: 20, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-02T10:00:00Z' },
   ],
 } as const
 
@@ -73,8 +74,8 @@ describe('FileExplorer', () => {
         breadcrumbs: [],
         permissions: { read: true, create: true, update: true, delete: true },
         items: [
-          { kind: 'file', id: 2, parent_id: null, storage: 'public', name: 'a.txt', mime_type: 'text/plain', size: 2048, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-02T10:00:00Z' },
-          { kind: 'folder', id: 1, parent_id: null, storage: 'public', name: 'Каталог', item_count: 3, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-02T10:00:00Z' },
+          { kind: 'file', source_file_id: null, id: 2, folder_id: null, storage: 'public', name: 'a.txt', mime_type: 'text/plain', size: 2048, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-02T10:00:00Z' },
+          { kind: 'folder', source_file_id: null, id: 1, folder_id: null, storage: 'public', name: 'Каталог', item_count: 3, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-02T10:00:00Z' },
         ],
       }))
     vi.stubGlobal('fetch', fetchMock)
@@ -142,8 +143,8 @@ describe('FileExplorer', () => {
         items: [{ code: 'public', visibility: 'public' }, { code: 'private', visibility: 'private' }],
         permissions: { read: true, create: true, update: true, delete: true },
       }))
-      .mockResolvedValueOnce(json({ kind: 'folder', id: 9, parent_id: null, storage: 'private', name: 'mail', created_at: '', updated_at: '' }))
-      .mockResolvedValueOnce(json({ ...listing, disk: { code: 'private', visibility: 'private' }, folder: { kind: 'folder', id: 9, parent_id: null, storage: 'private', name: 'mail', created_at: '', updated_at: '' } }))
+      .mockResolvedValueOnce(json({ kind: 'folder', source_file_id: null, id: 9, folder_id: null, storage: 'private', name: 'mail', created_at: '', updated_at: '' }))
+      .mockResolvedValueOnce(json({ ...listing, disk: { code: 'private', visibility: 'private' }, folder: { kind: 'folder', source_file_id: null, id: 9, folder_id: null, storage: 'private', name: 'mail', created_at: '', updated_at: '' } }))
     vi.stubGlobal('fetch', fetchMock)
     mount(FileExplorer, {
       props: { accessToken: 'token', permissions: new Set(['core.file.read']), initialStorage: 'private', initialPath: 'mail/uploads' },
@@ -154,7 +155,7 @@ describe('FileExplorer', () => {
   })
 
   it('ensures and opens a missing configured folder when create is allowed', async () => {
-    const folder = { kind: 'folder', id: 9, parent_id: 4, storage: 'private', name: 'uploads', created_at: '', updated_at: '' }
+    const folder = { kind: 'folder', source_file_id: null, id: 9, folder_id: 4, storage: 'private', name: 'uploads', created_at: '', updated_at: '' }
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(json({
         items: [{ code: 'private', visibility: 'private' }],
@@ -195,8 +196,8 @@ describe('FileExplorer', () => {
       disk: { code: 'public', visibility: 'public' }, folder: null, breadcrumbs: [],
       permissions: { read: true, create: true, update: true, delete: true },
       items: [
-        { kind: 'file', id: 2, parent_id: null, storage: 'public', name: 'a.txt', mime_type: 'text/plain', size: 10, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-02T10:00:00Z' },
-        { kind: 'file', id: 3, parent_id: null, storage: 'public', name: 'b.txt', mime_type: 'text/plain', size: 20, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-02T10:00:00Z' },
+        { kind: 'file', source_file_id: null, id: 2, folder_id: null, storage: 'public', name: 'a.txt', mime_type: 'text/plain', size: 10, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-02T10:00:00Z' },
+        { kind: 'file', source_file_id: null, id: 3, folder_id: null, storage: 'public', name: 'b.txt', mime_type: 'text/plain', size: 20, created_at: '2026-01-01T10:00:00Z', updated_at: '2026-01-02T10:00:00Z' },
       ],
     }
     const fetchMock = vi.fn()
@@ -285,7 +286,7 @@ describe('FileExplorer', () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(json({ items: [{ code: 'public', visibility: 'public' }], permissions: listing.permissions }))
       .mockResolvedValueOnce(json(listing))
-      .mockResolvedValueOnce(json({ kind: 'file', id: 4, name: 'upload.txt' }))
+      .mockResolvedValueOnce(json({ kind: 'file', source_file_id: null, id: 4, name: 'upload.txt' }))
       .mockResolvedValueOnce(json(listing))
     const wrapper = mountExplorer(fetchMock)
     await flushPromises()
@@ -319,4 +320,41 @@ describe('FileExplorer', () => {
 
     expect(wrapper.find('.file-drag-handle').exists()).toBe(false)
   })
+})
+
+
+describe('FileExplorer image delivery and deletion', () => {
+ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
+ const raster = { ...listing.items[1], name: 'photo.png', mime_type: 'image/png' }
+ function mockFiles(extra?: (url: string) => Response | undefined) {
+   const fetcher = vi.fn(async (url: string) => extra?.(url) ?? (url === '/api/files/disks'
+     ? json({ items: [{ code: 'public', label: 'Files', visibility: 'public' }], permissions: listing.permissions })
+     : url.startsWith('/api/files/items') ? json({ ...listing, items: [raster] }) : new Response('image')))
+   vi.stubGlobal('fetch', fetcher)
+   vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:test'), revokeObjectURL: vi.fn() })
+   return fetcher
+ }
+ it('uses a bounded thumbnail for tiles and loads full content only when opened', async () => {
+   const fetcher = mockFiles()
+   const wrapper = mount(FileExplorer, { props: { accessToken: 'token', permissions: new Set(['core.file.read']) } })
+   await flushPromises()
+   expect(fetcher.mock.calls.some(([u]) => u.includes('/2/thumbnail?'))).toBe(true)
+   expect(fetcher.mock.calls.some(([u]) => u.endsWith('/preview'))).toBe(false)
+   await wrapper.find('.file-tile').trigger('dblclick'); await flushPromises()
+   expect(fetcher.mock.calls.some(([u]) => u === '/api/files/2/preview')).toBe(true)
+   wrapper.unmount()
+ })
+ it('requests impact and warns about derivatives before confirmed cascade', async () => {
+   const fetcher = mockFiles((url) => url === '/api/files/delete-impact' ? json({ total_files: 3, derived_files: 2, media_references: 1, file_field_references: 0, token: 'snapshot' }) : url === '/api/files/delete' ? new Response(null, { status: 204 }) : undefined)
+   const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as Awaited<ReturnType<typeof ElMessageBox.confirm>>)
+   const wrapper = mount(FileExplorer, { props: { accessToken: 'token', permissions: new Set(['core.file.read','core.file.delete']) } })
+   await flushPromises(); await wrapper.find('.file-tile').trigger('click')
+   const button = wrapper.findAll('button').find(b => b.text().includes('Удалить'))
+   expect(button).toBeTruthy(); await button!.trigger('click'); await flushPromises()
+   expect(String(confirm.mock.calls[0]?.[0])).toContain('производные изображения: 2')
+   expect(String(confirm.mock.calls[0]?.[0])).toContain('медиа: 1')
+   const call = fetcher.mock.calls.find(([u]) => u === '/api/files/delete') as unknown as [string, RequestInit]
+   expect(JSON.parse(String(call[1].body))).toMatchObject({ policy: 'confirmed_media_cascade', impact_token: 'snapshot' })
+   wrapper.unmount()
+ })
 })

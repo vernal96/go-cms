@@ -78,6 +78,8 @@ type PermissionSet struct {
 }
 
 type Management struct {
+	images        *media.ImageService
+	imageFiles    *management.Files
 	repository    site.ManagementRepository
 	sites         management.SiteCatalog
 	resourceRepo  resource.ManagementRepository
@@ -97,6 +99,8 @@ type Management struct {
 }
 
 type ManagementDependencies struct {
+	Images             *media.ImageService
+	ImageFiles         *management.Files
 	Profiles           []kernel.Profile
 	SiteRepository     site.ManagementRepository
 	Sites              management.SiteCatalog
@@ -143,6 +147,7 @@ func NewManagement(dependencies ManagementDependencies) (*Management, error) {
 		return nil, err
 	}
 	return &Management{
+		images: dependencies.Images, imageFiles: dependencies.ImageFiles,
 		repository: dependencies.SiteRepository, sites: dependencies.Sites,
 		resourceRepo: dependencies.ResourceRepository, authorizer: dependencies.Authorizer,
 		policy: dependencies.SiteAccessPolicy, users: dependencies.Users,

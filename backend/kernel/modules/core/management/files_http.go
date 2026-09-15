@@ -21,6 +21,9 @@ type filesHTTP struct {
 }
 
 func registerFileRoutes(router chi.Router, handler *filesHTTP) {
+	if handler.files.images != nil {
+		registerImageRoutes(router, handler)
+	}
 	router.Get("/files/disks", handler.filesystemDisks)
 	router.Get("/files/items", handler.filesystemItems)
 	router.Get("/files/folders/resolve", handler.resolveFilesystemFolder)
@@ -33,6 +36,7 @@ func registerFileRoutes(router chi.Router, handler *filesHTTP) {
 	router.Get("/files/{fileID}/preview", handler.previewFilesystemFile)
 	router.Get("/files/{fileID}/download", handler.downloadFilesystemFile)
 	router.Post("/files/move", handler.moveFilesystemItems)
+	router.Post("/files/delete-impact", handler.deleteImpact)
 	router.Post("/files/delete", handler.deleteFilesystemItems)
 }
 
@@ -207,7 +211,9 @@ func (h *filesHTTP) moveFilesystemItems(response http.ResponseWriter, request *h
 }
 
 type filesystemDeleteRequest struct {
-	Items []filesystemItemRequest `json:"items"`
+	Policy      file.DeletePolicy       `json:"policy"`
+	ImpactToken string                  `json:"impact_token"`
+	Items       []filesystemItemRequest `json:"items"`
 }
 
 func (h *filesHTTP) deleteFilesystemItems(response http.ResponseWriter, request *http.Request) {
@@ -215,7 +221,17 @@ func (h *filesHTTP) deleteFilesystemItems(response http.ResponseWriter, request 
 	if !decodeBody(response, request, &payload) {
 		return
 	}
-	if err := h.files.DeleteFilesystemItems(request.Context(), actor(request), file.DeleteItemsInput{Items: filesystemReferences(payload.Items)}); err != nil {
+	var err error
+	switch payload.Policy {
+	case "", file.DeleteSafe:
+		err = h.files.DeleteFilesystemItems(request.Context(), actor(request), file.DeleteItemsInput{Items: filesystemReferences(payload.Items)})
+	case file.DeleteConfirmedMediaCascade:
+		err = h.files.DeleteConfirmed(request.Context(), actor(request), filesystemReferences(payload.Items), payload.ImpactToken)
+	default:
+		writeBadRequest(response, "invalid delete policy")
+		return
+	}
+	if err != nil {
 		writeManagementError(response, err)
 		return
 	}
@@ -285,4 +301,13 @@ func optionalFolderID(response http.ResponseWriter, raw string) (*file.FolderID,
 	}
 	result := file.FolderID(value)
 	return &result, true
+}
+
+func (h *filesHTTP) deleteImpact(response http.ResponseWriter, request *http.Request) {
+	var payload filesystemDeleteRequest
+	if !decodeBody(response, request, &payload) {
+		return
+	}
+	result, err := h.files.DeleteImpact(request.Context(), actor(request), filesystemReferences(payload.Items))
+	writeResult(response, http.StatusOK, result, err)
 }

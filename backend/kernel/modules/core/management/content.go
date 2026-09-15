@@ -13,6 +13,7 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/group"
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
@@ -919,6 +920,7 @@ func (m *Resources) CreateResource(
 }
 
 type ResourceDTO struct {
+	ImageMediaID     *media.ID         `json:"image_media_id"`
 	ID               resource.ID       `json:"id"`
 	SiteID           site.ID           `json:"site_id"`
 	Version          int64             `json:"version"`
@@ -974,6 +976,7 @@ type ResourceDetails struct {
 }
 
 type ResourceUpdateInput struct {
+	ImageMediaID     *media.ID
 	ExpectedVersion  int64
 	ParentID         *resource.ID
 	Type             resourcetype.Code
@@ -1130,7 +1133,7 @@ func (m *Resources) UpdateResource(
 		Slug:             input.Slug,
 		Annotation:       input.Annotation,
 		Content:          input.Content,
-		ImageMediaID:     current.ImageMediaID,
+		ImageMediaID:     input.ImageMediaID,
 		TargetResourceID: input.TargetResourceID,
 		ExternalURL:      input.ExternalURL,
 		IsPublic:         input.IsPublic,
@@ -1158,6 +1161,7 @@ func (m *Resources) UpdateResource(
 }
 
 type LibraryItemDTO struct {
+	ImageMediaID  *media.ID        `json:"image_media_id"`
 	ID            resource.ID      `json:"id"`
 	Version       int64            `json:"version"`
 	SiteID        site.ID          `json:"site_id"`
@@ -1204,6 +1208,7 @@ type LibraryItemsInput struct {
 }
 
 type LibraryItemCreateInput struct {
+	ImageMediaID  *media.ID
 	Template      *template.Code
 	Title         string
 	Slug          string
@@ -1255,7 +1260,7 @@ func (m *Resources) CreateLibraryItem(ctx context.Context, actor security.Actor,
 	if err := m.requireSite(ctx, actor, siteID, ResourceCreatePermission, SiteAccessEdit); err != nil {
 		return LibraryItemDetails{}, err
 	}
-	item, err := m.libraryItems.Create(ctx, actor, resource.CreateLibraryItemInput{SiteID: siteID, LibraryID: libraryID, Template: input.Template, Title: input.Title, Slug: input.Slug, Annotation: input.Annotation, Content: input.Content, IsPublic: input.IsPublic, IsSearchable: input.IsSearchable, PublishedAt: input.PublishedAt, UnpublishedAt: input.UnpublishedAt, Fields: input.Fields})
+	item, err := m.libraryItems.Create(ctx, actor, resource.CreateLibraryItemInput{ImageMediaID: input.ImageMediaID, SiteID: siteID, LibraryID: libraryID, Template: input.Template, Title: input.Title, Slug: input.Slug, Annotation: input.Annotation, Content: input.Content, IsPublic: input.IsPublic, IsSearchable: input.IsSearchable, PublishedAt: input.PublishedAt, UnpublishedAt: input.UnpublishedAt, Fields: input.Fields})
 	if err != nil {
 		return LibraryItemDetails{}, validationError(err)
 	}
@@ -1296,7 +1301,7 @@ func (m *Resources) UpdateLibraryItem(ctx context.Context, actor security.Actor,
 	if input.IsPublic == nil || input.IsSearchable == nil {
 		return LibraryItemDetails{}, ErrValidation
 	}
-	item, err := m.libraryItems.Update(ctx, actor, resource.UpdateLibraryItemInput{ID: itemID, ExpectedVersion: input.ExpectedVersion, Template: input.Template, Title: input.Title, Slug: input.Slug, Annotation: input.Annotation, Content: input.Content, IsPublic: *input.IsPublic, IsSearchable: *input.IsSearchable, PublishedAt: input.PublishedAt, UnpublishedAt: input.UnpublishedAt, Fields: input.Fields})
+	item, err := m.libraryItems.Update(ctx, actor, resource.UpdateLibraryItemInput{ImageMediaID: input.ImageMediaID, ID: itemID, ExpectedVersion: input.ExpectedVersion, Template: input.Template, Title: input.Title, Slug: input.Slug, Annotation: input.Annotation, Content: input.Content, IsPublic: *input.IsPublic, IsSearchable: *input.IsSearchable, PublishedAt: input.PublishedAt, UnpublishedAt: input.UnpublishedAt, Fields: input.Fields})
 	if err != nil {
 		return LibraryItemDetails{}, validationError(err)
 	}
@@ -1384,7 +1389,7 @@ func libraryItemDTO(library resource.Resource, item resource.LibraryItem) Librar
 	for key, value := range item.Fields {
 		fields[key] = value
 	}
-	return LibraryItemDTO{ID: item.ID, Version: item.Version, SiteID: item.SiteID, LibraryID: item.LibraryID, TemplateCode: item.Template, Title: item.Title, Slug: item.Slug, Annotation: item.Annotation, ContentType: item.ContentType, Content: item.Content, IsPublic: item.IsPublic, IsSearchable: item.IsSearchable, PublishedAt: item.PublishedAt, UnpublishedAt: item.UnpublishedAt, Deleted: item.DeletedAt != nil, DeletedAt: item.DeletedAt, Fields: fields, Widgets: resourceWidgets(item.Widgets), EffectiveURL: url}
+	return LibraryItemDTO{ImageMediaID: item.ImageMediaID, ID: item.ID, Version: item.Version, SiteID: item.SiteID, LibraryID: item.LibraryID, TemplateCode: item.Template, Title: item.Title, Slug: item.Slug, Annotation: item.Annotation, ContentType: item.ContentType, Content: item.Content, IsPublic: item.IsPublic, IsSearchable: item.IsSearchable, PublishedAt: item.PublishedAt, UnpublishedAt: item.UnpublishedAt, Deleted: item.DeletedAt != nil, DeletedAt: item.DeletedAt, Fields: fields, Widgets: resourceWidgets(item.Widgets), EffectiveURL: url}
 }
 
 func (m *Resources) CreateResourceWidget(
@@ -2066,6 +2071,7 @@ func resourceDTO(item resource.Resource) ResourceDTO {
 		typeSettings[key] = value
 	}
 	return ResourceDTO{
+		ImageMediaID:     item.ImageMediaID,
 		ID:               item.ID,
 		SiteID:           item.SiteID,
 		Version:          item.Version,

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vernal96/go-cms/kernel/cache"
+	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
@@ -775,3 +776,46 @@ var _ resource.LifecycleRepository = (*invalidatingResourceRepository)(nil)
 var _ resource.StatisticsRepository = (*invalidatingResourceRepository)(nil)
 var _ resource.QueryRepository = (*invalidatingResourceRepository)(nil)
 var _ resource.LibraryItemRepository = (*invalidatingResourceRepository)(nil)
+
+// Confirmed filesystem cascades mutate resource image ownership via database
+// FKs. Keep those writes on the same cache coherence boundary as resource CRUD.
+func (d *coherentDatabase) Files() file.Repository {
+	base := d.Database.Files()
+	management, ok := base.(file.ManagementRepository)
+	if !ok {
+		return base
+	}
+	cascade, ok := base.(file.CascadeRepository)
+	if !ok {
+		return base
+	}
+	return &invalidatingFileRepository{ManagementRepository: management, cascade: cascade, policy: d.policy}
+}
+
+type invalidatingFileRepository struct {
+	file.ManagementRepository
+	cascade file.CascadeRepository
+	policy  *repositoryCachePolicy
+}
+
+func (r *invalidatingFileRepository) DeleteImpact(ctx context.Context, items []file.ItemReference) (file.DeleteImpact, error) {
+	return r.cascade.DeleteImpact(ctx, items)
+}
+func (r *invalidatingFileRepository) DeleteConfirmed(ctx context.Context, items []file.ItemReference, token string, physical file.DeletePhysical) error {
+	impact, err := r.cascade.DeleteImpact(ctx, items)
+	if err != nil {
+		return err
+	}
+	if impact.Token != token {
+		return file.ErrConflict
+	}
+	tags := make([]cache.Tag, 0, len(impact.ResourceSites))
+	for _, id := range impact.ResourceSites {
+		tags = append(tags, siteResourcesTag(site.ID(id)))
+	}
+	return withRepositoryCacheWrite(r.policy, tags, func() error {
+		err := r.cascade.DeleteConfirmed(ctx, items, token, physical)
+		r.policy.invalidate(ctx, tags...)
+		return err
+	})
+}

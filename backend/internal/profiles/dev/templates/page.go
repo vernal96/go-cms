@@ -23,6 +23,7 @@ func Page() template.Definition {
 			},
 		},
 		Fields: []field.Definition{
+			{Key: "page_media", Type: field.TypeMedia, Label: "Медиа"},
 			{
 				Key:      "page_title",
 				Type:     field.TypeString,
@@ -54,7 +55,7 @@ func Page() template.Definition {
 			},
 		},
 		EditorTabs: []field.EditorTab{
-			{Code: "content", Label: "Контент", Fields: []string{"page_title", "page_text", "show_title"}},
+			{Code: "content", Label: "Контент", Fields: []string{"page_title", "page_text", "page_media", "show_title"}},
 			{Code: "layout", Label: "Макет", Fields: []string{"layout"}},
 		},
 	}

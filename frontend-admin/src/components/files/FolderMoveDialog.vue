@@ -85,7 +85,7 @@ function confirm(): void {
 }
 
 function alreadyThere(folderID: number | null): boolean {
-  return props.items.length > 0 && props.items.every((item) => item.parent_id === folderID)
+  return props.items.length > 0 && props.items.every((item) => item.folder_id === folderID)
 }
 </script>
 

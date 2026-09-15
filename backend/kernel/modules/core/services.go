@@ -28,6 +28,7 @@ type Services struct {
 	LibraryItems  *resource.LibraryService
 	Files         file.ManagementService
 	Media         media.Service
+	Images        *media.ImageService
 	Users         user.Service
 	Groups        group.Service
 	Authorization access.Service

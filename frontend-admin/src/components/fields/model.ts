@@ -14,6 +14,7 @@ const supportedTypes = new Set([
   'email',
   'phone',
   'file',
+  'media',
 	'json',
 ])
 
@@ -38,7 +39,7 @@ export function createFieldValues(
       result[field.key] = []
     } else if (type === 'int' || type === 'float') {
       result[field.key] = null
-    } else if (type === 'file') {
+    } else if (type === 'file' || type === 'media') {
       result[field.key] = null
 		} else if (type === 'json') {
 			result[field.key] = []
@@ -94,8 +95,8 @@ export function validateFieldValues(
       errors[field.key] = 'Введите число.'
       continue
     }
-    if (field.type === 'file' && (typeof value !== 'number' || !Number.isInteger(value) || value <= 0)) {
-      errors[field.key] = 'Выберите файл.'
+    if ((field.type === 'file' || field.type === 'media') && (typeof value !== 'number' || !Number.isInteger(value) || value <= 0)) {
+      errors[field.key] = field.type === 'media' ? 'Выберите изображение.' : 'Выберите файл.'
       continue
     }
 		if (field.type === 'json' && !Array.isArray(value) && (typeof value !== 'object' || value === null)) {

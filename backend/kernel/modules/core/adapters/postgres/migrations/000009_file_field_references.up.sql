@@ -1,10 +1,3 @@
-ALTER TABLE core.media
-    DROP CONSTRAINT fk_media_file,
-    ADD CONSTRAINT fk_media_file
-        FOREIGN KEY (file_id)
-            REFERENCES core.files (id)
-            ON DELETE RESTRICT;
-
 CREATE TABLE core.file_field_references
 (
     owner_kind TEXT   NOT NULL

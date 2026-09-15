@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -248,7 +249,7 @@ SELECT
     folder.id, folder.parent_id, folder.storage, folder.name,
     folder.created_at, folder.updated_at, folder.created_by, folder.updated_by,
     (SELECT count(*) FROM core.file_folders AS child WHERE child.parent_id = folder.id) +
-    (SELECT count(*) FROM core.files AS child WHERE child.folder_id = folder.id)
+    (SELECT count(*) FROM core.files AS child WHERE child.folder_id = folder.id AND child.parent_id IS NULL)
 FROM core.file_folders AS folder
 WHERE folder.storage = $1
   AND folder.parent_id IS NOT DISTINCT FROM $2
@@ -403,6 +404,7 @@ func (r *Repository) ListFiles(
 	rows, err := r.connector.Pool().Query(ctx, fileSelect+`
 WHERE storage = $1
   AND folder_id IS NOT DISTINCT FROM $2
+ AND parent_id IS NULL
 ORDER BY name, id;
 `, storage, folderID)
 	if err != nil {
@@ -923,10 +925,21 @@ func (r *Repository) DeleteItems(
 	items []file.ItemReference,
 	deletePhysical file.DeletePhysical,
 ) error {
+	return r.deleteItems(ctx, items, deletePhysical, "", nil)
+}
+func (r *Repository) DeleteImpact(ctx context.Context, items []file.ItemReference) (file.DeleteImpact, error) {
+	var impact file.DeleteImpact
+	err := r.deleteItems(ctx, items, nil, "", &impact)
+	return impact, err
+}
+func (r *Repository) DeleteConfirmed(ctx context.Context, items []file.ItemReference, token string, deletePhysical file.DeletePhysical) error {
+	return r.deleteItems(ctx, items, deletePhysical, token, nil)
+}
+func (r *Repository) deleteItems(ctx context.Context, items []file.ItemReference, deletePhysical file.DeletePhysical, token string, preview *file.DeleteImpact) error {
 	if ctx == nil {
 		return errors.New("delete filesystem items context is nil")
 	}
-	if deletePhysical == nil {
+	if deletePhysical == nil && preview == nil {
 		return errors.New("physical file deleter is nil")
 	}
 	fileIDs := make([]int64, 0)
@@ -1000,8 +1013,71 @@ FOR UPDATE OF item;
 	for index, item := range physical {
 		ids[index] = int64(item.ID)
 	}
-	if err := ensureFilesUnused(ctx, tx, ids); err != nil {
+
+	impact := file.DeleteImpact{SelectedCount: len(items), TotalFiles: len(physical)}
+	for _, item := range physical {
+		if item.ParentID != nil {
+			impact.DerivedFiles++
+		}
+	}
+	var mediaIDs []int64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(array_agg(id ORDER BY id),'{}'::bigint[]) FROM (SELECT id FROM core.media WHERE file_id=ANY($1::bigint[]) ORDER BY id FOR UPDATE) locked;`, ids).Scan(&mediaIDs); err != nil {
 		return err
+	}
+	impact.MediaReferences = len(mediaIDs)
+	// Owner rows must stay stable through physical deletion and FK clearing.
+	// Acquire these locks before touching storage, so a competing move/edit
+	// either completes before the snapshot or conflicts without data loss.
+	for _, query := range []string{
+		`SELECT id FROM core.resources WHERE image_media_id=ANY($1::bigint[]) OR id IN (SELECT resource_id FROM core.resource_media_references WHERE media_id=ANY($1::bigint[])) ORDER BY id FOR UPDATE`,
+		`SELECT id FROM core.library_items WHERE image_media_id=ANY($1::bigint[]) OR id IN (SELECT resource_id FROM core.resource_media_references WHERE media_id=ANY($1::bigint[])) ORDER BY id FOR UPDATE`,
+		`SELECT id FROM core.users WHERE avatar_media_id=ANY($1::bigint[]) ORDER BY id FOR UPDATE`,
+	} {
+		rows, err := tx.Query(ctx, query, mediaIDs)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+	}
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(array_agg(DISTINCT site_id ORDER BY site_id),'{}'::bigint[]) FROM (SELECT site_id FROM core.resources WHERE image_media_id=ANY($1::bigint[]) UNION SELECT site_id FROM core.library_items WHERE image_media_id=ANY($1::bigint[]) UNION SELECT e.site_id FROM core.resource_entities e JOIN core.resource_media_references mr ON mr.resource_id=e.id WHERE mr.media_id=ANY($1::bigint[])) owners;`, mediaIDs).Scan(&impact.ResourceSites); err != nil {
+		return err
+	}
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM core.file_field_references WHERE file_id=ANY($1::bigint[]);`, ids).Scan(&impact.FileFieldReferences); err != nil {
+		return err
+	}
+	var mediaFields string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(string_agg(resource_id::text || ':' || field_key || ':' || position::text || ':' || media_id::text, ',' ORDER BY resource_id,field_key,position),'') FROM core.resource_media_references WHERE media_id=ANY($1::bigint[])`, mediaIDs).Scan(&mediaFields); err != nil {
+		return err
+	}
+	impact.Token = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%v/%v/%v/%v/%d/%s", items, ids, mediaIDs, impact.ResourceSites, impact.FileFieldReferences, mediaFields))))
+	if preview != nil {
+		*preview = impact
+		return nil
+	}
+	if token != "" && token != impact.Token {
+		return file.ErrConflict
+	}
+	if impact.FileFieldReferences > 0 || (token == "" && impact.MediaReferences > 0) {
+		return file.ErrInUse
+	}
+
+	// Clear typed Media values atomically with the confirmed cascade. Their
+	// reference rows disappear through the owner-field FK.
+	if token != "" {
+		if _, err := tx.Exec(ctx, `DELETE FROM core.resource_field_values fv USING core.resource_media_references mr WHERE fv.resource_id=mr.resource_id AND fv.field_key=mr.field_key AND fv.position=mr.position AND mr.media_id=ANY($1::bigint[])`, mediaIDs); err != nil {
+			return err
+		}
 	}
 	if err := deletePhysical(ctx, physical); err != nil {
 		return err

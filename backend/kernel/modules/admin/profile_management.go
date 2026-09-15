@@ -16,11 +16,12 @@ import (
 const managedAvatarParam = "profile_avatar_managed"
 
 type ProfileAvatarDTO struct {
-	FileID    file.ID `json:"file_id"`
-	Name      string  `json:"name"`
-	MIMEType  string  `json:"mime_type"`
-	Size      int64   `json:"size"`
-	UpdatedAt string  `json:"updated_at"`
+	MediaID   media.ID `json:"media_id"`
+	FileID    file.ID  `json:"file_id"`
+	Name      string   `json:"name"`
+	MIMEType  string   `json:"mime_type"`
+	Size      int64    `json:"size"`
+	UpdatedAt string   `json:"updated_at"`
 }
 
 type ProfileDTO struct {
@@ -240,7 +241,8 @@ func (m *Management) profileResponse(
 	}
 	if resolved != nil {
 		result.Avatar = &ProfileAvatarDTO{
-			FileID: resolved.File.ID, Name: resolved.File.Name,
+			MediaID: resolved.Media.ID,
+			FileID:  resolved.File.ID, Name: resolved.File.Name,
 			MIMEType: resolved.File.MIMEType, Size: resolved.File.Size,
 			UpdatedAt: resolved.File.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"),
 		}

@@ -23,9 +23,9 @@ describe('FolderMoveDialog', () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(json({
         items: [
-          { kind: 'folder', id: 2, parent_id: null, storage: 'public', name: 'Источник' },
-          { kind: 'folder', id: 3, parent_id: null, storage: 'public', name: 'Назначение' },
-          { kind: 'file', id: 8, parent_id: null, storage: 'public', name: 'file.txt' },
+          { kind: 'folder', id: 2, folder_id: null, source_file_id: null, storage: 'public', name: 'Источник' },
+          { kind: 'folder', id: 3, folder_id: null, source_file_id: null, storage: 'public', name: 'Назначение' },
+          { kind: 'file', id: 8, folder_id: null, source_file_id: null, storage: 'public', name: 'file.txt' },
         ],
       }))
       .mockResolvedValueOnce(json({
@@ -37,7 +37,7 @@ describe('FolderMoveDialog', () => {
     const selected = [{
       kind: 'folder' as const,
       id: 2,
-      parent_id: null,
+      folder_id: null, source_file_id: null,
       storage: 'public',
       name: 'Источник',
       item_count: 1,

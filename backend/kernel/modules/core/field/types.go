@@ -25,6 +25,7 @@ func StandardTypes() Types {
 		DescribedType{Type: stringType{code: TypeEmail, rules: []string{"email"}}, Presentation: Metadata{Label: "Email", Editor: "email"}},
 		DescribedType{Type: phoneType{}, Presentation: Metadata{Label: "Телефон", Editor: "phone", Options: []ConfigField{{Key: "pattern", Label: "Шаблон", Type: TypeString}}}},
 		DescribedType{Type: fileType{}, Presentation: Metadata{Label: "Файл из библиотеки", Editor: "file", Options: []ConfigField{{Key: "storages", Label: "Хранилища", Type: TypeJSON, Editor: "core.string-list"}, {Key: "mime_types", Label: "MIME-типы", Type: TypeJSON, Editor: "core.string-list"}}}},
+		DescribedType{Type: mediaType{}, Presentation: Metadata{Label: "Медиа (изображение)", Editor: "media"}},
 		DescribedType{Type: jsonType{}, Presentation: Metadata{Label: "JSON", Editor: "json"}},
 	}
 }

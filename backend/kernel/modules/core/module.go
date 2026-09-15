@@ -13,6 +13,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/group"
+	image "github.com/vernal96/go-cms/kernel/modules/core/image"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
@@ -26,13 +27,15 @@ import (
 const ModuleCode kernel.ModuleCode = "core"
 
 const (
-	DurableCacheAlias cache.Alias = "durable"
-	HotCacheAlias     cache.Alias = "hot"
+	DurableCacheAlias   cache.Alias = "durable"
+	HotCacheAlias       cache.Alias = "hot"
+	ThumbnailCacheAlias cache.Alias = "thumbnails"
 )
 
 const defaultRepositoryCacheTTL = 5 * time.Minute
 
 type Config struct {
+	Images             *image.Limits
 	RepositoryCacheTTL time.Duration
 	ResourcePreview    resource.PreviewPolicy
 	ResourceRevisions  *resource.RevisionPolicy

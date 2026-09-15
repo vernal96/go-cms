@@ -32,6 +32,7 @@ func Profile(
 			{Module: core.Module{}, Config: core.Config{RepositoryCacheTTL: 5 * time.Minute}, Caches: []cache.Binding{
 				{Alias: core.DurableCacheAlias, Code: projectcache.FilesystemCode},
 				{Alias: core.HotCacheAlias, Code: projectcache.RedisCode},
+				{Alias: core.ThumbnailCacheAlias, Code: projectcache.FilesystemCode},
 			}},
 			{Module: seo.Module{}},
 			{Module: mail.Module{}, Config: mailConfig, Filesystems: []filesystem.Binding{{Alias: mail.SpoolFilesystemAlias, Code: spoolStorage}}},

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ImageEditor from '../components/images/ImageEditor.vue'
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import {
   ElAlert,
@@ -37,6 +38,7 @@ const error = ref('')
 const activeTab = ref('info')
 const profile = ref<ProfileUser | null>(null)
 const avatarURL = ref('')
+const imageEditorVisible = ref(false)
 const uploadInput = ref<HTMLInputElement | null>(null)
 const pickerVisible = ref(false)
 const info = reactive({ login: '', email: '', name: '', last_name: '', middle_name: '', phone: '' })
@@ -44,6 +46,8 @@ const password = reactive({ current: '', next: '', confirm: '' })
 
 onMounted(() => void load())
 onBeforeUnmount(revokeAvatar)
+
+async function imageSaved(): Promise<void> { await load(); emit('updated') }
 
 async function load(): Promise<void> {
   loading.value = true
@@ -169,7 +173,7 @@ async function loadAvatar(): Promise<void> {
   revokeAvatar()
   if (!profile.value?.avatar) return
   try {
-    const blob = await adminBlob('/api/admin/profile/avatar/preview', props.accessToken)
+    const blob = await adminBlob('/api/admin/profile/avatar/thumbnail', props.accessToken)
     avatarURL.value = URL.createObjectURL(blob)
   } catch (caught) {
     ElMessage.error(message(caught, 'Не удалось открыть аватар.'))
@@ -205,7 +209,8 @@ function message(value: unknown, fallback: string): string {
             <div class="profile-avatar-actions">
               <el-button :icon="Camera" @click="uploadInput?.click()">Загрузить</el-button>
               <el-button v-if="permissions.has('core.file.read')" :icon="FolderOpened" @click="pickerVisible = true">Выбрать файл</el-button>
-              <el-button v-if="profile.avatar" type="danger" plain :icon="Delete" @click="removeAvatar">Удалить</el-button>
+              <el-button v-if="profile.avatar?.media_id" @click="imageEditorVisible = true">Редактировать</el-button>
+ <el-button v-if="profile.avatar" type="danger" plain :icon="Delete" @click="removeAvatar">Удалить</el-button>
               <small>JPEG, PNG, WebP или GIF, до 5 МБ</small>
             </div>
             <input ref="uploadInput" hidden type="file" accept="image/jpeg,image/png,image/webp,image/gif" @change="uploadAvatar(($event.target as HTMLInputElement).files)" />
@@ -241,4 +246,5 @@ function message(value: unknown, fallback: string): string {
       @select="selectAvatar"
     />
   </section>
+<image-editor v-if="profile?.avatar?.media_id" v-model="imageEditorVisible" :access-token="accessToken" :base-url="'/api/admin/profile/avatar/image'" source-url="/api/admin/profile/avatar/image/source" current-url="/api/admin/profile/avatar/thumbnail" @saved="imageSaved" />
 </template>

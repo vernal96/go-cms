@@ -90,7 +90,7 @@ describe('ProfileView', () => {
     await flushPromises()
 
     wrapper.findComponent(FilePickerDialog).vm.$emit('select', {
-      kind: 'file', id: 7, parent_id: null, storage: 'private', name: 'avatar.png',
+      kind: 'file', id: 7, folder_id: null, source_file_id: null, storage: 'private', name: 'avatar.png',
       mime_type: 'image/png', size: 128,
       created_at: '2026-08-13T10:00:00Z', updated_at: '2026-08-13T10:00:00Z',
     })

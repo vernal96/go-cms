@@ -513,6 +513,9 @@ func (s *LibraryService) normalize(ctx context.Context, actor security.Actor, it
 	if err != nil {
 		return LibraryItem{}, err
 	}
+	if err := s.common.validateMediaFields(ctx, actor, item.FieldValues); err != nil {
+		return LibraryItem{}, err
+	}
 	references, err := templateRuntime.FieldSchema().FileReferences(fields)
 	if err != nil {
 		return LibraryItem{}, err

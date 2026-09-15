@@ -705,6 +705,8 @@ SELECT
         SELECT 1
         FROM core.resources
         WHERE image_media_id = $1
+        UNION ALL SELECT 1 FROM core.library_items WHERE image_media_id = $1
+        UNION ALL SELECT 1 FROM core.resource_media_references WHERE media_id = $1
     ),
     EXISTS (
         SELECT 1

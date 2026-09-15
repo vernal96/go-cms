@@ -24,6 +24,7 @@ import { useRoute } from 'vue-router'
 import { AdminAPIError, adminRequest, adminRequestVoid } from '../api/admin-api'
 import DynamicFieldsForm from '../components/fields/DynamicFieldsForm.vue'
 import TabbedDynamicFieldsForm from '../components/fields/TabbedDynamicFieldsForm.vue'
+import MediaImageField from '../components/images/MediaImageField.vue'
 import RichTextEditor from '../components/RichTextEditor.vue'
 import ResourceExtensionEditor from '../components/resource-extensions/ResourceExtensionEditor.vue'
 import ResourceWidgetsEditor from '../components/resource-widgets/ResourceWidgetsEditor.vue'
@@ -80,6 +81,7 @@ const siteDomain = ref('')
 const noTemplateValue = '__no_template__'
 
 const form = reactive({
+ image_media_id: null as number | null,
   parent_id: null as number | null,
   type: 'page' as ResourceTypeCode,
   template_code: null as string | null,
@@ -175,6 +177,7 @@ async function load(): Promise<void> {
     deletedAt.value = item.deleted_at
     resourceWidgets.value = item.widgets ?? []
     Object.assign(form, {
+ image_media_id: item.image_media_id ?? null,
       parent_id: item.parent_id,
       type: item.type,
       template_code: item.template_code,
@@ -332,6 +335,7 @@ async function submit(): Promise<void> {
 	}
 
 	const payload: ResourceUpdatePayload = {
+ image_media_id: form.image_media_id,
 		expected_version: resourceVersion.value,
     parent_id: form.parent_id,
     type: form.type,
@@ -478,6 +482,7 @@ watch(() => [route.params.siteId, route.params.resourceId], () => void load())
               <el-form-item label="Аннотация (введение)"><el-input v-model="form.annotation" type="textarea" :rows="7" :disabled="!canUpdate" /></el-form-item>
             </div>
             <div class="resource-main-secondary">
+              <el-form-item label="Изображение"><media-image-field v-model="form.image_media_id" :access-token="accessToken" :disabled="!canUpdate || deleted" /></el-form-item>
               <el-form-item v-if="supportsTemplate" label="Шаблон">
                 <el-select :model-value="templateSelection" class="full-width" :disabled="!canUpdate" @change="changeTemplate">
                   <el-option label="(без шаблона)" :value="noTemplateValue" />

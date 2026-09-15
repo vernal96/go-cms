@@ -188,7 +188,7 @@ async function loadAvatar(): Promise<void> {
   revokeAvatar()
   if (!props.user.has_avatar) return
   try {
-    const blob = await adminBlob('/api/admin/profile/avatar/preview', props.accessToken)
+    const blob = await adminBlob('/api/admin/profile/avatar/thumbnail', props.accessToken)
     avatarURL.value = URL.createObjectURL(blob)
   } catch (error) {
     handleAPIError(error)

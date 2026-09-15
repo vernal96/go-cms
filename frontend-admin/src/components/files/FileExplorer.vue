@@ -77,6 +77,7 @@ const previewVisible = ref(false)
 const previewKind = ref<'image' | 'audio' | 'video' | 'document'>('image')
 const previewItem = ref<FilesystemItem | null>(null)
 const thumbnailURLs = reactive<Record<string, string>>({})
+let thumbnailGeneration = 0
 const uploadInput = ref<HTMLInputElement | null>(null)
 const folderInput = ref<HTMLInputElement | null>(null)
 const contextMenu = ref<{ item: FilesystemItem; x: number; y: number } | null>(null)
@@ -215,7 +216,7 @@ function goBack(): void {
   if (target !== undefined) void loadFolder(target, false)
 }
 function goUp(): void {
-  void loadFolder(listing.value?.folder?.parent_id ?? null)
+  void loadFolder(listing.value?.folder?.folder_id ?? null)
 }
 function activate(item: FilesystemItem): void {
   if (item.kind === 'folder') void loadFolder(item.id)
@@ -269,12 +270,15 @@ async function rename(item: FilesystemItem): Promise<void> {
 async function remove(items = selectedItems.value): Promise<void> {
   if (!permissions.value.delete || items.length === 0) return
   try {
-    await ElMessageBox.confirm(`Удалить выбранные объекты (${items.length}) без возможности восстановления?`, 'Удаление', {
+    const impact = await adminRequest<{ total_files: number; derived_files: number; media_references: number; file_field_references: number; token: string }>('/api/files/delete-impact', props.accessToken, { method: 'POST', body: JSON.stringify({ items: items.map(reference) }) })
+    if (impact.file_field_references > 0) { ElMessage.error(`Удаление заблокировано: ссылки из файловых полей — ${impact.file_field_references}.`); return }
+    const warning = impact.derived_files || impact.media_references ? ` Также будут удалены производные изображения: ${impact.derived_files}; медиа: ${impact.media_references}. Ссылки на изображения у владельцев будут очищены. Всего файлов: ${impact.total_files}.` : ''
+    await ElMessageBox.confirm(`Удалить выбранные объекты (${items.length}) без возможности восстановления?${warning}`, 'Удаление', {
       type: 'warning', confirmButtonText: 'Удалить', cancelButtonText: 'Отмена',
     })
     await adminRequestVoid('/api/files/delete', props.accessToken, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: items.map(reference) }),
+      body: JSON.stringify({ items: items.map(reference), policy: 'confirmed_media_cascade', impact_token: impact.token }),
     })
     await loadFolder(listing.value?.folder?.id ?? null, false)
   } catch (caught) {
@@ -370,7 +374,7 @@ function canDrop(mode: 'internal' | 'external', targetFolderID: number | null): 
   const items = sortedItems.value.filter((item) => draggingKeys.value.has(itemKey(item)))
   if (!items.length) return false
   if (items.some((item) => item.kind === 'folder' && item.id === targetFolderID)) return false
-  return !items.every((item) => item.parent_id === targetFolderID)
+  return !items.every((item) => item.folder_id === targetFolderID)
 }
 
 function sameDropTarget(kind: 'current' | 'folder', id: number | null): boolean {
@@ -464,12 +468,11 @@ async function preview(item: FilesystemItem): Promise<void> {
 
 async function loadThumbnail(item: FilesystemItem): Promise<void> {
   const key = itemKey(item)
+  const generation = thumbnailGeneration
   try {
-    const blob = await adminBlob(`/api/files/${item.id}/preview`, props.accessToken)
-    if (!listing.value?.items.some((current) => itemKey(current) === key)) {
-      URL.revokeObjectURL(URL.createObjectURL(blob))
-      return
-    }
+    const blob = await adminBlob(`/api/files/${item.id}/thumbnail?width=128&height=128&fit=contain&position=center`, props.accessToken)
+    if (generation !== thumbnailGeneration || !listing.value?.items.some((current) => itemKey(current) === key)) return
+    if (thumbnailURLs[key]) URL.revokeObjectURL(thumbnailURLs[key])
     thumbnailURLs[key] = URL.createObjectURL(blob)
   } catch { /* the file tile keeps its type icon */ }
 }
@@ -492,6 +495,7 @@ function revokePreview(): void {
   previewItem.value = null
 }
 function revokeThumbnails(): void {
+  thumbnailGeneration++
   for (const url of Object.values(thumbnailURLs)) URL.revokeObjectURL(url)
   for (const key of Object.keys(thumbnailURLs)) delete thumbnailURLs[key]
 }
@@ -534,7 +538,7 @@ function diskLabel(item: FilesystemDisksResponse['items'][number]): string {
 }
 function itemKey(item: FilesystemItem): string { return `${item.kind}:${item.id}` }
 function reference(item: FilesystemItem): { kind: 'file' | 'folder'; id: number } { return { kind: item.kind, id: item.id } }
-function isImage(item: FilesystemItem): boolean { return item.mime_type?.startsWith('image/') ?? false }
+function isImage(item: FilesystemItem): boolean { return ['image/jpeg','image/png'].includes(item.mime_type ?? '') }
 function browserPreviewKind(item: FilesystemItem): 'image' | 'audio' | 'video' | 'document' | null {
   if (item.kind !== 'file') return null
   const mime = item.mime_type?.toLocaleLowerCase() ?? ''

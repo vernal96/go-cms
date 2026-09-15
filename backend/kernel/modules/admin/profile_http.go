@@ -23,6 +23,9 @@ func registerProfileRoutes(router chi.Router, handler *managementHTTP) {
 	router.Post("/profile/avatar/upload", handler.uploadProfileAvatar)
 	router.Delete("/profile/avatar", handler.removeProfileAvatar)
 	router.Get("/profile/avatar/preview", handler.previewProfileAvatar)
+	if handler.management.images != nil {
+		registerProfileImageRoutes(router, handler)
+	}
 }
 
 func (h *managementHTTP) getProfile(response http.ResponseWriter, request *http.Request) {

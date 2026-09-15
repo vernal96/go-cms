@@ -196,7 +196,11 @@ func (s *Schema) StoredValues(values map[string]any) ([]StoredValue, error) {
 			return nil, fmt.Errorf("field %q has no storage semantics", definition.Key)
 		}
 		if !storage.Multiple() {
-			result = append(result, StoredValue{Key: definition.Key, Kind: storage.StorageKind(), Value: value})
+			stored := StoredValue{Key: definition.Key, Kind: storage.StorageKind(), Value: value}
+			if reference, ok := storage.(ReferenceValueType); ok {
+				stored.ReferenceTarget = reference.ReferenceTarget()
+			}
+			result = append(result, stored)
 			continue
 		}
 		switch items := value.(type) {

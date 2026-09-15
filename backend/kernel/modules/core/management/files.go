@@ -8,12 +8,16 @@ import (
 
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
+	image "github.com/vernal96/go-cms/kernel/modules/core/image"
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
 // Files exposes file/folder management without coupling it to the admin UI.
 type Files struct {
+	images     *media.ImageService
+	thumbnails map[string]*image.Thumbnails
 	files      file.ManagementService
 	authorizer security.Authorizer
 }
@@ -47,16 +51,17 @@ type FilesystemDisks struct {
 }
 
 type FilesystemItemDTO struct {
-	Kind      file.ItemKind   `json:"kind"`
-	ID        int64           `json:"id"`
-	ParentID  *file.FolderID  `json:"parent_id"`
-	Storage   filesystem.Code `json:"storage"`
-	Name      string          `json:"name"`
-	MIMEType  *string         `json:"mime_type,omitempty"`
-	Size      *int64          `json:"size,omitempty"`
-	ItemCount *int            `json:"item_count,omitempty"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	Kind         file.ItemKind   `json:"kind"`
+	ID           int64           `json:"id"`
+	FolderID     *file.FolderID  `json:"folder_id"`
+	SourceFileID *file.ID        `json:"source_file_id"`
+	Storage      filesystem.Code `json:"storage"`
+	Name         string          `json:"name"`
+	MIMEType     *string         `json:"mime_type,omitempty"`
+	Size         *int64          `json:"size,omitempty"`
+	ItemCount    *int            `json:"item_count,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
 }
 
 type FilesystemBreadcrumbDTO struct {
@@ -272,14 +277,14 @@ func filesystemDiskDTO(item filesystem.DiskInfo) FilesystemDiskDTO {
 }
 
 func folderItemDTO(item file.Folder, count *int) FilesystemItemDTO {
-	return FilesystemItemDTO{Kind: file.ItemFolder, ID: int64(item.ID), ParentID: item.ParentID,
+	return FilesystemItemDTO{Kind: file.ItemFolder, ID: int64(item.ID), FolderID: item.ParentID,
 		Storage: item.Storage, Name: item.Name, ItemCount: count,
 		CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}
 }
 
 func fileItemDTO(item file.File) FilesystemItemDTO {
 	mimeType, size := item.MIMEType, item.Size
-	return FilesystemItemDTO{Kind: file.ItemFile, ID: int64(item.ID), ParentID: item.FolderID,
+	return FilesystemItemDTO{Kind: file.ItemFile, ID: int64(item.ID), FolderID: item.FolderID, SourceFileID: item.ParentID,
 		Storage: item.Storage, Name: item.Name, MIMEType: &mimeType, Size: &size,
 		CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}
 }
@@ -303,4 +308,19 @@ func fileValidationError(err error) error {
 	default:
 		return err
 	}
+}
+
+func (m *Files) DeleteImpact(ctx context.Context, actor security.Actor, items []file.ItemReference) (file.DeleteImpact, error) {
+	service, ok := m.files.(file.CascadeService)
+	if !ok {
+		return file.DeleteImpact{}, errors.New("delete impact service unavailable")
+	}
+	return service.DeleteImpact(ctx, actor, items)
+}
+func (m *Files) DeleteConfirmed(ctx context.Context, actor security.Actor, items []file.ItemReference, token string) error {
+	service, ok := m.files.(file.CascadeService)
+	if !ok {
+		return errors.New("cascade service unavailable")
+	}
+	return service.DeleteConfirmed(ctx, actor, items, token)
 }

@@ -2321,8 +2321,11 @@ func loadResourceFields(ctx context.Context, queryer rowQueryer, items []resourc
 	rows, err := queryer.Query(ctx, `
 SELECT resource_id, field_key, position, is_multi, value_kind,
        value_string, value_integer, value_float, value_boolean,
-       value_timestamp, value_reference, value_json
-FROM core.resource_field_values
+       value_timestamp, value_reference, value_json,
+       CASE WHEN EXISTS (SELECT 1 FROM core.resource_media_references mr
+                         WHERE mr.resource_id = fv.resource_id AND mr.field_key = fv.field_key AND mr.position = fv.position)
+            THEN 'media' ELSE '' END
+FROM core.resource_field_values fv
 WHERE resource_id = ANY($1::bigint[])
 ORDER BY resource_id, field_key, position;`, ids)
 	if err != nil {
@@ -2343,7 +2346,7 @@ ORDER BY resource_id, field_key, position;`, ids)
 		)
 		if err := rows.Scan(&resourceID, &stored.Key, &stored.Position, &stored.Multiple, &stored.Kind,
 			&stringValue, &integerValue, &floatValue, &booleanValue,
-			&timestampValue, &referenceValue, &rawJSON); err != nil {
+			&timestampValue, &referenceValue, &rawJSON, &stored.ReferenceTarget); err != nil {
 			return fmt.Errorf("scan resource field: %w", err)
 		}
 		switch stored.Kind {
@@ -2506,6 +2509,9 @@ func ensureMediaAvailable(
 	if err := transaction.QueryRow(ctx, `
 SELECT EXISTS
 (
+    SELECT 1 FROM core.resource_media_references WHERE media_id = $1
+    UNION ALL
+
     SELECT 1
     FROM core.resources
     WHERE image_media_id = $1
@@ -2765,6 +2771,23 @@ VALUES ('resource', $1, $2, $3);`, ownerID, key, id); err != nil {
 }
 
 func replaceResourceFields(ctx context.Context, tx pgx.Tx, resourceID resource.ID, siteID site.ID, libraryID *resource.ID, values []field.StoredValue) error {
+	var mediaIDs []media.ID
+	for _, stored := range values {
+		if stored.ReferenceTarget == "" {
+			continue
+		}
+		if stored.ReferenceTarget != field.ReferenceMedia || stored.Kind != field.StorageReference || stored.Multiple {
+			return resource.ErrInvalidReference
+		}
+		id, ok := stored.Value.(int64)
+		if !ok || id <= 0 {
+			return resource.ErrInvalidReference
+		}
+		mediaIDs = append(mediaIDs, media.ID(id))
+	}
+	if err := medialock.Lock(ctx, tx, mediaIDs...); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM core.resource_field_values WHERE resource_id = $1;`, resourceID); err != nil {
 		return fmt.Errorf("delete resource fields: %w", err)
 	}
@@ -2825,6 +2848,14 @@ INSERT INTO core.resource_field_values (
 			resourceID, siteID, libraryID, stored.Key, stored.Position, stored.Multiple, stored.Kind,
 			stringValue, integerValue, floatValue, booleanValue, timestampValue, referenceValue, jsonValue); err != nil {
 			return fmt.Errorf("insert resource field %q: %w", stored.Key, translateError(err))
+		}
+		if stored.ReferenceTarget == field.ReferenceMedia {
+			if err := ensureMediaAvailable(ctx, tx, media.ID(stored.Value.(int64)), 0); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO core.resource_media_references(resource_id,field_key,position,media_id) VALUES($1,$2,$3,$4)`, resourceID, stored.Key, stored.Position, referenceValue); err != nil {
+				return translateError(err)
+			}
 		}
 	}
 	return nil

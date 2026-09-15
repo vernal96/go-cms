@@ -161,7 +161,7 @@ CREATE TABLE core.library_items
             REFERENCES core.resources (id, site_id)
             ON DELETE CASCADE,
     CONSTRAINT fk_library_items_image_media
-        FOREIGN KEY (image_media_id) REFERENCES core.media (id) ON DELETE RESTRICT,
+        FOREIGN KEY (image_media_id) REFERENCES core.media (id) ON DELETE SET NULL,
     CONSTRAINT fk_library_items_created_by
         FOREIGN KEY (created_by) REFERENCES core.users (id) ON DELETE SET NULL,
     CONSTRAINT fk_library_items_updated_by

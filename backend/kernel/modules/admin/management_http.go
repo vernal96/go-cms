@@ -11,6 +11,8 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/group"
+	image "github.com/vernal96/go-cms/kernel/modules/core/image"
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/user"
@@ -121,6 +123,12 @@ func writeResult(response http.ResponseWriter, status int, result any, err error
 
 func writeManagementError(response http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, image.ErrInvalidTransform), errors.Is(err, image.ErrLimit), errors.Is(err, image.ErrUnsupportedFormat):
+		writeValidation(response, err.Error())
+	case errors.Is(err, media.ErrImageConflict):
+		httptransport.WriteJSONError(response, http.StatusConflict, "image_conflict", "image changed; reload editor")
+	case errors.Is(err, media.ErrNotFound):
+		httptransport.WriteJSONError(response, http.StatusNotFound, "not_found", "media not found")
 	case errors.Is(err, security.ErrUnauthenticated):
 		writeUnauthorized(response)
 	case errors.Is(err, security.ErrForbidden):

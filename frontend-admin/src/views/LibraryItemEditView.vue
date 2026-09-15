@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import { AdminAPIError, adminRequest } from '../api/admin-api'
 import DynamicFieldsForm from '../components/fields/DynamicFieldsForm.vue'
+import MediaImageField from '../components/images/MediaImageField.vue'
 import RichTextEditor from '../components/RichTextEditor.vue'
 import ResourceExtensionEditor from '../components/resource-extensions/ResourceExtensionEditor.vue'
 import ResourceWidgetsEditor from '../components/resource-widgets/ResourceWidgetsEditor.vue'
@@ -35,7 +36,7 @@ const resourceWidgets = ref<ResourceWidget[]>([])
 const resourceVersion = ref(0)
 const ownerLibraryId = ref(0)
 const activeTab = ref('main')
-const form = reactive({ library_id: 0, template_code: null as string | null, title: '', slug: '', annotation: '', content: '', is_public: true, is_searchable: true, published_at: null as Date | null, unpublished_at: null as Date | null, fields: {} as Record<string, unknown> })
+const form = reactive({ image_media_id: null as number | null, library_id: 0, template_code: null as string | null, title: '', slug: '', annotation: '', content: '', is_public: true, is_searchable: true, published_at: null as Date | null, unpublished_at: null as Date | null, fields: {} as Record<string, unknown> })
 const selectedTemplate = computed(() => metadata.value.templates.find((item) => item.code === form.template_code) ?? null)
 const applicableExtensions = computed(() => metadata.value.extensions.filter((extension) => extension.applies_to.includes('page')))
 const showWidgetsTab = computed(() => !creating.value && selectedTemplate.value?.supports_resource_widgets === true)
@@ -83,7 +84,7 @@ async function load(): Promise<void> {
       canReadHistory.value = details.permissions.history_read
       canDeleteHistory.value = details.permissions.history_delete
       resourceWidgets.value = item.widgets
-      Object.assign(form, { library_id: item.library_id, template_code: item.template_code, title: item.title, slug: item.slug, annotation: item.annotation, content: item.content, is_public: item.is_public, is_searchable: item.is_searchable, published_at: item.published_at ? new Date(item.published_at) : null, unpublished_at: item.unpublished_at ? new Date(item.unpublished_at) : null, fields: createFieldValues(loadedMetadata.templates.find((template) => template.code === item.template_code)?.fields ?? [], item.fields) })
+      Object.assign(form, { image_media_id: item.image_media_id ?? null, library_id: item.library_id, template_code: item.template_code, title: item.title, slug: item.slug, annotation: item.annotation, content: item.content, is_public: item.is_public, is_searchable: item.is_searchable, published_at: item.published_at ? new Date(item.published_at) : null, unpublished_at: item.unpublished_at ? new Date(item.unpublished_at) : null, fields: createFieldValues(loadedMetadata.templates.find((template) => template.code === item.template_code)?.fields ?? [], item.fields) })
     }
   } catch (error) { errorMessage.value = error instanceof Error ? error.message : 'Не удалось загрузить ресурс.' }
   finally { loading.value = false }
@@ -97,7 +98,7 @@ async function submit(): Promise<void> {
   const fields = selectedTemplate.value?.fields ?? []
   if (unsupportedFieldTypes(fields).length) { errorMessage.value = 'Шаблон содержит неподдерживаемые поля.'; return }
   fieldErrors.value = validateFieldValues(fields, form.fields); if (Object.keys(fieldErrors.value).length) return
-  const payload: LibraryItemPayload = { expected_version: creating.value ? undefined : resourceVersion.value, template_code: form.template_code, title: form.title.trim(), slug: form.slug.trim(), annotation: form.annotation, content: form.content, is_public: form.is_public, is_searchable: form.is_searchable, published_at: form.published_at?.toISOString() ?? null, unpublished_at: form.unpublished_at?.toISOString() ?? null, fields: { ...form.fields } }
+  const payload: LibraryItemPayload = { image_media_id: form.image_media_id, expected_version: creating.value ? undefined : resourceVersion.value, template_code: form.template_code, title: form.title.trim(), slug: form.slug.trim(), annotation: form.annotation, content: form.content, is_public: form.is_public, is_searchable: form.is_searchable, published_at: form.published_at?.toISOString() ?? null, unpublished_at: form.unpublished_at?.toISOString() ?? null, fields: { ...form.fields } }
   submitting.value = true
   try {
     if (creating.value) {
@@ -148,7 +149,8 @@ onMounted(() => void load())
           <div class="resource-main-grid">
             <div class="resource-main-primary">
               <el-form-item label="Название" required><el-input v-model="form.title" :disabled="!canUpdate" /></el-form-item>
-              <el-form-item label="Аннотация"><el-input v-model="form.annotation" type="textarea" :rows="7" :disabled="!canUpdate" /></el-form-item>
+              <el-form-item label="Изображение"><media-image-field v-model="form.image_media_id" :access-token="accessToken" :disabled="!canUpdate" /></el-form-item>
+ <el-form-item label="Аннотация"><el-input v-model="form.annotation" type="textarea" :rows="7" :disabled="!canUpdate" /></el-form-item>
             </div>
             <div class="resource-main-secondary">
               <el-form-item label="Библиотека"><el-select v-model="form.library_id" class="full-width" :disabled="creating || !canUpdate"><el-option v-for="item in libraries" :key="item.id" :label="item.display_title" :value="item.id" /></el-select></el-form-item>

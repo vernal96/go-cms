@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
@@ -96,6 +97,12 @@ func (r *Repository) Update(
 	item media.Media,
 	validate media.ValidateUsages,
 ) (_ media.Media, resultErr error) {
+	return r.update(ctx, actorID, item, validate, nil)
+}
+func (r *Repository) UpdateImage(ctx context.Context, actorID *security.UserID, item media.Media, expected time.Time, validate media.ValidateUsages) (media.Media, error) {
+	return r.update(ctx, actorID, item, validate, &expected)
+}
+func (r *Repository) update(ctx context.Context, actorID *security.UserID, item media.Media, validate media.ValidateUsages, expected *time.Time) (_ media.Media, resultErr error) {
 	if ctx == nil {
 		return media.Media{}, errors.New("update media context is nil")
 	}
@@ -122,17 +129,21 @@ func (r *Repository) Update(
 	}
 
 	var lockedID media.ID
+	var updatedAt time.Time
 	if err := transaction.QueryRow(ctx, `
-SELECT id
+SELECT id, updated_at
 FROM core.media
 WHERE id = $1
 FOR UPDATE;
-`, item.ID).Scan(&lockedID); errors.Is(err, pgx.ErrNoRows) {
+`, item.ID).Scan(&lockedID, &updatedAt); errors.Is(err, pgx.ErrNoRows) {
 		return media.Media{}, media.ErrNotFound
 	} else if err != nil {
 		return media.Media{}, fmt.Errorf("lock media %d: %w", item.ID, err)
 	}
 
+	if expected != nil && !updatedAt.Equal(*expected) {
+		return media.Media{}, media.ErrImageConflict
+	}
 	usages, err := mediaUsages(ctx, transaction, item.ID)
 	if err != nil {
 		return media.Media{}, err
@@ -152,7 +163,7 @@ SET
     file_id = $2,
     title = $3,
     params = $4::jsonb,
-    updated_at = now(),
+    updated_at = clock_timestamp(),
     updated_by = $5
 WHERE id = $1
 RETURNING
@@ -218,6 +229,9 @@ func mediaUsages(
 SELECT kind, owner_id
 FROM
 (
+    SELECT 'resource.image'::text AS kind, resource_id AS owner_id
+    FROM core.resource_media_references WHERE media_id = $1
+    UNION ALL
     SELECT
         'resource.image'::text AS kind,
         id AS owner_id

@@ -452,7 +452,8 @@ func (s *service) upload(
 		}
 	}
 	if input.ParentID != nil {
-		if _, err := s.repository.FileByID(ctx, *input.ParentID); err != nil {
+		_, err := s.repository.FileByID(ctx, *input.ParentID)
+		if err != nil {
 			return File{}, fmt.Errorf("get parent file: %w", err)
 		}
 	}
