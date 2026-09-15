@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/vernal96/go-cms/kernel/cache"
+	"github.com/vernal96/go-cms/kernel/entityhooks"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
@@ -44,6 +45,7 @@ func NewServices(
 	filesystems filesystem.Catalog,
 	passwordHashers user.PasswordHasherFactory,
 	cacheInvalidator cache.Invalidator,
+	hooks *entityhooks.Registry,
 ) (*Services, error) {
 	coherent, err := newCoherentDatabase(database, cacheInvalidator)
 	if err != nil {
@@ -91,7 +93,7 @@ func NewServices(
 	if err != nil {
 		return nil, err
 	}
-	groups, err := group.NewService(database.Groups(), authorization)
+	groups, err := group.NewService(database.Groups(), authorization, hooks)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +110,7 @@ func NewServices(
 		mediaService,
 		groups,
 		authorization,
+		hooks,
 	)
 	if err != nil {
 		return nil, err

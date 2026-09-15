@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vernal96/go-cms/kernel/entityhooks"
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/group"
@@ -301,6 +302,7 @@ func newService(
 		testMedia{},
 		groupAssignments,
 		testAccess{},
+		entityhooks.EmptyRegistry(entityhooks.Application, ""),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -522,6 +524,7 @@ func TestCreateValidatesAndPersistsGroupAssignments(t *testing.T) {
 		testMedia{},
 		assignments,
 		testAccess{},
+		entityhooks.EmptyRegistry(entityhooks.Application, ""),
 	)
 	if err != nil {
 		t.Fatal(err)

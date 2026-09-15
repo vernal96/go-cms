@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/vernal96/go-cms/kernel/entityhooks"
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/group"
 	"github.com/vernal96/go-cms/kernel/modules/core/media"
@@ -31,6 +32,7 @@ var (
 )
 
 type ApplicationService struct {
+	hooks      *entityhooks.Registry
 	repository Repository
 	hasher     PasswordHasher
 	media      MediaService
@@ -44,6 +46,7 @@ func NewService(
 	mediaService MediaService,
 	groupAssignments group.AssignmentValidator,
 	accessService access.Service,
+	hooks *entityhooks.Registry,
 ) (*ApplicationService, error) {
 	switch {
 	case repository == nil:
@@ -58,7 +61,11 @@ func NewService(
 		return nil, errors.New("user access service is nil")
 	}
 
+	if hooks == nil {
+		return nil, errors.New("entity hook registry is nil")
+	}
 	return &ApplicationService{
+		hooks:      hooks,
 		repository: repository,
 		hasher:     hasher,
 		media:      mediaService,
@@ -72,6 +79,12 @@ func (s *ApplicationService) Create(
 	actor security.Actor,
 	input CreateInput,
 ) (User, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationCreate, input.Password)
+	if hookErr != nil {
+		return User{}, hookErr
+	}
+	defer finishHooks()
+
 	if err := s.access.Check(ctx, actor, createPermission); err != nil {
 		return User{}, err
 	}
@@ -187,6 +200,12 @@ func (s *ApplicationService) Update(
 	actor security.Actor,
 	input UpdateInput,
 ) (User, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationUpdate, "")
+	if hookErr != nil {
+		return User{}, hookErr
+	}
+	defer finishHooks()
+
 	if err := s.access.Check(ctx, actor, updatePermission); err != nil {
 		return User{}, err
 	}
@@ -228,6 +247,12 @@ func (s *ApplicationService) UpdateCurrent(
 	actor security.Actor,
 	input UpdateCurrentInput,
 ) (User, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationProfile, "")
+	if hookErr != nil {
+		return User{}, hookErr
+	}
+	defer finishHooks()
+
 	current, err := s.currentRecord(ctx, actor)
 	if err != nil {
 		return User{}, err
@@ -245,6 +270,12 @@ func (s *ApplicationService) UpdateCurrentPreferences(
 	actor security.Actor,
 	preferences Preferences,
 ) (User, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationPreferences, "")
+	if hookErr != nil {
+		return User{}, hookErr
+	}
+	defer finishHooks()
+
 	current, err := s.currentRecord(ctx, actor)
 	if err != nil {
 		return User{}, err
@@ -260,6 +291,12 @@ func (s *ApplicationService) UpdateCurrentAvatar(
 	actor security.Actor,
 	avatarMediaID *media.ID,
 ) (User, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationAvatar, "")
+	if hookErr != nil {
+		return User{}, hookErr
+	}
+	defer finishHooks()
+
 	current, err := s.currentRecord(ctx, actor)
 	if err != nil {
 		return User{}, err
@@ -275,6 +312,12 @@ func (s *ApplicationService) ChangePassword(
 	id ID,
 	password string,
 ) (User, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationPassword, password)
+	if hookErr != nil {
+		return User{}, hookErr
+	}
+	defer finishHooks()
+
 	if err := s.access.Check(ctx, actor, updatePermission); err != nil {
 		return User{}, err
 	}
@@ -306,6 +349,12 @@ func (s *ApplicationService) ChangeCurrentPassword(
 	currentPassword string,
 	newPassword string,
 ) (User, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationPassword, newPassword)
+	if hookErr != nil {
+		return User{}, hookErr
+	}
+	defer finishHooks()
+
 	current, err := s.currentRecord(ctx, actor)
 	if err != nil {
 		return User{}, err
@@ -341,6 +390,12 @@ func (s *ApplicationService) Block(
 	actor security.Actor,
 	id ID,
 ) (User, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationBlock, "")
+	if hookErr != nil {
+		return User{}, hookErr
+	}
+	defer finishHooks()
+
 	if err := s.access.Check(ctx, actor, blockPermission); err != nil {
 		return User{}, err
 	}
@@ -366,6 +421,12 @@ func (s *ApplicationService) Unblock(
 	actor security.Actor,
 	id ID,
 ) (User, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationUnblock, "")
+	if hookErr != nil {
+		return User{}, hookErr
+	}
+	defer finishHooks()
+
 	if err := s.access.Check(ctx, actor, updatePermission); err != nil {
 		return User{}, err
 	}

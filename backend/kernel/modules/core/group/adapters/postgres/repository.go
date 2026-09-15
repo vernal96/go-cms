@@ -10,8 +10,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
+	"github.com/vernal96/go-cms/kernel/entityhooks"
 	"github.com/vernal96/go-cms/kernel/modules/core/group"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
+	userpostgres "github.com/vernal96/go-cms/kernel/modules/core/user/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 )
@@ -245,133 +247,110 @@ RETURNING
 	return result, nil
 }
 
-func (r *Repository) Delete(
-	ctx context.Context,
-	id group.ID,
-) error {
-	if ctx == nil {
-		return errors.New("delete group context is nil")
-	}
-	tag, err := r.connector.Pool().Exec(ctx, `
-DELETE FROM core.groups
-WHERE id = $1;
-`, id)
-	if err != nil {
-		return translateError(err)
-	}
-	if tag.RowsAffected() == 0 {
-		return group.ErrNotFound
-	}
-	return nil
-}
-
-func (r *Repository) AddUser(
-	ctx context.Context,
-	actorID *security.UserID,
-	groupID group.ID,
-	userID security.UserID,
-) (group.Membership, error) {
-	if ctx == nil {
-		return group.Membership{}, errors.New("add group user context is nil")
-	}
-	var item group.Membership
-	err := r.connector.Pool().QueryRow(ctx, `
-INSERT INTO core.user_groups
-(
-    user_id,
-    group_id,
-    created_by,
-    updated_by
-)
-SELECT
-    u.id,
-    g.id,
-    $3,
-    $3
-FROM core.users u
-CROSS JOIN core.groups g
-WHERE u.id = $1
-  AND u.blocked_at IS NULL
-  AND g.id = $2
-ON CONFLICT (user_id, group_id) DO UPDATE
-SET
-    updated_at = now(),
-    updated_by = EXCLUDED.updated_by
-RETURNING
-    user_id, group_id,
-    created_at, updated_at, created_by, updated_by;
-`, userID, groupID, actorID).Scan(
-		&item.UserID,
-		&item.GroupID,
-		&item.CreatedAt,
-		&item.UpdatedAt,
-		&item.CreatedBy,
-		&item.UpdatedBy,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return group.Membership{}, group.ErrInvalidReference
-	}
-	if err != nil {
-		return group.Membership{}, translateError(err)
-	}
-	return item, nil
-}
-
-func (r *Repository) RemoveUser(
-	ctx context.Context,
-	groupID group.ID,
-	userID security.UserID,
-) (resultErr error) {
-	if ctx == nil {
-		return errors.New("remove group user context is nil")
-	}
-	transaction, err := r.connector.Pool().BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin remove group user: %w", err)
-	}
-	defer rollbackOnError(transaction, &resultErr)()
-	if _, err := transaction.Exec(ctx, "LOCK TABLE core.users IN SHARE ROW EXCLUSIVE MODE"); err != nil {
-		return err
-	}
-	if _, err := transaction.Exec(ctx, "LOCK TABLE core.user_groups IN SHARE ROW EXCLUSIVE MODE"); err != nil {
-		return err
-	}
-	var activeAdmin bool
-	if err := transaction.QueryRow(ctx, `
-SELECT EXISTS (
-    SELECT 1
-    FROM core.user_groups ug
-    JOIN core.groups g ON g.id = ug.group_id
-    JOIN core.users u ON u.id = ug.user_id
-    WHERE ug.group_id = $1 AND ug.user_id = $2
-      AND g.code = 'admin' AND u.blocked_at IS NULL
-);
-`, groupID, userID).Scan(&activeAdmin); err != nil {
-		return err
-	}
-	if activeAdmin {
-		var activeAdmins int
-		if err := transaction.QueryRow(ctx, `
-SELECT count(*)
-FROM core.user_groups ug
-JOIN core.groups g ON g.id = ug.group_id
-JOIN core.users u ON u.id = ug.user_id
-WHERE g.code = 'admin' AND u.blocked_at IS NULL;
-`).Scan(&activeAdmins); err != nil {
+func (r *Repository) Delete(ctx context.Context, id group.ID) error {
+	return r.membershipTransaction(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT user_id FROM core.user_groups WHERE group_id=$1 ORDER BY user_id`, id)
+		if err != nil {
 			return err
 		}
-		if activeAdmins <= 1 {
-			return group.ErrLastAdministrator
+		var users []security.UserID
+		for rows.Next() {
+			var userID security.UserID
+			if err := rows.Scan(&userID); err != nil {
+				rows.Close()
+				return err
+			}
+			users = append(users, userID)
 		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		var actorID *security.UserID
+		if invocation := entityhooks.InvocationFrom(ctx); invocation != nil {
+			actorID = invocation.Actor.AuditUserID()
+		}
+		for _, userID := range users {
+			_, before, err := userpostgres.ReadHookState(ctx, tx, userID)
+			if err != nil {
+				return err
+			}
+			var next []group.ID
+			for _, groupID := range before.GroupIDs {
+				if groupID != id {
+					next = append(next, groupID)
+				}
+			}
+			if err := r.prepareMembership(ctx, tx, actorID, userID, next); err != nil {
+				return err
+			}
+			var remains bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM core.user_groups WHERE user_id=$1 AND group_id=$2)`, userID, id).Scan(&remains); err != nil {
+				return err
+			}
+			if remains {
+				return fmt.Errorf("user hook retained the deleted group")
+			}
+		}
+		tag, err := tx.Exec(ctx, `DELETE FROM core.groups WHERE id=$1`, id)
+		if err != nil {
+			return translateError(err)
+		}
+		if tag.RowsAffected() == 0 {
+			return group.ErrNotFound
+		}
+		return nil
+	})
+}
+
+func (r *Repository) AddUser(ctx context.Context, actorID *security.UserID, groupID group.ID, userID security.UserID) (group.Membership, error) {
+	var result group.Membership
+	err := r.membershipTransaction(ctx, func(tx pgx.Tx) error {
+		current, before, err := userpostgres.ReadHookState(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		if current.BlockedAt != nil {
+			return group.ErrInvalidReference
+		}
+		ids := append([]group.ID(nil), before.GroupIDs...)
+		found := false
+		for _, id := range ids {
+			if id == groupID {
+				found = true
+			}
+		}
+		if !found {
+			ids = append(ids, groupID)
+		}
+		if err := r.prepareMembership(ctx, tx, actorID, userID, ids); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT user_id,group_id,created_at,updated_at,created_by,updated_by FROM core.user_groups WHERE user_id=$1 AND group_id=$2`, userID, groupID).Scan(&result.UserID, &result.GroupID, &result.CreatedAt, &result.UpdatedAt, &result.CreatedBy, &result.UpdatedBy)
+	})
+	return result, err
+}
+
+func (r *Repository) RemoveUser(ctx context.Context, groupID group.ID, userID security.UserID) error {
+	var actorID *security.UserID
+	if invocation := entityhooks.InvocationFrom(ctx); invocation != nil {
+		actorID = invocation.Actor.AuditUserID()
 	}
-	if _, err := transaction.Exec(ctx, `
-DELETE FROM core.user_groups
-WHERE group_id = $1
-  AND user_id = $2;
-`, groupID, userID); err != nil {
-		return translateError(err)
-	}
-	return transaction.Commit(ctx)
+	return r.changeUserGroups(ctx, actorID, userID, func(current []group.ID) ([]group.ID, error) {
+		var next []group.ID
+		found := false
+		for _, id := range current {
+			if id == groupID {
+				found = true
+			} else {
+				next = append(next, id)
+			}
+		}
+		if !found {
+			return nil, group.ErrNotFound
+		}
+		return next, nil
+	})
 }
 
 func (r *Repository) Members(
@@ -444,96 +423,8 @@ ORDER BY g.code;
 	return result, rows.Err()
 }
 
-func (r *Repository) ReplaceUserGroups(
-	ctx context.Context,
-	actorID *security.UserID,
-	userID security.UserID,
-	groupIDs []group.ID,
-) (resultErr error) {
-	if ctx == nil {
-		return errors.New("replace user groups context is nil")
-	}
-	transaction, err := r.connector.Pool().BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin replace user groups: %w", err)
-	}
-	defer rollbackOnError(transaction, &resultErr)()
-	if _, err := transaction.Exec(ctx, "LOCK TABLE core.users IN SHARE ROW EXCLUSIVE MODE"); err != nil {
-		return err
-	}
-	if _, err := transaction.Exec(ctx, "LOCK TABLE core.user_groups IN SHARE ROW EXCLUSIVE MODE"); err != nil {
-		return err
-	}
-
-	var blockedAt *time.Time
-	if err := transaction.QueryRow(ctx, `
-SELECT blocked_at FROM core.users WHERE id = $1 FOR UPDATE;
-`, userID).Scan(&blockedAt); errors.Is(err, pgx.ErrNoRows) {
-		return group.ErrInvalidReference
-	} else if err != nil {
-		return err
-	}
-
-	rawIDs := make([]int64, len(groupIDs))
-	for index, id := range groupIDs {
-		rawIDs[index] = int64(id)
-	}
-	var currentAdmin, requestedAdmin bool
-	if err := transaction.QueryRow(ctx, `
-SELECT
-    EXISTS (
-        SELECT 1 FROM core.user_groups ug
-        JOIN core.groups g ON g.id = ug.group_id
-        WHERE ug.user_id = $1 AND g.code = 'admin'
-    ),
-    EXISTS (
-        SELECT 1 FROM core.groups g
-        WHERE g.id = ANY($2::bigint[]) AND g.code = 'admin'
-    );
-`, userID, rawIDs).Scan(&currentAdmin, &requestedAdmin); err != nil {
-		return err
-	}
-	if currentAdmin && !requestedAdmin && blockedAt == nil {
-		var activeAdmins int
-		if err := transaction.QueryRow(ctx, `
-SELECT count(*)
-FROM core.user_groups ug
-JOIN core.groups g ON g.id = ug.group_id
-JOIN core.users u ON u.id = ug.user_id
-WHERE g.code = 'admin' AND u.blocked_at IS NULL;
-`).Scan(&activeAdmins); err != nil {
-			return err
-		}
-		if activeAdmins <= 1 {
-			return group.ErrLastAdministrator
-		}
-	}
-
-	if _, err := transaction.Exec(ctx, `
-DELETE FROM core.user_groups
-WHERE user_id = $1 AND NOT (group_id = ANY($2::bigint[]));
-`, userID, rawIDs); err != nil {
-		return translateError(err)
-	}
-	var assigned int
-	if err := transaction.QueryRow(ctx, `
-WITH requested(group_id) AS (SELECT DISTINCT unnest($2::bigint[])),
-assigned AS (
-    INSERT INTO core.user_groups (user_id, group_id, created_by, updated_by)
-    SELECT $1, g.id, $3, $3
-    FROM requested JOIN core.groups g ON g.id = requested.group_id
-    ON CONFLICT (user_id, group_id) DO UPDATE
-    SET updated_at = now(), updated_by = EXCLUDED.updated_by
-    RETURNING group_id
-)
-SELECT count(*) FROM assigned;
-`, userID, rawIDs, actorID).Scan(&assigned); err != nil {
-		return translateError(err)
-	}
-	if assigned != len(groupIDs) {
-		return group.ErrInvalidReference
-	}
-	return transaction.Commit(ctx)
+func (r *Repository) ReplaceUserGroups(ctx context.Context, actorID *security.UserID, userID security.UserID, groupIDs []group.ID) error {
+	return r.changeUserGroups(ctx, actorID, userID, func(_ []group.ID) ([]group.ID, error) { return groupIDs, nil })
 }
 
 func (r *Repository) GrantPermission(
@@ -856,3 +747,75 @@ func rollbackOnError(transaction pgx.Tx, resultErr *error) func() {
 var _ group.Repository = (*Repository)(nil)
 var _ group.ManagementRepository = (*Repository)(nil)
 var _ group.StatisticsRepository = (*Repository)(nil)
+
+func (r *Repository) replaceUserGroupsTx(ctx context.Context, transaction pgx.Tx, actorID *security.UserID, userID security.UserID, groupIDs []group.ID) error {
+	var blockedAt *time.Time
+	if err := transaction.QueryRow(ctx, `
+SELECT blocked_at FROM core.users WHERE id = $1 FOR UPDATE;
+`, userID).Scan(&blockedAt); errors.Is(err, pgx.ErrNoRows) {
+		return group.ErrInvalidReference
+	} else if err != nil {
+		return err
+	}
+
+	rawIDs := make([]int64, len(groupIDs))
+	for index, id := range groupIDs {
+		rawIDs[index] = int64(id)
+	}
+	var currentAdmin, requestedAdmin bool
+	if err := transaction.QueryRow(ctx, `
+SELECT
+    EXISTS (
+        SELECT 1 FROM core.user_groups ug
+        JOIN core.groups g ON g.id = ug.group_id
+        WHERE ug.user_id = $1 AND g.code = 'admin'
+    ),
+    EXISTS (
+        SELECT 1 FROM core.groups g
+        WHERE g.id = ANY($2::bigint[]) AND g.code = 'admin'
+    );
+`, userID, rawIDs).Scan(&currentAdmin, &requestedAdmin); err != nil {
+		return err
+	}
+	if currentAdmin && !requestedAdmin && blockedAt == nil {
+		var activeAdmins int
+		if err := transaction.QueryRow(ctx, `
+SELECT count(*)
+FROM core.user_groups ug
+JOIN core.groups g ON g.id = ug.group_id
+JOIN core.users u ON u.id = ug.user_id
+WHERE g.code = 'admin' AND u.blocked_at IS NULL;
+`).Scan(&activeAdmins); err != nil {
+			return err
+		}
+		if activeAdmins <= 1 {
+			return group.ErrLastAdministrator
+		}
+	}
+
+	if _, err := transaction.Exec(ctx, `
+DELETE FROM core.user_groups
+WHERE user_id = $1 AND NOT (group_id = ANY($2::bigint[]));
+`, userID, rawIDs); err != nil {
+		return translateError(err)
+	}
+	var assigned int
+	if err := transaction.QueryRow(ctx, `
+WITH requested(group_id) AS (SELECT DISTINCT unnest($2::bigint[])),
+assigned AS (
+    INSERT INTO core.user_groups (user_id, group_id, created_by, updated_by)
+    SELECT $1, g.id, $3, $3
+    FROM requested JOIN core.groups g ON g.id = requested.group_id
+    ON CONFLICT (user_id, group_id) DO UPDATE
+    SET updated_at = now(), updated_by = EXCLUDED.updated_by
+    RETURNING group_id
+)
+SELECT count(*) FROM assigned;
+`, userID, rawIDs, actorID).Scan(&assigned); err != nil {
+		return translateError(err)
+	}
+	if assigned != len(groupIDs) {
+		return group.ErrInvalidReference
+	}
+	return nil
+}

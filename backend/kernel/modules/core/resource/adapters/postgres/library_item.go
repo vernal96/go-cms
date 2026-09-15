@@ -55,6 +55,10 @@ func (r *Repository) CreateLibraryItem(ctx context.Context, actorID *security.Us
 	if err != nil {
 		return resource.LibraryItem{}, err
 	}
+	item, err = r.prepareLibraryMutation(ctx, tx, nil, item)
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
 	if item.ImageMediaID != nil {
 		if err := medialock.Lock(ctx, tx, *item.ImageMediaID); err != nil {
 			return resource.LibraryItem{}, err
@@ -104,7 +108,7 @@ RETURNING `+libraryItemColumns+`;`, item.ID, item.SiteID, item.LibraryID, partit
 			return resource.LibraryItem{}, err
 		}
 	}
-	if err := appendResourceEvent(ctx, tx, resource.EventCreated, stored.ID, stored.SiteID, resource.StorageLibraryItem, stored.Version, actorID); err != nil {
+	if err := r.appendResourceEvent(ctx, tx, resource.EventCreated, stored.ID, stored.SiteID, resource.StorageLibraryItem, stored.Version, actorID); err != nil {
 		return resource.LibraryItem{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -166,12 +170,16 @@ func (r *Repository) updateLibraryItemOnce(ctx context.Context, actorID *securit
 			_ = tx.Rollback(context.Background())
 		}
 	}()
-	locked, err := r.libraryItemByID(ctx, tx, current.ID, true)
+	locked, err := r.libraryInTransaction(ctx, tx, current.ID)
 	if err != nil {
 		return resource.LibraryItem{}, err
 	}
 	if current.Version <= 0 || locked.Version != current.Version {
 		return resource.LibraryItem{}, resource.ErrConflict
+	}
+	item, err = r.prepareLibraryMutation(ctx, tx, &locked, item)
+	if err != nil {
+		return resource.LibraryItem{}, err
 	}
 	if err := lockRouteNamespace(ctx, tx, locked.SiteID); err != nil {
 		return resource.LibraryItem{}, err
@@ -254,7 +262,7 @@ RETURNING `+libraryItemColumns+`;`, item.ID, partitionAt, item.Template, item.Co
 			return resource.LibraryItem{}, translateError(err)
 		}
 	}
-	if err := appendResourceEvent(ctx, tx, resource.EventUpdated, updated.ID, updated.SiteID, resource.StorageLibraryItem, updated.Version, actorID); err != nil {
+	if err := r.appendResourceEvent(ctx, tx, resource.EventUpdated, updated.ID, updated.SiteID, resource.StorageLibraryItem, updated.Version, actorID); err != nil {
 		return resource.LibraryItem{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -264,14 +272,22 @@ RETURNING `+libraryItemColumns+`;`, item.ID, partitionAt, item.Template, item.Co
 }
 
 func (r *Repository) SoftDeleteLibraryItem(ctx context.Context, actorID *security.UserID, id resource.ID) error {
-	command, err := r.connector.Pool().Exec(ctx, `UPDATE core.library_items SET deleted_at=coalesce(deleted_at,now()), deleted_by=coalesce(deleted_by,$2), updated_at=now(), updated_by=$2 WHERE id=$1;`, id, actorID)
+	tx, err := r.connector.Pool().Begin(ctx)
 	if err != nil {
-		return translateError(err)
+		return err
 	}
-	if command.RowsAffected() == 0 {
-		return resource.ErrNotFound
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	state, err := r.eventState(ctx, tx, id)
+	if err != nil {
+		return err
 	}
-	return nil
+	if err := prepareLifecycle(ctx, []resource.EventState{state}, true, true); err != nil {
+		return err
+	}
+	if err := r.finishLifecycle(ctx, tx, []resource.EventState{state}, true, actorID, true); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) RestoreLibraryItem(ctx context.Context, actorID *security.UserID, id resource.ID) error {
@@ -280,7 +296,7 @@ func (r *Repository) RestoreLibraryItem(ctx context.Context, actorID *security.U
 		return err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	item, err := r.libraryItemByID(ctx, tx, id, true)
+	item, err := r.libraryInTransaction(ctx, tx, id)
 	if err != nil {
 		return err
 	}
@@ -294,12 +310,19 @@ func (r *Repository) RestoreLibraryItem(ctx context.Context, actorID *security.U
 	if err := ensureLibraryItemRouteAvailable(ctx, tx, library, item); err != nil {
 		return err
 	}
+	hookState := resource.StateFromLibraryItem(item)
+	if err := prepareLifecycle(ctx, []resource.EventState{hookState}, false, true); err != nil {
+		return err
+	}
 	command, err := tx.Exec(ctx, `UPDATE core.library_items SET deleted_at=NULL, deleted_by=NULL, updated_at=now(), updated_by=$2 WHERE id=$1;`, id, actorID)
 	if err != nil {
 		return translateError(err)
 	}
 	if command.RowsAffected() == 0 {
 		return resource.ErrNotFound
+	}
+	if err := r.finishLifecycle(ctx, tx, []resource.EventState{hookState}, false, actorID, true); err != nil {
+		return err
 	}
 	return translateError(tx.Commit(ctx))
 }
@@ -310,11 +333,14 @@ func (r *Repository) DeleteLibraryItem(ctx context.Context, id resource.ID) erro
 		return err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	item, err := r.libraryItemByID(ctx, tx, id, true)
+	item, err := r.libraryInTransaction(ctx, tx, id)
 	if err != nil {
 		return err
 	}
 	if err := lockRouteNamespace(ctx, tx, item.SiteID); err != nil {
+		return err
+	}
+	if err := r.appendStateEvent(ctx, tx, resource.EventDeleted, resource.StateFromLibraryItem(item), nil); err != nil {
 		return err
 	}
 	if item.ImageMediaID != nil {
@@ -359,13 +385,21 @@ func (r *Repository) moveLibraryItemOnce(ctx context.Context, actorID *security.
 			_ = tx.Rollback(context.Background())
 		}
 	}()
-	item, err := r.libraryItemByID(ctx, tx, id, true)
+	item, err := r.libraryInTransaction(ctx, tx, id)
 	if err != nil {
 		return resource.LibraryItem{}, err
 	}
 	if item.Version != expectedVersion {
 		return resource.LibraryItem{}, resource.ErrConflict
 	}
+	hookBefore := item
+	hookCandidate := item
+	hookCandidate.LibraryID = targetLibraryID
+	hookCandidate, err = r.prepareLibraryMutation(ctx, tx, &hookBefore, hookCandidate)
+	if err != nil {
+		return resource.LibraryItem{}, err
+	}
+	targetLibraryID = hookCandidate.LibraryID
 	if err := lockRouteNamespace(ctx, tx, item.SiteID); err != nil {
 		return resource.LibraryItem{}, err
 	}
@@ -411,7 +445,7 @@ func (r *Repository) moveLibraryItemOnce(ctx context.Context, actorID *security.
 			return resource.LibraryItem{}, err
 		}
 	}
-	if err := appendResourceEvent(ctx, tx, resource.EventUpdated, moved.ID, moved.SiteID, resource.StorageLibraryItem, moved.Version, actorID); err != nil {
+	if err := r.appendResourceEvent(ctx, tx, resource.EventUpdated, moved.ID, moved.SiteID, resource.StorageLibraryItem, moved.Version, actorID); err != nil {
 		return resource.LibraryItem{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

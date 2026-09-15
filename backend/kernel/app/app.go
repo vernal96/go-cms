@@ -12,6 +12,7 @@ import (
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/console"
+	"github.com/vernal96/go-cms/kernel/entityhooks"
 	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/logging"
@@ -69,7 +70,9 @@ type bindingRuntime struct {
 }
 
 type App struct {
-	definition Definition
+	hookSources      []entityhooks.Source
+	applicationHooks *entityhooks.Registry
+	definition       Definition
 
 	loggerConnector logging.Connector
 	logger          *slog.Logger

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/vernal96/go-cms/kernel/cache"
+	"github.com/vernal96/go-cms/kernel/entityhooks"
 	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
@@ -454,6 +455,7 @@ func isNilValue(value any) bool {
 }
 
 type ModuleContext struct {
+	hooks        entityhooks.Registrar
 	resolver     DatabaseResolver
 	moduleCode   ModuleCode
 	application  ModuleApplication
@@ -496,6 +498,8 @@ func newModuleContext(
 		logger:       services.Logger,
 	}
 }
+
+func (c ModuleContext) EntityHooks() entityhooks.Registrar { return c.hooks }
 
 func (c ModuleContext) ModuleCode() ModuleCode {
 	return c.moduleCode
@@ -627,6 +631,7 @@ func ModuleDatabaseFrom[T ModuleDatabase](
 }
 
 type ProfileRuntime struct {
+	hooks     *entityhooks.Registry
 	blueprint *ProfileBlueprint
 	registry  Registry
 	widgets   *widget.Catalog
@@ -693,6 +698,8 @@ func (r *ProfileRuntime) Blueprint() *ProfileBlueprint {
 	}
 	return r.blueprint
 }
+
+func (r *ProfileRuntime) EntityHooks() *entityhooks.Registry { return r.hooks }
 
 func (r *ProfileRuntime) Registry() Registry {
 	return r.registry
@@ -984,6 +991,7 @@ func (b *ProfileBlueprint) Build(
 
 	profile := b.profile
 	registry := b.registry.cloneDefinitions()
+	hooks := entityhooks.NewRegistry(entityhooks.Site, scope.SiteID())
 	widgetSources := make([]widget.Source, 0, len(profile.Modules))
 	for _, profileModule := range profile.Modules {
 		module := profileModule.Module
@@ -1055,6 +1063,13 @@ func (b *ProfileBlueprint) Build(
 			moduleFilesystems,
 		)
 
+		var hookDependencies []string
+		if provider, ok := module.(DependencyProvider); ok {
+			for _, code := range provider.Dependencies() {
+				hookDependencies = append(hookDependencies, string(code))
+			}
+		}
+		moduleContext.hooks = hooks.ForModule(string(module.Code()), hookDependencies)
 		runtime, err := module.Build(ctx, moduleContext)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -1107,6 +1122,9 @@ func (b *ProfileBlueprint) Build(
 		}
 	}
 
+	if err := hooks.Seal(); err != nil {
+		return nil, err
+	}
 	widgets, err := widget.Compile(widgetSources, profile.WidgetViews, registry)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -1124,6 +1142,7 @@ func (b *ProfileBlueprint) Build(
 		)
 	}
 	return &ProfileRuntime{
+		hooks:     hooks,
 		blueprint: b,
 		registry:  registry,
 		widgets:   widgets,

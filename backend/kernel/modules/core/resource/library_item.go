@@ -131,6 +131,12 @@ func NewLibraryService(repository LibraryItemRepository, common *Service) (*Libr
 }
 
 func (s *LibraryService) Create(ctx context.Context, actor security.Actor, input CreateLibraryItemInput) (LibraryItem, error) {
+	ctx, finishHooks, hookErr := s.common.beginMutation(ctx, actor, OperationCreate)
+	if hookErr != nil {
+		return LibraryItem{}, hookErr
+	}
+	defer finishHooks()
+
 	if err := validateContext(ctx, "library item create"); err != nil {
 		return LibraryItem{}, err
 	}
@@ -185,6 +191,12 @@ func (s *LibraryService) Get(ctx context.Context, actor security.Actor, id ID) (
 }
 
 func (s *LibraryService) Update(ctx context.Context, actor security.Actor, input UpdateLibraryItemInput) (LibraryItem, error) {
+	ctx, finishHooks, hookErr := s.common.beginMutation(ctx, actor, OperationUpdate)
+	if hookErr != nil {
+		return LibraryItem{}, hookErr
+	}
+	defer finishHooks()
+
 	if err := validateContext(ctx, "library item update"); err != nil {
 		return LibraryItem{}, err
 	}
@@ -226,6 +238,12 @@ func (s *LibraryService) Update(ctx context.Context, actor security.Actor, input
 }
 
 func (s *LibraryService) Move(ctx context.Context, actor security.Actor, id, targetLibraryID ID, expectedVersion int64) (LibraryItem, error) {
+	ctx, finishHooks, hookErr := s.common.beginMutation(ctx, actor, OperationMove)
+	if hookErr != nil {
+		return LibraryItem{}, hookErr
+	}
+	defer finishHooks()
+
 	if err := s.common.authorizer.Check(ctx, actor, updatePermission); err != nil {
 		return LibraryItem{}, err
 	}
@@ -397,6 +415,12 @@ func normalizeQueryFilterValue(kind field.StorageKind, operator FilterOperator, 
 }
 
 func (s *LibraryService) Delete(ctx context.Context, actor security.Actor, id ID, permanent bool) error {
+	ctx, finishHooks, hookErr := s.common.beginMutation(ctx, actor, deleteOperation(permanent))
+	if hookErr != nil {
+		return hookErr
+	}
+	defer finishHooks()
+
 	if err := s.common.authorizer.Check(ctx, actor, deletePermission); err != nil {
 		return err
 	}
@@ -407,6 +431,12 @@ func (s *LibraryService) Delete(ctx context.Context, actor security.Actor, id ID
 }
 
 func (s *LibraryService) Restore(ctx context.Context, actor security.Actor, id ID) error {
+	ctx, finishHooks, hookErr := s.common.beginMutation(ctx, actor, OperationRestore)
+	if hookErr != nil {
+		return hookErr
+	}
+	defer finishHooks()
+
 	if err := s.common.authorizer.Check(ctx, actor, deletePermission); err != nil {
 		return err
 	}
@@ -437,7 +467,7 @@ func (s *LibraryService) library(ctx context.Context, siteID site.ID, id ID) (Re
 	if item.SiteID != siteID || item.Type != resourcetype.Library || item.DeletedAt != nil {
 		return Resource{}, nil, ErrInvalidReference
 	}
-	runtime, exists := s.common.sites.RuntimeByID(siteID)
+	runtime, exists := s.common.runtime(ctx, siteID)
 	if !exists {
 		return Resource{}, nil, fmt.Errorf("resource site %d not found", siteID)
 	}
@@ -795,4 +825,11 @@ func cloneLibraryItem(item LibraryItem) LibraryItem {
 	item.DeletedAt = cloneTime(item.DeletedAt)
 	item.DeletedBy = cloneUserID(item.DeletedBy)
 	return item
+}
+
+func deleteOperation(permanent bool) Operation {
+	if permanent {
+		return OperationDelete
+	}
+	return OperationTrash
 }

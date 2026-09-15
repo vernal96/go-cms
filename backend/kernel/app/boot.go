@@ -80,12 +80,25 @@ func (a *App) boot(ctx context.Context) error {
 		return err
 	}
 
+	var knownHookModules []kernel.ModuleCode
+	for _, profile := range a.definition.Profiles {
+		for _, item := range profile.Modules {
+			knownHookModules = append(knownHookModules, item.Module.Code())
+		}
+	}
+	applicationHooks, err := kernel.BuildApplicationEntityHooks(ctx, a.definition.ModuleApplications, knownHookModules)
+	if err != nil {
+		return err
+	}
+	a.applicationHooks = applicationHooks
+
 	coreServices, err := core.NewServices(
 		a.coreDatabase,
 		a.permissions,
 		a.filesystems,
 		a.definition.PasswordHasher,
 		a.caches,
+		applicationHooks,
 	)
 	if err != nil {
 		return err
@@ -225,6 +238,10 @@ func (a *App) boot(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	hookRunner, hookTopics, err := a.prepareEntityHooks(ctx, catalog)
+	if err != nil {
+		return err
+	}
 	var publisher *outbox.Publisher
 	if len(a.outboxSources) > 0 {
 		publisher, err = outbox.NewPublisher(a.eventBus, a.outboxSources, a.logger, a.definition.OutboxPublisher)
@@ -245,6 +262,7 @@ func (a *App) boot(ctx context.Context) error {
 		a.workers.Wait()
 		return fmt.Errorf("prepare runtime background tasks: %w", err)
 	}
+	a.startEntityHooks(workerContext, hookRunner, hookTopics)
 	if len(a.outboxSources) > 0 {
 		a.outboxPublisher = publisher
 		a.workers.Add(1)

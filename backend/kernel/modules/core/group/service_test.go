@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vernal96/go-cms/kernel/entityhooks"
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/permission"
@@ -370,7 +371,7 @@ func TestSuperGroupChangesAndMembershipRequirePrivilege(t *testing.T) {
 	t.Parallel()
 
 	repository := newMemoryRepository()
-	service, err := NewService(repository, testAccess{})
+	service, err := NewService(repository, testAccess{}, entityhooks.EmptyRegistry(entityhooks.Application, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +424,7 @@ func TestValidateUserAssignmentRequiresUpdateAndPrivilege(t *testing.T) {
 	t.Parallel()
 
 	repository := newMemoryRepository()
-	service, err := NewService(repository, testAccess{})
+	service, err := NewService(repository, testAccess{}, entityhooks.EmptyRegistry(entityhooks.Application, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -484,7 +485,7 @@ func TestValidateUserAssignmentRequiresUpdateAndPrivilege(t *testing.T) {
 		checks: map[permission.Code]error{
 			updatePermission: forbidden,
 		},
-	})
+	}, entityhooks.EmptyRegistry(entityhooks.Application, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,7 +507,7 @@ func TestPermissionGrantsRequirePrivilegeAndKnownCatalogCode(
 	repository := newMemoryRepository()
 	service, err := NewService(repository, testAccess{
 		codes: []permission.Code{code},
-	})
+	}, entityhooks.EmptyRegistry(entityhooks.Application, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,7 +551,7 @@ var _ access.Service = testAccess{}
 func TestAdminGroupCannotBeDeletedOrDemoted(t *testing.T) {
 	t.Parallel()
 	repository := newMemoryRepository()
-	service, err := NewService(repository, testAccess{})
+	service, err := NewService(repository, testAccess{}, entityhooks.EmptyRegistry(entityhooks.Application, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -572,7 +573,7 @@ func TestServiceNormalizesAndReplacesSiteAccess(t *testing.T) {
 	service, err := NewService(repository, testAccess{
 		privileged: true,
 		checks:     map[permission.Code]error{},
-	})
+	}, entityhooks.EmptyRegistry(entityhooks.Application, ""))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -48,6 +48,10 @@ func (r *Repository) Create(
 	}
 	defer rollbackOnError(transaction, &resultErr)()
 
+	record, groupIDs, err = user.PrepareMutation(ctx, nil, record, groupIDs)
+	if err != nil {
+		return user.Record{}, err
+	}
 	if record.AvatarMediaID != nil {
 		if validate == nil {
 			return user.Record{}, errors.New("avatar validator is nil")
@@ -121,6 +125,9 @@ RETURNING
 		return user.Record{}, err
 	}
 
+	if err := r.appendMutation(ctx, transaction, nil, created.ID); err != nil {
+		return user.Record{}, err
+	}
 	if err := transaction.Commit(ctx); err != nil {
 		return user.Record{}, translateError(err)
 	}
@@ -320,7 +327,7 @@ FROM core.users;
 func (r *Repository) Update(
 	ctx context.Context,
 	actorID *security.UserID,
-	_ user.Record,
+	expected user.Record,
 	next user.Record,
 	validate user.ValidateAvatarMedia,
 ) (_ user.Record, resultErr error) {
@@ -350,6 +357,17 @@ FOR UPDATE;
 		return user.Record{}, err
 	}
 
+	if !locked.UpdatedAt.Equal(expected.UpdatedAt) {
+		return user.Record{}, user.ErrConflict
+	}
+	_, hookBefore, err := ReadHookState(ctx, transaction, next.ID)
+	if err != nil {
+		return user.Record{}, err
+	}
+	next, _, err = user.PrepareMutation(ctx, &hookBefore, next, hookBefore.GroupIDs)
+	if err != nil {
+		return user.Record{}, err
+	}
 	avatarChanged := !sameMediaID(
 		locked.AvatarMediaID,
 		next.AvatarMediaID,
@@ -429,6 +447,9 @@ WHERE id = $1;
 		}
 	}
 
+	if err := r.appendMutation(ctx, transaction, &hookBefore, updated.ID); err != nil {
+		return user.Record{}, err
+	}
 	if err := transaction.Commit(ctx); err != nil {
 		return user.Record{}, translateError(err)
 	}
@@ -444,7 +465,23 @@ func (r *Repository) ChangePassword(
 	if ctx == nil {
 		return user.Record{}, errors.New("change password context is nil")
 	}
-	record, err := scanRecord(r.connector.Pool().QueryRow(ctx, `
+	tx, err := r.connector.Pool().Begin(ctx)
+	if err != nil {
+		return user.Record{}, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	current, hookBefore, err := ReadHookState(ctx, tx, id)
+	if err != nil {
+		return user.Record{}, err
+	}
+	current.PasswordHash = passwordHash
+	next, _, err := user.PrepareMutation(ctx, &hookBefore, current, hookBefore.GroupIDs)
+	if err != nil {
+		return user.Record{}, err
+	}
+	passwordHash = next.PasswordHash
+
+	record, err := scanRecord(tx.QueryRow(ctx, `
 UPDATE core.users
 SET
     password_hash = $2,
@@ -457,7 +494,16 @@ RETURNING
     last_login_at, created_at, updated_at, blocked_at,
     created_by, updated_by, blocked_by;
 `, id, passwordHash, actorID))
-	return translateRecordResult(record, translateError(err))
+	if err != nil {
+		return user.Record{}, translateError(err)
+	}
+	if err := r.appendMutation(ctx, tx, &hookBefore, record.ID); err != nil {
+		return user.Record{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return user.Record{}, translateError(err)
+	}
+	return record, nil
 }
 
 func (r *Repository) RecordLogin(
@@ -526,6 +572,13 @@ FOR UPDATE;
 	if err != nil {
 		return user.Record{}, err
 	}
+	_, hookBefore, err := ReadHookState(ctx, transaction, id)
+	if err != nil {
+		return user.Record{}, err
+	}
+	if _, _, err := user.PrepareMutation(ctx, &hookBefore, current, hookBefore.GroupIDs); err != nil {
+		return user.Record{}, err
+	}
 	if current.BlockedAt == nil {
 		var (
 			isAdministrator bool
@@ -574,6 +627,9 @@ RETURNING
 	if err != nil {
 		return user.Record{}, translateError(err)
 	}
+	if err := r.appendMutation(ctx, transaction, &hookBefore, record.ID); err != nil {
+		return user.Record{}, err
+	}
 	if err := transaction.Commit(ctx); err != nil {
 		return user.Record{}, translateError(err)
 	}
@@ -588,7 +644,22 @@ func (r *Repository) Unblock(
 	if ctx == nil {
 		return user.Record{}, errors.New("unblock user context is nil")
 	}
-	record, err := scanRecord(r.connector.Pool().QueryRow(ctx, `
+	tx, err := r.connector.Pool().Begin(ctx)
+	if err != nil {
+		return user.Record{}, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	current, hookBefore, err := ReadHookState(ctx, tx, id)
+	if err != nil {
+		return user.Record{}, err
+	}
+	next, _, err := user.PrepareMutation(ctx, &hookBefore, current, hookBefore.GroupIDs)
+	if err != nil {
+		return user.Record{}, err
+	}
+	_ = next
+
+	record, err := scanRecord(tx.QueryRow(ctx, `
 UPDATE core.users
 SET
     blocked_at = NULL,
@@ -602,7 +673,16 @@ RETURNING
     last_login_at, created_at, updated_at, blocked_at,
     created_by, updated_by, blocked_by;
 `, id, actorID))
-	return translateRecordResult(record, translateError(err))
+	if err != nil {
+		return user.Record{}, translateError(err)
+	}
+	if err := r.appendMutation(ctx, tx, &hookBefore, record.ID); err != nil {
+		return user.Record{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return user.Record{}, translateError(err)
+	}
+	return record, nil
 }
 
 func ensureMediaAvailable(

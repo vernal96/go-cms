@@ -6,6 +6,8 @@ import (
 
 	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/entityhooks"
+	hookspostgres "github.com/vernal96/go-cms/kernel/entityhooks/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
@@ -189,3 +191,7 @@ var _ kernel.ModuleDatabaseFactory = DatabaseFactory{}
 var _ migrations.Provider = (*Database)(nil)
 var _ seeds.Provider = (*Database)(nil)
 var _ outbox.Provider = (*Database)(nil)
+
+func (d *Database) EntityHookSources() []entityhooks.Source {
+	return []entityhooks.Source{hookspostgres.NewSource(d.connector.Pool(), "core:"+string(d.connector.Code()), "core")}
+}

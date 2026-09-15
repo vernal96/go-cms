@@ -178,6 +178,12 @@ func (s *RevisionService) LibraryHistoryEnabled(siteID site.ID) bool {
 }
 
 func (s *RevisionService) Restore(ctx context.Context, actor security.Actor, siteID site.ID, resourceID ID, version, expectedVersion int64) (Resource, error) {
+	ctx, finishHooks, hookErr := s.resources.beginMutation(ctx, actor, OperationRevision)
+	if hookErr != nil {
+		return Resource{}, hookErr
+	}
+	defer finishHooks()
+
 	if err := s.authorizer.Check(ctx, actor, HistoryReadPermission); err != nil {
 		return Resource{}, err
 	}
@@ -208,14 +214,17 @@ func (s *RevisionService) Restore(ctx context.Context, actor security.Actor, sit
 		return Resource{}, ErrConflict
 	}
 	candidate := resourceFromSnapshot(current, *revision.Snapshot)
-	runtime, exists := s.resources.sites.RuntimeByID(siteID)
+	runtime, exists := s.resources.runtime(ctx, siteID)
 	if !exists {
 		return Resource{}, ErrNotFound
 	}
 	if err := s.resources.ensureNoParentCycle(ctx, candidate); err != nil {
 		return Resource{}, fmt.Errorf("%w: historical parent is invalid: %w", ErrInvalid, err)
 	}
+	historicalWidgets := candidate.Widgets
+	candidate.Widgets = nil
 	candidate, err = s.resources.normalize(ctx, actor, candidate, runtime, nil, current.FileReferences)
+	candidate.Widgets = historicalWidgets
 	if err != nil {
 		return Resource{}, fmt.Errorf("%w: historical state is invalid: %w", ErrInvalid, err)
 	}
@@ -320,8 +329,16 @@ func validateSnapshotWidgets(runtime *site.Runtime, candidate *Resource) error {
 	if !exists || !templateRuntime.SupportsResourceWidgets() {
 		return fmt.Errorf("%w: historical template does not support widgets", ErrInvalid)
 	}
+	positions := make(map[widget.AreaCode]map[int]bool)
 	for index := range candidate.Widgets {
 		binding := &candidate.Widgets[index]
+		if positions[binding.Area] == nil {
+			positions[binding.Area] = make(map[int]bool)
+		}
+		if binding.Position < 0 || positions[binding.Area][binding.Position] {
+			return fmt.Errorf("%w: duplicate or negative widget position", ErrInvalid)
+		}
+		positions[binding.Area][binding.Position] = true
 		widgetRuntime, exists := runtime.Profile().Widget(binding.Code)
 		if !exists || !templateRuntime.AllowsResourceArea(binding.Area) {
 			return fmt.Errorf("%w: historical widget %q is unavailable", ErrInvalid, binding.Code)

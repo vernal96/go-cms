@@ -10,12 +10,16 @@ import (
 )
 
 const (
+	EventDeleted       = "resource.deleted"
 	EventCreated       = "resource.created"
 	EventUpdated       = "resource.updated"
 	EventSchemaVersion = 1
 )
 
 type EventPayload struct {
+	Operation   Operation        `json:"operation"`
+	Before      *EventState      `json:"before,omitempty"`
+	After       *EventState      `json:"after,omitempty"`
 	ResourceID  ID               `json:"resource_id"`
 	SiteID      site.ID          `json:"site_id"`
 	StorageKind StorageKind      `json:"storage_kind"`
@@ -24,7 +28,7 @@ type EventPayload struct {
 }
 
 func NewEvent(name string, occurredAt time.Time, payload EventPayload) (domainevent.Envelope, error) {
-	if name != EventCreated && name != EventUpdated {
+	if name != EventCreated && name != EventUpdated && name != EventDeleted {
 		return domainevent.Envelope{}, errors.New("resource event name is unsupported")
 	}
 	if payload.ResourceID <= 0 || payload.SiteID <= 0 || payload.Version <= 0 ||

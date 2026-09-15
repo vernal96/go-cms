@@ -10,7 +10,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
-func TestResourceEventUsesSmallExplicitPayload(t *testing.T) {
+func TestResourceEventUsesExplicitPayload(t *testing.T) {
 	actor := security.UserID(9)
 	event, err := resource.NewEvent(resource.EventUpdated, time.Now(), resource.EventPayload{
 		ResourceID: 42, SiteID: site.ID(7), StorageKind: resource.StorageLibraryItem, Version: 19, ActorID: &actor,
@@ -22,7 +22,7 @@ func TestResourceEventUsesSmallExplicitPayload(t *testing.T) {
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]any{"resource_id": float64(42), "site_id": float64(7), "storage_kind": "library_item", "version": float64(19), "actor_id": float64(9)}
+	want := map[string]any{"resource_id": float64(42), "site_id": float64(7), "storage_kind": "library_item", "version": float64(19), "actor_id": float64(9), "operation": ""}
 	if len(payload) != len(want) {
 		t.Fatalf("payload contains unexpected resource snapshot fields: %#v", payload)
 	}
@@ -34,7 +34,7 @@ func TestResourceEventUsesSmallExplicitPayload(t *testing.T) {
 }
 
 func TestResourceEventRejectsUnsupportedFacts(t *testing.T) {
-	_, err := resource.NewEvent("resource.deleted", time.Now(), resource.EventPayload{ResourceID: 1, SiteID: 1, StorageKind: resource.StorageTree, Version: 1})
+	_, err := resource.NewEvent("resource.before_create", time.Now(), resource.EventPayload{ResourceID: 1, SiteID: 1, StorageKind: resource.StorageTree, Version: 1})
 	if err == nil {
 		t.Fatal("unsupported resource event was accepted")
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vernal96/go-cms/kernel/entityhooks"
 	"github.com/vernal96/go-cms/kernel/modules/core/access"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/permission"
@@ -21,6 +22,7 @@ var (
 )
 
 type ApplicationService struct {
+	hooks      *entityhooks.Registry
 	repository Repository
 	access     access.Service
 }
@@ -28,6 +30,7 @@ type ApplicationService struct {
 func NewService(
 	repository Repository,
 	accessService access.Service,
+	hooks *entityhooks.Registry,
 ) (*ApplicationService, error) {
 	if repository == nil {
 		return nil, errors.New("group repository is nil")
@@ -35,7 +38,11 @@ func NewService(
 	if accessService == nil {
 		return nil, errors.New("group access service is nil")
 	}
+	if hooks == nil {
+		return nil, errors.New("entity hook registry is nil")
+	}
 	return &ApplicationService{
+		hooks:      hooks,
 		repository: repository,
 		access:     accessService,
 	}, nil
@@ -249,6 +256,12 @@ func (s *ApplicationService) Delete(
 	actor security.Actor,
 	id ID,
 ) error {
+	ctx, finishHooks, hookErr := s.beginUserMutation(ctx, actor)
+	if hookErr != nil {
+		return hookErr
+	}
+	defer finishHooks()
+
 	if err := s.access.Check(ctx, actor, deletePermission); err != nil {
 		return err
 	}
@@ -276,6 +289,12 @@ func (s *ApplicationService) AddUser(
 	groupID ID,
 	userID security.UserID,
 ) (Membership, error) {
+	ctx, finishHooks, hookErr := s.beginUserMutation(ctx, actor)
+	if hookErr != nil {
+		return Membership{}, hookErr
+	}
+	defer finishHooks()
+
 	if err := s.access.Check(ctx, actor, updatePermission); err != nil {
 		return Membership{}, err
 	}
@@ -306,6 +325,12 @@ func (s *ApplicationService) RemoveUser(
 	groupID ID,
 	userID security.UserID,
 ) error {
+	ctx, finishHooks, hookErr := s.beginUserMutation(ctx, actor)
+	if hookErr != nil {
+		return hookErr
+	}
+	defer finishHooks()
+
 	if err := s.access.Check(ctx, actor, updatePermission); err != nil {
 		return err
 	}
@@ -371,6 +396,12 @@ func (s *ApplicationService) ReplaceUserGroups(
 	userID security.UserID,
 	ids []ID,
 ) error {
+	ctx, finishHooks, hookErr := s.beginUserMutation(ctx, actor)
+	if hookErr != nil {
+		return hookErr
+	}
+	defer finishHooks()
+
 	if userID <= 0 {
 		return errors.New("invalid user id")
 	}

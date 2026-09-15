@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/entityhooks"
 	"github.com/vernal96/go-cms/kernel/migrations"
 	"github.com/vernal96/go-cms/kernel/outbox"
 	"github.com/vernal96/go-cms/kernel/seeds"
@@ -141,6 +142,9 @@ func (a *App) openBinding(
 				return nil, err
 			}
 			a.seedPlan = append(a.seedPlan, plans...)
+		}
+		if provider, ok := database.(entityhooks.Provider); ok {
+			a.hookSources = append(a.hookSources, provider.EntityHookSources()...)
 		}
 		if provider, ok := database.(outbox.Provider); ok {
 			a.outboxSources = append(a.outboxSources, provider.OutboxSources()...)

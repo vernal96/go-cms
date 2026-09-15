@@ -82,10 +82,12 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 38 {
+	if len(entries) != 40 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	expected := map[string]bool{
+		"000020_entity_hook_calls.up.sql":                    false,
+		"000020_entity_hook_calls.down.sql":                  false,
 		"000019_resource_site_transfer.up.sql":               false,
 		"000019_resource_site_transfer.down.sql":             false,
 		"000018_reconcile_resource_field_schema.up.sql":      false,
@@ -211,7 +213,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err := manager.Up(ctx, plan); err != nil {
 		t.Fatalf("up: %v", err)
 	}
-	if err := manager.Down(ctx, plan, 2); err != nil {
+	if err := manager.Down(ctx, plan, 3); err != nil {
 		t.Fatalf("down reconciliation marker: %v", err)
 	}
 	if _, err := connector.Pool().Exec(ctx, `
@@ -234,7 +236,7 @@ ALTER TABLE core.resource_field_values
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 19 || !hasVersion || dirty {
+	if version != 20 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,
@@ -1815,6 +1817,11 @@ WHERE library_id=$1
 	}
 	if _, _, err := libraryItems.ResolveLibraryItemRoute(ctx, siteIDs["localhost"], "/archive/typed-item"); !errors.Is(err, resource.ErrNotFound) {
 		t.Fatalf("old library item route error = %v", err)
+	}
+	// Renaming the owning library changes the item's effective URL and version.
+	loadedLibraryItem, err = libraryItems.LibraryItemByID(ctx, loadedLibraryItem.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if _, err := libraryItems.MoveLibraryItem(ctx, nil, loadedLibraryItem.ID, root.ID, loadedLibraryItem.Version, false); !errors.Is(err, resource.ErrInvalidReference) {
 		t.Fatalf("move to non-library error = %v", err)

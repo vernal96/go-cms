@@ -208,6 +208,14 @@ SELECT EXISTS (
 		return resource.SiteTransferResult{}, err
 	}
 
+	hookStates, err := r.subtreeStates(ctx, tx, id, true)
+	if err != nil {
+		return resource.SiteTransferResult{}, err
+	}
+	hookSiblings, err := r.relatedStates(ctx, tx, id, sourceSiteID, resourceIDFromInt64(oldParentValue), resourceIDFromInt64(oldParentValue), false, true)
+	if err != nil {
+		return resource.SiteTransferResult{}, err
+	}
 	var targetSort int
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(sort)+1,0) FROM core.resources WHERE site_id=$1 AND parent_id IS NULL;`, targetSiteID).Scan(&targetSort); err != nil {
 		return resource.SiteTransferResult{}, translateError(err)
@@ -277,7 +285,24 @@ WHERE entity.site_id=$2 AND entity.id IN (SELECT id FROM owned_entities);`, id, 
 	if err := r.appendRevision(ctx, tx, updated, resource.RevisionUpdated, nil, actorID); err != nil {
 		return resource.SiteTransferResult{}, err
 	}
-	if err := appendResourceEvent(ctx, tx, resource.EventUpdated, updated.ID, updated.SiteID, resource.StorageTree, updated.Version, actorID); err != nil {
+	for _, before := range hookStates {
+		if before.ID != id {
+			if _, err := tx.Exec(ctx, `UPDATE core.resource_entities SET version=version+1 WHERE id=$1`, before.ID); err != nil {
+				return resource.SiteTransferResult{}, err
+			}
+		}
+		state, err := r.eventState(ctx, tx, before.ID)
+		if err != nil {
+			return resource.SiteTransferResult{}, err
+		}
+		if _, err := resource.PrepareMutation(ctx, &before, state); err != nil {
+			return resource.SiteTransferResult{}, err
+		}
+		if err := r.appendStateEvent(ctx, tx, resource.EventUpdated, state, actorID); err != nil {
+			return resource.SiteTransferResult{}, err
+		}
+	}
+	if err := r.finishRelated(ctx, tx, hookSiblings, actorID); err != nil {
 		return resource.SiteTransferResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

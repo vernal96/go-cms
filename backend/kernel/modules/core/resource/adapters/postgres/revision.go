@@ -18,48 +18,10 @@ import (
 )
 
 func snapshotFromResource(item resource.Resource) resource.Snapshot {
-	widgets := make([]resource.WidgetSnapshot, len(item.Widgets))
-	for index, binding := range item.Widgets {
-		widgets[index] = resource.WidgetSnapshot{
-			Code: binding.Code, Area: binding.Area, Position: binding.Position,
-			View: binding.Presentation.View, Columns: binding.Presentation.Columns,
-			MarginTop: binding.Presentation.MarginTop, MarginBottom: binding.Presentation.MarginBottom,
-			Enabled: binding.Presentation.Enabled, Params: binding.Params,
-		}
-	}
-	return resource.Snapshot{
-		StorageKind: resource.StorageTree, ParentID: item.ParentID, Type: item.Type,
-		Template: item.Template, ContentType: item.ContentType, Title: item.Title,
-		MenuTitle: item.MenuTitle, Slug: item.Slug, Annotation: item.Annotation,
-		Content: item.Content, ImageMediaID: item.ImageMediaID,
-		TargetResourceID: item.TargetResourceID, ExternalURL: item.ExternalURL,
-		IsPublic: item.IsPublic, IsSearchable: item.IsSearchable, InMenu: item.InMenu,
-		InSitemap: item.InSitemap, Sort: item.Sort, PublishedAt: item.PublishedAt,
-		UnpublishedAt: item.UnpublishedAt, Fields: item.Fields,
-		TypeSettings: item.TypeSettings, Widgets: widgets,
-	}
+	return resource.SnapshotFromResource(item)
 }
-
 func snapshotFromLibraryItem(item resource.LibraryItem) resource.Snapshot {
-	widgets := make([]resource.WidgetSnapshot, len(item.Widgets))
-	for index, binding := range item.Widgets {
-		widgets[index] = resource.WidgetSnapshot{
-			Code: binding.Code, Area: binding.Area, Position: binding.Position,
-			View: binding.Presentation.View, Columns: binding.Presentation.Columns,
-			MarginTop: binding.Presentation.MarginTop, MarginBottom: binding.Presentation.MarginBottom,
-			Enabled: binding.Presentation.Enabled, Params: binding.Params,
-		}
-	}
-	libraryID := item.LibraryID
-	return resource.Snapshot{
-		StorageKind: resource.StorageLibraryItem, LibraryID: &libraryID,
-		Template: item.Template, ContentType: item.ContentType, Title: item.Title,
-		Slug: item.Slug, Annotation: item.Annotation, Content: item.Content,
-		ImageMediaID: item.ImageMediaID, IsPublic: item.IsPublic,
-		IsSearchable: item.IsSearchable, PublishedAt: item.PublishedAt,
-		UnpublishedAt: item.UnpublishedAt, Fields: item.Fields,
-		TypeSettings: map[string]any{}, Widgets: widgets,
-	}
+	return resource.SnapshotFromLibraryItem(item)
 }
 
 func (r *Repository) appendRevision(ctx context.Context, tx pgx.Tx, item resource.Resource, kind resource.RevisionKind, sourceVersion *int64, actorID *security.UserID) error {
@@ -229,6 +191,21 @@ func (r *Repository) RestoreRevision(ctx context.Context, actorID *security.User
 	if err := lockRouteNamespace(ctx, tx, candidate.SiteID); err != nil {
 		return resource.Resource{}, err
 	}
+	lockedForHooks, err := r.treeInTransaction(ctx, tx, current.ID)
+	if err != nil {
+		return resource.Resource{}, err
+	}
+	if lockedForHooks.Version != current.Version {
+		return resource.Resource{}, resource.ErrConflict
+	}
+	candidate, err = resource.PrepareResourceMutation(ctx, &lockedForHooks, candidate)
+	if err != nil {
+		return resource.Resource{}, err
+	}
+	hookRelated, err := r.relatedChangeStates(ctx, tx, lockedForHooks, candidate)
+	if err != nil {
+		return resource.Resource{}, err
+	}
 	paths, err := prospectiveTreePaths(ctx, tx, candidate.ID, candidate.Path)
 	if err != nil {
 		return resource.Resource{}, err
@@ -312,7 +289,10 @@ UPDATE core.resources item SET path=tree.path,updated_at=now(),updated_by=$2 FRO
 			return resource.Resource{}, translateError(err)
 		}
 	}
-	if err := appendResourceEvent(ctx, tx, resource.EventUpdated, candidate.ID, candidate.SiteID, resource.StorageTree, candidate.Version, actorID); err != nil {
+	if err := r.finishRelated(ctx, tx, hookRelated, actorID); err != nil {
+		return resource.Resource{}, err
+	}
+	if err := r.appendResourceEvent(ctx, tx, resource.EventUpdated, candidate.ID, candidate.SiteID, resource.StorageTree, candidate.Version, actorID); err != nil {
 		return resource.Resource{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -337,12 +317,16 @@ func (r *Repository) restoreLibraryItemRevisionOnce(ctx context.Context, actorID
 			_ = tx.Rollback(context.Background())
 		}
 	}()
-	locked, err := r.libraryItemByID(ctx, tx, current.ID, true)
+	locked, err := r.libraryInTransaction(ctx, tx, current.ID)
 	if err != nil {
 		return resource.LibraryItem{}, err
 	}
 	if locked.SiteID != current.SiteID || locked.Version != current.Version || current.Version <= 0 {
 		return resource.LibraryItem{}, resource.ErrConflict
+	}
+	candidate, err = r.prepareLibraryMutation(ctx, tx, &locked, candidate)
+	if err != nil {
+		return resource.LibraryItem{}, err
 	}
 	if err := lockRouteNamespace(ctx, tx, candidate.SiteID); err != nil {
 		return resource.LibraryItem{}, err
@@ -423,7 +407,7 @@ WHERE id=$1 RETURNING `+libraryItemColumns+`;`, candidate.ID, candidate.LibraryI
 			return resource.LibraryItem{}, translateError(err)
 		}
 	}
-	if err := appendResourceEvent(ctx, tx, resource.EventUpdated, restored.ID, restored.SiteID, resource.StorageLibraryItem, restored.Version, actorID); err != nil {
+	if err := r.appendResourceEvent(ctx, tx, resource.EventUpdated, restored.ID, restored.SiteID, resource.StorageLibraryItem, restored.Version, actorID); err != nil {
 		return resource.LibraryItem{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

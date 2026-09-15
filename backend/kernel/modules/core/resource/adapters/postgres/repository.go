@@ -528,6 +528,15 @@ WHERE site_id = $1
 		return resource.Resource{}, fmt.Errorf("resolve resource create position: %w", err)
 	}
 
+	item, err = resource.PrepareResourceMutation(ctx, nil, item)
+	if err != nil {
+		return resource.Resource{}, err
+	}
+	// A before-create hook may choose another parent; ordering belongs to that
+	// final sibling list and is allocated by the adapter under the tree lock.
+	if err := transaction.QueryRow(ctx, `SELECT COALESCE(max(sort)+1,0) FROM core.resources WHERE site_id=$1 AND parent_id IS NOT DISTINCT FROM $2::bigint`, item.SiteID, item.ParentID).Scan(&item.Sort); err != nil {
+		return resource.Resource{}, translateError(err)
+	}
 	if item.ImageMediaID != nil {
 		if validate == nil {
 			return resource.Resource{}, errors.New(
@@ -659,7 +668,7 @@ RETURNING
 	if err := r.appendRevision(ctx, transaction, result, resource.RevisionCreated, nil, actorID); err != nil {
 		return resource.Resource{}, err
 	}
-	if err := appendResourceEvent(ctx, transaction, resource.EventCreated, result.ID, result.SiteID, resource.StorageTree, result.Version, actorID); err != nil {
+	if err := r.appendResourceEvent(ctx, transaction, resource.EventCreated, result.ID, result.SiteID, resource.StorageTree, result.Version, actorID); err != nil {
 		return resource.Resource{}, err
 	}
 
@@ -1088,6 +1097,22 @@ func (r *Repository) Update(
 		return resource.Resource{}, fmt.Errorf("lock resources for update: %w", err)
 	}
 
+	lockedForHooks, err := r.treeInTransaction(ctx, transaction, current.ID)
+	if err != nil {
+		return resource.Resource{}, err
+	}
+	if lockedForHooks.Version != current.Version {
+		return resource.Resource{}, resource.ErrConflict
+	}
+	item, err = resource.PrepareResourceMutation(ctx, &lockedForHooks, item)
+	if err != nil {
+		return resource.Resource{}, err
+	}
+	hookRelated, err := r.relatedChangeStates(ctx, transaction, lockedForHooks, item)
+	if err != nil {
+		return resource.Resource{}, err
+	}
+	current = lockedForHooks
 	mediaIDs := make([]media.ID, 0, 2)
 	if current.ImageMediaID != nil {
 		mediaIDs = append(mediaIDs, *current.ImageMediaID)
@@ -1360,7 +1385,10 @@ WHERE item.id = tree.id
 	if err := r.appendRevision(ctx, transaction, updated, resource.RevisionUpdated, nil, actorID); err != nil {
 		return resource.Resource{}, err
 	}
-	if err := appendResourceEvent(ctx, transaction, resource.EventUpdated, updated.ID, updated.SiteID, resource.StorageTree, updated.Version, actorID); err != nil {
+	if err := r.finishRelated(ctx, transaction, hookRelated, actorID); err != nil {
+		return resource.Resource{}, err
+	}
+	if err := r.appendResourceEvent(ctx, transaction, resource.EventUpdated, updated.ID, updated.SiteID, resource.StorageTree, updated.Version, actorID); err != nil {
 		return resource.Resource{}, err
 	}
 
@@ -1400,6 +1428,13 @@ func (r *Repository) SoftDelete(
 	if _, err := tx.Exec(ctx, `LOCK TABLE core.resources IN SHARE ROW EXCLUSIVE MODE;`); err != nil {
 		return fmt.Errorf("lock resources for soft delete: %w", err)
 	}
+	hookStates, err := r.subtreeStates(ctx, tx, id, true)
+	if err != nil {
+		return err
+	}
+	if err := prepareLifecycle(ctx, hookStates, true, false); err != nil {
+		return err
+	}
 	command, err := tx.Exec(ctx, `
 WITH RECURSIVE tree AS (
     SELECT id FROM core.resources WHERE id = $1
@@ -1416,6 +1451,9 @@ WHERE item.id IN (SELECT id FROM tree);`, id, actorID)
 	}
 	if command.RowsAffected() == 0 {
 		return resource.ErrNotFound
+	}
+	if err := r.finishLifecycle(ctx, tx, hookStates, true, actorID, false); err != nil {
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return translateError(err)
@@ -1474,6 +1512,13 @@ WHERE item.id = $1;`, id).Scan(&parentDeleted); errors.Is(err, pgx.ErrNoRows) {
 	if parentDeleted {
 		return resource.ErrInvalidTree
 	}
+	hookStates, err := r.subtreeStates(ctx, tx, id, withDescendants)
+	if err != nil {
+		return err
+	}
+	if err := prepareLifecycle(ctx, hookStates, false, false); err != nil {
+		return err
+	}
 	if withDescendants {
 		if _, err := tx.Exec(ctx, `
 WITH RECURSIVE tree AS (
@@ -1494,6 +1539,9 @@ WHERE id = $1;`, id, actorID); err != nil {
 		return translateError(err)
 	} else if command.RowsAffected() == 0 {
 		return resource.ErrNotFound
+	}
+	if err := r.finishLifecycle(ctx, tx, hookStates, false, actorID, false); err != nil {
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return translateError(err)
@@ -1539,6 +1587,19 @@ func (r *Repository) Delete(
 		return fmt.Errorf("lock resources for permanent delete: %w", err)
 	}
 
+	hookSiblings, err := r.relatedStates(ctx, transaction, id, deletedSiteID, resourceIDFromInt64(deletedParentID), resourceIDFromInt64(deletedParentID), false, true)
+	if err != nil {
+		return err
+	}
+	hookStates, err := r.subtreeStates(ctx, transaction, id, true)
+	if err != nil {
+		return err
+	}
+	for _, state := range hookStates {
+		if err := r.appendStateEvent(ctx, transaction, resource.EventDeleted, state, nil); err != nil {
+			return err
+		}
+	}
 	observedMediaIDs, exists, err := treeMediaIDs(
 		ctx,
 		transaction,
@@ -1660,6 +1721,9 @@ WHERE id = $1;
 		}
 	}
 
+	if err := r.finishRelated(ctx, transaction, hookSiblings, nil); err != nil {
+		return err
+	}
 	if err := transaction.Commit(ctx); err != nil {
 		return translateDeleteError(err)
 	}
@@ -1798,6 +1862,11 @@ func (r *Repository) CreateWidget(
 		return widget.Binding{}, translateError(err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
+	hookBefore, hookErr := r.eventState(ctx, tx, resourceID)
+	if hookErr != nil {
+		return widget.Binding{}, hookErr
+	}
+
 	version, err := lockWidgetResource(ctx, tx, resourceID, expectedVersion)
 	if err != nil {
 		return widget.Binding{}, err
@@ -1823,14 +1892,27 @@ RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bot
 	if err := touchWidgetResource(ctx, tx, resourceID); err != nil {
 		return widget.Binding{}, err
 	}
+	if err := r.prepareWidgetDraft(ctx, tx, hookBefore); err != nil {
+		return widget.Binding{}, err
+	}
 	if recordRevision {
 		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
 			return widget.Binding{}, err
 		}
 	}
-	if err := appendWidgetResourceEvent(ctx, tx, resourceID, version, actorID); err != nil {
+	if err := r.appendWidgetResourceEvent(ctx, tx, resourceID, version, actorID); err != nil {
 		return widget.Binding{}, err
 	}
+	hookBindings := []resource.Resource{{ID: resourceID}}
+	if err := loadResourceWidgets(ctx, tx, hookBindings); err != nil {
+		return widget.Binding{}, err
+	}
+	for _, binding := range hookBindings[0].Widgets {
+		if binding.ID == created.ID {
+			created = binding
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return widget.Binding{}, translateError(err)
 	}
@@ -1857,6 +1939,11 @@ func (r *Repository) UpdateWidget(
 		return widget.Binding{}, translateError(err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
+	hookBefore, hookErr := r.eventState(ctx, tx, resourceID)
+	if hookErr != nil {
+		return widget.Binding{}, hookErr
+	}
+
 	version, err := lockWidgetResource(ctx, tx, resourceID, expectedVersion)
 	if err != nil {
 		return widget.Binding{}, err
@@ -1876,14 +1963,27 @@ RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bot
 	if err := touchWidgetResource(ctx, tx, resourceID); err != nil {
 		return widget.Binding{}, err
 	}
+	if err := r.prepareWidgetDraft(ctx, tx, hookBefore); err != nil {
+		return widget.Binding{}, err
+	}
 	if recordRevision {
 		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
 			return widget.Binding{}, err
 		}
 	}
-	if err := appendWidgetResourceEvent(ctx, tx, resourceID, version, actorID); err != nil {
+	if err := r.appendWidgetResourceEvent(ctx, tx, resourceID, version, actorID); err != nil {
 		return widget.Binding{}, err
 	}
+	hookBindings := []resource.Resource{{ID: resourceID}}
+	if err := loadResourceWidgets(ctx, tx, hookBindings); err != nil {
+		return widget.Binding{}, err
+	}
+	for _, binding := range hookBindings[0].Widgets {
+		if binding.ID == updated.ID {
+			updated = binding
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return widget.Binding{}, translateError(err)
 	}
@@ -1906,6 +2006,11 @@ func (r *Repository) DeleteWidget(
 		return translateError(err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
+	hookBefore, hookErr := r.eventState(ctx, tx, resourceID)
+	if hookErr != nil {
+		return hookErr
+	}
+
 	version, err := lockWidgetResource(ctx, tx, resourceID, expectedVersion)
 	if err != nil {
 		return err
@@ -1931,12 +2036,15 @@ func (r *Repository) DeleteWidget(
 	if err := touchWidgetResource(ctx, tx, resourceID); err != nil {
 		return err
 	}
+	if err := r.prepareWidgetDraft(ctx, tx, hookBefore); err != nil {
+		return err
+	}
 	if recordRevision {
 		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
 			return err
 		}
 	}
-	if err := appendWidgetResourceEvent(ctx, tx, resourceID, version, actorID); err != nil {
+	if err := r.appendWidgetResourceEvent(ctx, tx, resourceID, version, actorID); err != nil {
 		return err
 	}
 	return translateError(tx.Commit(ctx))
@@ -1958,6 +2066,11 @@ func (r *Repository) ReorderWidgets(
 		return nil, translateError(err)
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
+	hookBefore, hookErr := r.eventState(ctx, tx, resourceID)
+	if hookErr != nil {
+		return nil, hookErr
+	}
+
 	version, err := lockWidgetResource(ctx, tx, resourceID, expectedVersion)
 	if err != nil {
 		return nil, err
@@ -2032,12 +2145,18 @@ func (r *Repository) ReorderWidgets(
 	if err := touchWidgetResource(ctx, tx, resourceID); err != nil {
 		return nil, err
 	}
+	if err := r.prepareWidgetDraft(ctx, tx, hookBefore); err != nil {
+		return nil, err
+	}
 	if recordRevision {
 		if err := r.appendWidgetRevision(ctx, tx, resourceID, version, actorID); err != nil {
 			return nil, err
 		}
 	}
-	if err := appendWidgetResourceEvent(ctx, tx, resourceID, version, actorID); err != nil {
+	if err := loadResourceWidgets(ctx, tx, loaded); err != nil {
+		return nil, err
+	}
+	if err := r.appendWidgetResourceEvent(ctx, tx, resourceID, version, actorID); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -99,6 +99,12 @@ func (s *Service) Create(
 	actor security.Actor,
 	input CreateInput,
 ) (Resource, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationCreate)
+	if hookErr != nil {
+		return Resource{}, hookErr
+	}
+	defer finishHooks()
+
 	if err := validateContext(ctx, "resource create"); err != nil {
 		return Resource{}, err
 	}
@@ -109,7 +115,7 @@ func (s *Service) Create(
 		return Resource{}, errors.New("resource site id is invalid")
 	}
 
-	siteRuntime, exists := s.sites.RuntimeByID(input.SiteID)
+	siteRuntime, exists := s.runtime(ctx, input.SiteID)
 	if !exists {
 		return Resource{}, fmt.Errorf(
 			"resource site %d not found",
@@ -248,6 +254,12 @@ func (s *Service) Update(
 	actor security.Actor,
 	input UpdateInput,
 ) (Resource, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationUpdate)
+	if hookErr != nil {
+		return Resource{}, hookErr
+	}
+	defer finishHooks()
+
 	if err := validateContext(ctx, "resource update"); err != nil {
 		return Resource{}, err
 	}
@@ -283,7 +295,7 @@ func (s *Service) Update(
 			err,
 		)
 	}
-	siteRuntime, exists := s.sites.RuntimeByID(current.SiteID)
+	siteRuntime, exists := s.runtime(ctx, current.SiteID)
 	if !exists {
 		return Resource{}, fmt.Errorf(
 			"resource site %d not found",
@@ -386,6 +398,12 @@ func (s *Service) Delete(
 	actor security.Actor,
 	id ID,
 ) error {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationTrash)
+	if hookErr != nil {
+		return hookErr
+	}
+	defer finishHooks()
+
 	if err := validateContext(ctx, "resource delete"); err != nil {
 		return err
 	}
@@ -407,6 +425,12 @@ func (s *Service) Delete(
 }
 
 func (s *Service) Restore(ctx context.Context, actor security.Actor, id ID, withDescendants bool) error {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationRestore)
+	if hookErr != nil {
+		return hookErr
+	}
+	defer finishHooks()
+
 	if err := validateContext(ctx, "resource restore"); err != nil {
 		return err
 	}
@@ -427,6 +451,12 @@ func (s *Service) Restore(ctx context.Context, actor security.Actor, id ID, with
 }
 
 func (s *Service) DeletePermanent(ctx context.Context, actor security.Actor, id ID) error {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationDelete)
+	if hookErr != nil {
+		return hookErr
+	}
+	defer finishHooks()
+
 	if err := validateContext(ctx, "resource permanent delete"); err != nil {
 		return err
 	}
@@ -443,6 +473,12 @@ func (s *Service) DeletePermanent(ctx context.Context, actor security.Actor, id 
 }
 
 func (s *Service) Move(ctx context.Context, actor security.Actor, id ID, parentID *ID, position int, expectedVersion int64) (Resource, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationMove)
+	if hookErr != nil {
+		return Resource{}, hookErr
+	}
+	defer finishHooks()
+
 	if position < 0 {
 		return Resource{}, fmt.Errorf("%w: resource position is invalid", ErrInvalid)
 	}
@@ -476,6 +512,12 @@ func (s *Service) TransferToSite(
 	expectedVersion int64,
 	compatibility SiteTransferCompatibility,
 ) (SiteTransferResult, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationTransfer)
+	if hookErr != nil {
+		return SiteTransferResult{}, hookErr
+	}
+	defer finishHooks()
+
 	if err := validateContext(ctx, "resource site transfer"); err != nil {
 		return SiteTransferResult{}, err
 	}
@@ -499,11 +541,11 @@ func (s *Service) TransferToSite(
 	if current.SiteID == targetSiteID || current.DeletedAt != nil || current.Path != nil && *current.Path == "/" {
 		return SiteTransferResult{}, ErrInvalidTree
 	}
-	sourceRuntime, exists := s.sites.RuntimeByID(current.SiteID)
+	sourceRuntime, exists := s.runtime(ctx, current.SiteID)
 	if !exists {
 		return SiteTransferResult{}, fmt.Errorf("resource source site %d not found", current.SiteID)
 	}
-	targetRuntime, exists := s.sites.RuntimeByID(targetSiteID)
+	targetRuntime, exists := s.runtime(ctx, targetSiteID)
 	if !exists {
 		return SiteTransferResult{}, fmt.Errorf("resource target site %d not found", targetSiteID)
 	}
@@ -691,6 +733,12 @@ func (s *Service) CreateWidget(
 	resourceID ID,
 	input CreateWidgetInput,
 ) (widget.Binding, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationWidgetCreate)
+	if hookErr != nil {
+		return widget.Binding{}, hookErr
+	}
+	defer finishHooks()
+
 	current, profileRuntime, templateRuntime, recordRevision, err := s.widgetMutationContext(ctx, actor, resourceID)
 	if err != nil {
 		return widget.Binding{}, err
@@ -743,6 +791,12 @@ func (s *Service) UpdateWidget(
 	bindingID widget.BindingID,
 	input UpdateWidgetInput,
 ) (widget.Binding, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationWidgetUpdate)
+	if hookErr != nil {
+		return widget.Binding{}, hookErr
+	}
+	defer finishHooks()
+
 	current, profileRuntime, _, recordRevision, err := s.widgetMutationContext(ctx, actor, resourceID)
 	if err != nil {
 		return widget.Binding{}, err
@@ -787,6 +841,12 @@ func (s *Service) DeleteWidget(
 	bindingID widget.BindingID,
 	expectedVersion int64,
 ) error {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationWidgetDelete)
+	if hookErr != nil {
+		return hookErr
+	}
+	defer finishHooks()
+
 	current, _, _, recordRevision, err := s.widgetMutationContext(ctx, actor, resourceID)
 	if err != nil {
 		return err
@@ -810,6 +870,12 @@ func (s *Service) ReorderWidgets(
 	expectedVersion int64,
 	order []widget.Order,
 ) ([]widget.Binding, error) {
+	ctx, finishHooks, hookErr := s.beginMutation(ctx, actor, OperationWidgetReorder)
+	if hookErr != nil {
+		return nil, hookErr
+	}
+	defer finishHooks()
+
 	current, _, templateRuntime, recordRevision, err := s.widgetMutationContext(ctx, actor, resourceID)
 	if err != nil {
 		return nil, err
@@ -904,7 +970,7 @@ func (s *Service) widgetMutationContext(
 			return Resource{}, nil, nil, false, err
 		}
 	}
-	siteRuntime, exists := s.sites.RuntimeByID(current.SiteID)
+	siteRuntime, exists := s.runtime(ctx, current.SiteID)
 	if !exists || current.Template == nil {
 		return Resource{}, nil, nil, false, fmt.Errorf("%w: resource template does not support widgets", ErrInvalid)
 	}
@@ -943,7 +1009,7 @@ func (s *Service) Tree(
 		return nil, errors.New("resource site id is invalid")
 	}
 
-	siteRuntime, exists := s.sites.RuntimeByID(siteID)
+	siteRuntime, exists := s.runtime(ctx, siteID)
 	if !exists {
 		return nil, fmt.Errorf("resource site %d not found", siteID)
 	}
@@ -1019,7 +1085,7 @@ func (s *Service) validateStored(
 		return Resource{}, errors.New("stored resource site id is invalid")
 	}
 
-	siteRuntime, exists := s.sites.RuntimeByID(item.SiteID)
+	siteRuntime, exists := s.runtime(ctx, item.SiteID)
 	if !exists {
 		return Resource{}, fmt.Errorf(
 			"stored resource %d references unknown site %d",

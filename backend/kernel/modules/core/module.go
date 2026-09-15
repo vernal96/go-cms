@@ -262,3 +262,7 @@ var _ kernel.Module = Module{}
 var _ kernel.ModuleDescriptorProvider = Module{}
 var _ kernel.RegistryProvider = Module{}
 var _ kernel.ModuleRuntime = (*Runtime)(nil)
+
+func (Module) EntityHookEventNames() []string {
+	return []string{resource.EventCreated, resource.EventUpdated, resource.EventDeleted, "user.created", "user.updated"}
+}
