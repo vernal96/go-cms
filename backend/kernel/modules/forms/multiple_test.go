@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/security"
 )
 
@@ -114,6 +115,7 @@ func TestInvalidListBoundsAreConfigurationErrors(t *testing.T) {
 func TestChangingMultiplicityRevalidatesExistingMailMapping(t *testing.T) {
 	repository := &repositoryStub{detail: publicHTTPFormDetail()}
 	service, _ := publicHTTPService(t, repository)
+	service.repository = &fieldUpdateRepositoryStub{repository}
 	action := mailActionType{mail: &mailIntegrationStub{}, fieldTypes: formsFieldResolver()}
 	if err := service.actions.Register(action); err != nil {
 		t.Fatal(err)
@@ -124,4 +126,12 @@ func TestChangingMultiplicityRevalidatesExistingMailMapping(t *testing.T) {
 	if _, err := service.UpdateField(context.Background(), security.User(1), repository.detail.Form.ID, item); !errors.Is(err, ErrConflict) {
 		t.Fatalf("incompatible mapping accepted: %v", err)
 	}
+}
+
+type fieldUpdateRepositoryStub struct {
+	*repositoryStub
+}
+
+func (r *fieldUpdateRepositoryStub) FormDetail(context.Context, site.ID, FormID) (FormDetail, error) {
+	return r.detail, nil
 }

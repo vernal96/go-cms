@@ -74,7 +74,7 @@ func TestProfileExposesDynamicParamsAndTemplateFields(t *testing.T) {
 	}
 	if len(profile.Templates) != 2 ||
 		profile.Templates[0].Code != "page" || len(profile.Templates[0].Fields) != 8 ||
-		profile.Templates[1].Code != "landing" || len(profile.Templates[1].Fields) != 6 {
+		profile.Templates[1].Code != "landing" || len(profile.Templates[1].Fields) != 14 {
 		t.Fatalf("templates = %#v", profile.Templates)
 	}
 	page := profile.Templates[0]
@@ -91,6 +91,7 @@ func TestProfileExposesDynamicParamsAndTemplateFields(t *testing.T) {
 		{Code: "content", Label: "Первый экран", Fields: []string{"hero_title", "hero_text"}},
 		{Code: "layout", Label: "Макет", Fields: []string{"columns", "content_width"}},
 		{Code: "audience", Label: "Аудитория", Fields: []string{"audiences"}},
+		{Code: "fields", Label: "Поля", Fields: []string{"feature_points", "promo_texts", "metrics", "prices", "contact_email", "contact_phone", "downloads", "showcase_media"}},
 	}
 	if !reflect.DeepEqual(profile.Templates[1].EditorTabs, wantLandingTabs) {
 		t.Fatalf("landing editor tabs = %#v", profile.Templates[1].EditorTabs)
