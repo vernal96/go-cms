@@ -83,6 +83,7 @@ export type FieldType =
   | 'phone'
   | 'file'
   | 'media'
+  | 'repeater'
 
 export interface FieldChoice {
   value: string
@@ -90,6 +91,9 @@ export interface FieldChoice {
 }
 
 export interface FieldOptions {
+  fields?: FieldDefinition[]
+  min_items?: number
+  max_items?: number
   [key: string]: unknown
   step?: number
   choices?: FieldChoice[]

@@ -15,6 +15,7 @@ const supportedTypes = new Set([
   'phone',
   'file',
   'media',
+  'repeater',
 	'json',
 ])
 
@@ -41,7 +42,7 @@ export function createFieldValues(
       result[field.key] = null
     } else if (type === 'file' || type === 'media') {
       result[field.key] = null
-		} else if (type === 'json') {
+		} else if (type === 'json' || type === 'repeater') {
 			result[field.key] = []
     } else {
       result[field.key] = ''

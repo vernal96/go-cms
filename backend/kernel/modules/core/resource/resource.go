@@ -295,6 +295,13 @@ func cloneStoredValues(source []field.StoredValue) []field.StoredValue {
 	copy(result, source)
 	for index := range result {
 		result[index].Value = cloneValue(result[index].Value)
+		result[index].References = append([]field.Reference(nil), result[index].References...)
+		for j := range result[index].References {
+			ref := &result[index].References[j]
+			ref.Path = append([]string(nil), ref.Path...)
+			ref.Options.Storages = append(ref.Options.Storages[:0:0], ref.Options.Storages...)
+			ref.Options.MIMETypes = append([]string(nil), ref.Options.MIMETypes...)
+		}
 	}
 	return result
 }

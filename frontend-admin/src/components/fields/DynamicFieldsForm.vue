@@ -47,6 +47,8 @@ function update(key: string, value: unknown): void {
     </template>
     <dynamic-field
       :field="field"
+ :errors="errors"
+ :field-path="field.key"
       :model-value="modelValue[field.key]"
 			:site-id="siteId ?? 0"
 			:access-token="accessToken ?? ''"

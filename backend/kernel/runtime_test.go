@@ -932,7 +932,7 @@ func (t customFieldType) Code() field.TypeCode {
 	return t.code
 }
 
-func (customFieldType) Compile(any) (field.ValueType, error) {
+func (customFieldType) Compile(field.CompileContext, any) (field.ValueType, error) {
 	return customValueType{}, nil
 }
 
@@ -1709,7 +1709,7 @@ func TestProfileRuntimeRejectsInvalidTemplates(t *testing.T) {
 
 func TestCoreModuleRegistersAllStandardFieldTypes(t *testing.T) {
 	registry := core.Module{}.Registry()
-	if len(registry.FieldTypes) != 12 {
+	if len(registry.FieldTypes) != 13 {
 		t.Fatalf("standard field types = %d", len(registry.FieldTypes))
 	}
 
@@ -1728,6 +1728,7 @@ func TestCoreModuleRegistersAllStandardFieldTypes(t *testing.T) {
 		field.TypeEmail,
 		field.TypePhone,
 		field.TypeJSON,
+		field.TypeRepeater,
 	} {
 		if !found[code] {
 			t.Fatalf("standard field type %q is missing", code)

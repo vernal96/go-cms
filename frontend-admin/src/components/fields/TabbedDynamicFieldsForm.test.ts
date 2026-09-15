@@ -62,7 +62,7 @@ describe('TabbedDynamicFieldsForm', () => {
 
     elementTabs().vm.$emit('update:modelValue', 'appearance')
     await wrapper.vm.$nextTick()
-    await wrapper.setProps({ errors: { title: 'Required' } })
+    await wrapper.setProps({ errors: { 'title[0].nested': 'Required' } })
     expect(elementTabs().props('modelValue')).toBe('content')
 
     elementTabs().vm.$emit('update:modelValue', 'appearance')

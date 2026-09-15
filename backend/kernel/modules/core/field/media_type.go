@@ -5,7 +5,7 @@ import "fmt"
 type mediaType struct{}
 
 func (mediaType) Code() TypeCode { return TypeMedia }
-func (mediaType) Compile(options any) (ValueType, error) {
+func (mediaType) Compile(ctx CompileContext, options any) (ValueType, error) {
 	if options != nil {
 		return nil, fmt.Errorf("media field does not support options")
 	}

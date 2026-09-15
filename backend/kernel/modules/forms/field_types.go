@@ -25,7 +25,7 @@ func fieldTypes() []field.Type {
 type captchaFieldType struct{}
 
 func (captchaFieldType) Code() field.TypeCode { return FieldTypeCaptcha }
-func (captchaFieldType) Compile(options any) (field.ValueType, error) {
+func (captchaFieldType) Compile(ctx field.CompileContext, options any) (field.ValueType, error) {
 	if _, err := captchaOptions(options); err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func (captchaValue) Example() any         { return "token" }
 type consentFieldType struct{}
 
 func (consentFieldType) Code() field.TypeCode { return FieldTypeConsent }
-func (consentFieldType) Compile(options any) (field.ValueType, error) {
+func (consentFieldType) Compile(ctx field.CompileContext, options any) (field.ValueType, error) {
 	if _, err := consentOptions(options); err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func (consentValue) Example() any         { return true }
 type uploadFieldType struct{}
 
 func (uploadFieldType) Code() field.TypeCode { return FieldTypeUpload }
-func (uploadFieldType) Compile(options any) (field.ValueType, error) {
+func (uploadFieldType) Compile(ctx field.CompileContext, options any) (field.ValueType, error) {
 	if _, err := uploadOptions(options); err != nil {
 		return nil, err
 	}

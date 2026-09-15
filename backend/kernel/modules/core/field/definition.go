@@ -46,6 +46,7 @@ const (
 	TypeFile     TypeCode = "file"
 	TypeMedia    TypeCode = "media"
 	TypeJSON     TypeCode = "json"
+	TypeRepeater TypeCode = "repeater"
 )
 
 type Definition struct {
@@ -103,9 +104,36 @@ type FileOptions struct {
 	MIMETypes []string          `json:"mime_types,omitempty"`
 }
 
+// CompileContext carries the current resolver and composite ancestry through
+// nested compilation. Composite types must reuse Compile for their children.
+type CompileContext struct {
+	Types      TypeResolver
+	composites []TypeCode
+}
+
+func (ctx CompileContext) Compile(definitions []Definition) (*Schema, error) {
+	return compile(definitions, ctx, false)
+}
+
+// EnterComposite rejects recursive use of a composite, including through
+// contributed wrapper types, without knowing any concrete registry.
+func (ctx CompileContext) EnterComposite(code TypeCode) (CompileContext, error) {
+	for _, parent := range ctx.composites {
+		if parent == code {
+			return ctx, fmt.Errorf("nested %s fields are not supported", code)
+		}
+	}
+	ctx.composites = append(append([]TypeCode(nil), ctx.composites...), code)
+	return ctx, nil
+}
+
+// DefaultValueType supplies a semantic value for an omitted field. Its empty
+// input still goes through normalization and validation.
+type DefaultValueType interface{ DefaultValue() any }
+
 type Type interface {
 	Code() TypeCode
-	Compile(options any) (ValueType, error)
+	Compile(ctx CompileContext, options any) (ValueType, error)
 }
 
 type ValueType interface {
@@ -134,7 +162,8 @@ type ReferenceValueType interface {
 const ReferenceMedia = "media"
 
 type StoredValue struct {
-	ReferenceTarget string `json:"reference_target,omitempty"`
+	ReferenceTarget string      `json:"reference_target,omitempty"`
+	References      []Reference `json:"references,omitempty"`
 	Key             string
 	Position        int
 	Kind            StorageKind
@@ -237,6 +266,16 @@ func cloneEditorValue(value any) any {
 
 func cloneOptions(options any) any {
 	switch typed := options.(type) {
+	case RepeaterOptions:
+		typed.Fields = CloneDefinitions(typed.Fields)
+		return typed
+	case *RepeaterOptions:
+		if typed == nil {
+			return (*RepeaterOptions)(nil)
+		}
+		result := *typed
+		result.Fields = CloneDefinitions(typed.Fields)
+		return &result
 	case RadioOptions:
 		typed.Choices = append([]Choice(nil), typed.Choices...)
 		return typed

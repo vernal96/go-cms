@@ -13,8 +13,10 @@ type testResolver map[field.TypeCode]field.Type
 
 type transientType struct{}
 
-func (transientType) Code() field.TypeCode                 { return "transient" }
-func (transientType) Compile(any) (field.ValueType, error) { return transientValue{}, nil }
+func (transientType) Code() field.TypeCode { return "transient" }
+func (transientType) Compile(field.CompileContext, any) (field.ValueType, error) {
+	return transientValue{}, nil
+}
 
 type transientValue struct{}
 

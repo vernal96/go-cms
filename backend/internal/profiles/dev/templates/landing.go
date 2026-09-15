@@ -15,6 +15,17 @@ func Landing() template.Definition {
 		Label: "Лендинг",
 		Icon:  "promotion",
 		Fields: []field.Definition{
+			{Key: "slides", Type: field.TypeRepeater, Label: "Слайды", Options: field.RepeaterOptions{
+				MaxItems: 10,
+				Fields: []field.Definition{
+					{Key: "title", Type: field.TypeString, Label: "Заголовок", Required: &required, Rules: []string{"max=120"}},
+					{Key: "text", Type: field.TypeTextarea, Label: "Текст"},
+					{Key: "image", Type: field.TypeMedia, Label: "Изображение"},
+					{Key: "link", Type: field.TypeString, Label: "Ссылка"},
+					{Key: "active", Type: field.TypeCheckbox, Label: "Активен"},
+					{Key: "attachment", Type: field.TypeFile, Label: "Файл"},
+				},
+			}},
 			{
 				Key:      "hero_title",
 				Type:     field.TypeString,
@@ -58,6 +69,7 @@ func Landing() template.Definition {
 			},
 		},
 		EditorTabs: []field.EditorTab{
+			{Code: "slides", Label: "Слайды", Fields: []string{"slides"}},
 			{Code: "content", Label: "Первый экран", Fields: []string{"hero_title", "hero_text"}},
 			{Code: "layout", Label: "Макет", Fields: []string{"columns", "content_width"}},
 			{Code: "audience", Label: "Аудитория", Fields: []string{"audiences"}},

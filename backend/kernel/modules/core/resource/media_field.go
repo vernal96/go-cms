@@ -10,19 +10,20 @@ import (
 
 func (s *Service) validateMediaFields(ctx context.Context, actor security.Actor, values []field.StoredValue) error {
 	for _, value := range values {
-		if value.ReferenceTarget != field.ReferenceMedia {
-			continue
-		}
-		id, ok := value.Value.(int64)
-		if !ok || id <= 0 {
-			return fmt.Errorf("%w: invalid Media field %q", ErrInvalidReference, value.Key)
-		}
-		resolved, err := s.media.Resolve(ctx, actor, media.ID(id))
+		references, err := value.MediaReferences()
 		if err != nil {
-			return fmt.Errorf("resolve Media field %q: %w", value.Key, err)
+			return fmt.Errorf("%w: %v", ErrInvalidReference, err)
 		}
-		if err := ValidateImageMediaFile(ctx, resolved.File, media.Usage{Kind: ImageMediaUsage}); err != nil {
-			return err
+		for _, reference := range references {
+			id := reference.ID
+			key := field.ReferenceKey(append([]string{value.Key}, reference.Path...))
+			resolved, err := s.media.Resolve(ctx, actor, media.ID(id))
+			if err != nil {
+				return fmt.Errorf("resolve Media field %q: %w", key, err)
+			}
+			if err := ValidateImageMediaFile(ctx, resolved.File, media.Usage{Kind: ImageMediaUsage}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

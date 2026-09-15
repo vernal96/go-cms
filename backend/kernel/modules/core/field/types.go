@@ -15,6 +15,7 @@ import (
 
 func StandardTypes() Types {
 	return Types{
+		DescribedType{Type: repeaterType{}, Presentation: Metadata{Label: "Конструктор", Editor: "repeater"}},
 		DescribedType{Type: stringType{code: TypeString}, Presentation: Metadata{Label: "Строка", Editor: "string"}},
 		DescribedType{Type: integerType{}, Presentation: Metadata{Label: "Целое число", Editor: "int", Options: []ConfigField{{Key: "step", Label: "Шаг", Type: TypeInteger}}}},
 		DescribedType{Type: floatType{}, Presentation: Metadata{Label: "Дробное число", Editor: "float", Options: []ConfigField{{Key: "step", Label: "Шаг", Type: TypeFloat}}}},
@@ -35,7 +36,7 @@ func StandardTypes() Types {
 type jsonType struct{}
 
 func (jsonType) Code() TypeCode { return TypeJSON }
-func (jsonType) Compile(options any) (ValueType, error) {
+func (jsonType) Compile(ctx CompileContext, options any) (ValueType, error) {
 	if options != nil {
 		return nil, errors.New("json field does not support options")
 	}
@@ -92,7 +93,7 @@ type fileType struct{}
 
 func (fileType) Code() TypeCode { return TypeFile }
 
-func (fileType) Compile(options any) (ValueType, error) {
+func (fileType) Compile(ctx CompileContext, options any) (ValueType, error) {
 	config, err := FileOptionsValue(options)
 	if err != nil {
 		return nil, err
@@ -118,10 +119,10 @@ func (fileType) Compile(options any) (ValueType, error) {
 		}
 		seenMIME[mimeType] = struct{}{}
 	}
-	return fileValue{}, nil
+	return fileValue{options: config}, nil
 }
 
-type fileValue struct{}
+type fileValue struct{ options FileOptions }
 
 func (fileValue) StorageKind() StorageKind { return StorageReference }
 func (fileValue) Multiple() bool           { return false }
@@ -195,7 +196,7 @@ func (t stringType) Code() TypeCode {
 	return t.code
 }
 
-func (t stringType) Compile(options any) (ValueType, error) {
+func (t stringType) Compile(ctx CompileContext, options any) (ValueType, error) {
 	if options != nil {
 		return nil, fmt.Errorf("%s field does not support options", t.code)
 	}
@@ -242,7 +243,7 @@ func (integerType) Code() TypeCode {
 	return TypeInteger
 }
 
-func (integerType) Compile(options any) (ValueType, error) {
+func (integerType) Compile(ctx CompileContext, options any) (ValueType, error) {
 	config, err := integerOptions(options)
 	if err != nil {
 		return nil, err
@@ -290,7 +291,7 @@ func (floatType) Code() TypeCode {
 	return TypeFloat
 }
 
-func (floatType) Compile(options any) (ValueType, error) {
+func (floatType) Compile(ctx CompileContext, options any) (ValueType, error) {
 	config, err := floatOptions(options)
 	if err != nil {
 		return nil, err
@@ -339,7 +340,7 @@ func (boolType) Code() TypeCode {
 	return TypeCheckbox
 }
 
-func (boolType) Compile(options any) (ValueType, error) {
+func (boolType) Compile(ctx CompileContext, options any) (ValueType, error) {
 	if options != nil {
 		return nil, errors.New("checkbox field does not support options")
 	}
@@ -385,7 +386,7 @@ func (t choiceType) Code() TypeCode {
 	return t.code
 }
 
-func (t choiceType) Compile(options any) (ValueType, error) {
+func (t choiceType) Compile(ctx CompileContext, options any) (ValueType, error) {
 	var (
 		choices  []Choice
 		multiple bool
@@ -516,7 +517,7 @@ func (phoneType) Code() TypeCode {
 	return TypePhone
 }
 
-func (phoneType) Compile(options any) (ValueType, error) {
+func (phoneType) Compile(ctx CompileContext, options any) (ValueType, error) {
 	config, err := phoneOptions(options)
 	if err != nil {
 		return nil, err

@@ -1067,7 +1067,7 @@ FOR UPDATE OF item;
 		return err
 	}
 	var mediaFields string
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(string_agg(resource_id::text || ':' || field_key || ':' || position::text || ':' || media_id::text, ',' ORDER BY resource_id,field_key,position),'') FROM core.resource_media_references WHERE media_id=ANY($1::bigint[])`, mediaIDs).Scan(&mediaFields); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(string_agg(resource_id::text || ':' || field_key || ':' || position::text || ':' || value_path::text || ':' || media_id::text, ',' ORDER BY resource_id,field_key,position,value_path),'') FROM core.resource_media_references WHERE media_id=ANY($1::bigint[])`, mediaIDs).Scan(&mediaFields); err != nil {
 		return err
 	}
 	impact.Token = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%v/%v/%v/%v/%d/%s/%v", items, ids, mediaIDs, impact.ResourceSites, impact.FileFieldReferences, mediaFields, owners))))

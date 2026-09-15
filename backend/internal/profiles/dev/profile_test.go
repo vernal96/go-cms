@@ -74,7 +74,7 @@ func TestProfileExposesDynamicParamsAndTemplateFields(t *testing.T) {
 	}
 	if len(profile.Templates) != 2 ||
 		profile.Templates[0].Code != "page" || len(profile.Templates[0].Fields) != 5 ||
-		profile.Templates[1].Code != "landing" || len(profile.Templates[1].Fields) != 5 {
+		profile.Templates[1].Code != "landing" || len(profile.Templates[1].Fields) != 6 {
 		t.Fatalf("templates = %#v", profile.Templates)
 	}
 	page := profile.Templates[0]
@@ -86,6 +86,7 @@ func TestProfileExposesDynamicParamsAndTemplateFields(t *testing.T) {
 		t.Fatalf("page editor tabs = %#v", page.EditorTabs)
 	}
 	wantLandingTabs := []field.EditorTab{
+		{Code: "slides", Label: "Слайды", Fields: []string{"slides"}},
 		{Code: "content", Label: "Первый экран", Fields: []string{"hero_title", "hero_text"}},
 		{Code: "layout", Label: "Макет", Fields: []string{"columns", "content_width"}},
 		{Code: "audience", Label: "Аудитория", Fields: []string{"audiences"}},

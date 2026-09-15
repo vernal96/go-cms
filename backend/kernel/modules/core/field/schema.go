@@ -26,7 +26,7 @@ func Compile(
 	definitions []Definition,
 	resolver TypeResolver,
 ) (*Schema, error) {
-	return compile(definitions, resolver, false)
+	return compile(definitions, CompileContext{Types: resolver}, false)
 }
 
 // CompilePersistent compiles a schema whose normalized values are persisted
@@ -36,15 +36,15 @@ func CompilePersistent(
 	definitions []Definition,
 	resolver TypeResolver,
 ) (*Schema, error) {
-	return compile(definitions, resolver, true)
+	return compile(definitions, CompileContext{Types: resolver}, true)
 }
 
 func compile(
 	definitions []Definition,
-	resolver TypeResolver,
+	ctx CompileContext,
 	requireStorage bool,
 ) (*Schema, error) {
-	if resolver == nil {
+	if ctx.Types == nil {
 		return nil, errors.New("field type resolver is nil")
 	}
 
@@ -91,7 +91,7 @@ func compile(
 			)
 		}
 
-		fieldType, exists := resolver.FieldType(definition.Type)
+		fieldType, exists := ctx.Types.FieldType(definition.Type)
 		if !exists {
 			return nil, fmt.Errorf(
 				"field %q references unknown type %q",
@@ -107,7 +107,7 @@ func compile(
 			)
 		}
 
-		valueType, err := fieldType.Compile(definition.Options)
+		valueType, err := fieldType.Compile(ctx, definition.Options)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"compile field %q type %q: %w",
@@ -197,6 +197,13 @@ func (s *Schema) StoredValues(values map[string]any) ([]StoredValue, error) {
 		}
 		if !storage.Multiple() {
 			stored := StoredValue{Key: definition.Key, Kind: storage.StorageKind(), Value: value}
+			if collector, ok := compiled.valueType.(ReferenceCollector); ok && storage.StorageKind() == StorageJSON {
+				refs, err := collector.References(value)
+				if err != nil {
+					return nil, fmt.Errorf("field %q references: %w", definition.Key, err)
+				}
+				stored.References = refs
+			}
 			if reference, ok := storage.(ReferenceValueType); ok {
 				stored.ReferenceTarget = reference.ReferenceTarget()
 			}
@@ -264,24 +271,15 @@ func (s *Schema) FileReferences(values map[string]any) ([]FileReference, error) 
 	if s == nil {
 		return nil, errors.New("field schema is nil")
 	}
+	refs, err := s.References(values)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]FileReference, 0)
-	for _, definition := range s.definitions {
-		if definition.Type != TypeFile {
-			continue
+	for _, ref := range refs {
+		if ref.Target == ReferenceFile {
+			result = append(result, FileReference{Key: ref.Key, ID: ref.ID, Options: ref.Options})
 		}
-		value, exists := values[definition.Key]
-		if !exists || inputEmpty(value) {
-			continue
-		}
-		id, ok := normalizeInteger(value)
-		if !ok || id <= 0 {
-			return nil, fmt.Errorf("file field %q has invalid value", definition.Key)
-		}
-		options, err := FileOptionsValue(definition.Options)
-		if err != nil {
-			return nil, fmt.Errorf("file field %q options: %w", definition.Key, err)
-		}
-		result = append(result, FileReference{Key: definition.Key, ID: id, Options: options})
 	}
 	return result, nil
 }
@@ -331,6 +329,10 @@ func (s *Schema) validate(
 		compiled := s.fields[definition.Key]
 		value, exists := values[definition.Key]
 
+		defaults, hasDefault := compiled.valueType.(DefaultValueType)
+		if !exists && requireAll && hasDefault {
+			value, exists = defaults.DefaultValue(), true
+		}
 		if !exists {
 			if requireAll && compiled.required {
 				validationErrors = append(
@@ -343,7 +345,7 @@ func (s *Schema) validate(
 			}
 			continue
 		}
-		if inputEmpty(value) {
+		if inputEmpty(value) && !hasDefault {
 			if compiled.required {
 				validationErrors = append(
 					validationErrors,
@@ -358,17 +360,14 @@ func (s *Schema) validate(
 
 		normalized, err := compiled.valueType.Normalize(value)
 		if err != nil {
-			validationErrors = append(
-				validationErrors,
-				ValidationError{
-					Key:  definition.Key,
-					Rule: "type",
-				},
-			)
+			validationErrors = append(validationErrors, prefixedValidationErrors(definition.Key, err, "type")...)
 			continue
 		}
 
 		if compiled.valueType.Empty(normalized) {
+			if hasDefault && !compiled.required {
+				result[definition.Key] = normalized
+			}
 			if compiled.required {
 				validationErrors = append(
 					validationErrors,
@@ -382,24 +381,7 @@ func (s *Schema) validate(
 		}
 
 		if err := compiled.valueType.Validate(normalized); err != nil {
-			if ruleError, exists := ruleErrorFrom(err); exists {
-				validationErrors = append(
-					validationErrors,
-					ValidationError{
-						Key:   definition.Key,
-						Rule:  ruleError.Rule,
-						Param: ruleError.Param,
-					},
-				)
-			} else {
-				validationErrors = append(
-					validationErrors,
-					ValidationError{
-						Key:  definition.Key,
-						Rule: "value",
-					},
-				)
-			}
+			validationErrors = append(validationErrors, prefixedValidationErrors(definition.Key, err, "value")...)
 			continue
 		}
 
@@ -516,4 +498,24 @@ func safeValidate(
 	}()
 
 	return validate.VarWithKey(key, value, rules)
+}
+
+func prefixedValidationErrors(prefix string, err error, fallback string) ValidationErrors {
+	var nested ValidationErrors
+	if errors.As(err, &nested) {
+		result := make(ValidationErrors, len(nested))
+		for i, item := range nested {
+			separator := "."
+			if strings.HasPrefix(item.Key, "[") || item.Key == "" {
+				separator = ""
+			}
+			item.Key = prefix + separator + item.Key
+			result[i] = item
+		}
+		return result
+	}
+	if rule, ok := ruleErrorFrom(err); ok {
+		return ValidationErrors{{Key: prefix, Rule: rule.Rule, Param: rule.Param}}
+	}
+	return ValidationErrors{{Key: prefix, Rule: fallback}}
 }

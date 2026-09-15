@@ -35,8 +35,11 @@ func (r *Repository) ClearMediaReferences(ctx context.Context, tx pgx.Tx, mediaI
 		if err != nil {
 			return err
 		}
+		if err := clearStructuredMediaReferences(ctx, tx, id, mediaIDs); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `DELETE FROM core.resource_field_values fv USING core.resource_media_references mr
-   WHERE fv.resource_id=$1 AND fv.resource_id=mr.resource_id AND fv.field_key=mr.field_key AND fv.position=mr.position AND mr.media_id=ANY($2::bigint[])`, id, mediaIDs); err != nil {
+   WHERE fv.resource_id=$1 AND fv.resource_id=mr.resource_id AND fv.field_key=mr.field_key AND fv.position=mr.position AND cardinality(mr.value_path)=0 AND mr.media_id=ANY($2::bigint[])`, id, mediaIDs); err != nil {
 			return err
 		}
 		query := `UPDATE core.resources SET image_media_id=CASE WHEN image_media_id=ANY($2::bigint[]) THEN NULL ELSE image_media_id END, updated_at=clock_timestamp(), updated_by=$3 WHERE id=$1`
@@ -66,4 +69,38 @@ func (r *Repository) ClearMediaReferences(ctx context.Context, tx pgx.Tx, mediaI
 		}
 	}
 	return nil
+}
+
+// JSON paths come from the compiled field collector, never from a field-type
+// switch. Removing an object member preserves the containing rows and order.
+func clearStructuredMediaReferences(ctx context.Context, tx pgx.Tx, id resource.ID, mediaIDs []int64) error {
+	rows, err := tx.Query(ctx, `SELECT field_key,position,value_path FROM core.resource_media_references WHERE resource_id=$1 AND media_id=ANY($2::bigint[]) AND cardinality(value_path)>0 ORDER BY field_key,position,value_path`, id, mediaIDs)
+	if err != nil {
+		return err
+	}
+	type location struct {
+		key      string
+		position int
+		path     []string
+	}
+	var locations []location
+	for rows.Next() {
+		var item location
+		if err := rows.Scan(&item.key, &item.position, &item.path); err != nil {
+			rows.Close()
+			return err
+		}
+		locations = append(locations, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, item := range locations {
+		if _, err := tx.Exec(ctx, `UPDATE core.resource_field_values SET value_json=value_json #- $4::text[] WHERE resource_id=$1 AND field_key=$2 AND position=$3 AND value_kind='json'`, id, item.key, item.position, item.path); err != nil {
+			return err
+		}
+	}
+	_, err = tx.Exec(ctx, `DELETE FROM core.resource_media_references WHERE resource_id=$1 AND media_id=ANY($2::bigint[]) AND cardinality(value_path)>0`, id, mediaIDs)
+	return err
 }

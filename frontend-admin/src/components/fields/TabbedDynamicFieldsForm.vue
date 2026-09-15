@@ -39,7 +39,7 @@ function selectFirstErrorTab(): void {
   if (tabs.value.length === 0) return
   const errorFields = new Set(Object.keys(props.errors))
   const tab = tabs.value.find((candidate) =>
-    candidate.fields.some((field) => errorFields.has(field)),
+    candidate.fields.some((field) => [...errorFields].some((key) => key === field || key.startsWith(`${field}[`) || key.startsWith(`${field}.`))),
   )
   if (tab) activeTab.value = tab.code
 }

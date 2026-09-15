@@ -173,7 +173,7 @@ func normalizeConditionValue(item FormField, value any, resolver field.TypeResol
 	if !exists || fieldType == nil {
 		return nil, ErrInvalid
 	}
-	valueType, err := fieldType.Compile(item.Options)
+	valueType, err := fieldType.Compile(field.CompileContext{Types: resolver}, item.Options)
 	if err != nil || valueType == nil {
 		return nil, errors.Join(ErrInvalid, err)
 	}

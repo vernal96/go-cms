@@ -108,7 +108,7 @@ func validateMailValueCompatibility(resolver field.TypeResolver, target field.De
 	if !exists || targetType == nil {
 		return errors.New("Mail variable type is unavailable")
 	}
-	targetValue, err := targetType.Compile(target.Options)
+	targetValue, err := targetType.Compile(field.CompileContext{Types: resolver}, target.Options)
 	if err != nil || targetValue == nil {
 		return errors.Join(errors.New("Mail variable type is invalid"), err)
 	}
@@ -116,7 +116,7 @@ func validateMailValueCompatibility(resolver field.TypeResolver, target field.De
 	if !exists || sourceType == nil {
 		return errors.New("Form field type is unavailable")
 	}
-	sourceValue, err := sourceType.Compile(source.Options)
+	sourceValue, err := sourceType.Compile(field.CompileContext{Types: resolver}, source.Options)
 	if err != nil || sourceValue == nil {
 		return errors.Join(errors.New("Form field type is invalid"), err)
 	}

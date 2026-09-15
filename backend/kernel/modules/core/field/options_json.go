@@ -19,6 +19,8 @@ func DecodeOptionsJSON(code TypeCode, raw json.RawMessage) (any, error) {
 			return nil, fmt.Errorf("field type %q does not support options", code)
 		}
 		return nil, nil
+	case TypeRepeater:
+		return DecodeOptions[RepeaterOptions](raw)
 	case TypeInteger:
 		return DecodeOptions[IntegerOptions](raw)
 	case TypeFloat:

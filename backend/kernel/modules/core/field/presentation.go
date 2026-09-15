@@ -43,11 +43,11 @@ func (t DescribedType) Code() TypeCode {
 	}
 	return t.Type.Code()
 }
-func (t DescribedType) Compile(options any) (ValueType, error) {
+func (t DescribedType) Compile(ctx CompileContext, options any) (ValueType, error) {
 	if nilInterface(t.Type) {
 		return nil, fmt.Errorf("described field type is nil")
 	}
-	return t.Type.Compile(options)
+	return t.Type.Compile(ctx, options)
 }
 
 // SnapshotType freezes presentation metadata at registration. The semantic
@@ -101,11 +101,19 @@ func Describe(definition Definition, resolver TypeResolver) (Descriptor, error) 
 	if !exists || t == nil {
 		return Descriptor{}, fmt.Errorf("field %q type %q is unavailable", definition.Key, definition.Type)
 	}
-	if _, err := t.Compile(definition.Options); err != nil {
+	valueType, err := t.Compile(CompileContext{Types: resolver}, definition.Options)
+	if err != nil {
 		return Descriptor{}, fmt.Errorf("field %q: %w", definition.Key, err)
 	}
 	definition = CloneDefinitions([]Definition{definition})[0]
-	options, err := json.Marshal(definition.Options)
+	presentationOptions := definition.Options
+	if presenter, ok := valueType.(OptionsPresenter); ok {
+		presentationOptions, err = presenter.DescribeOptions()
+		if err != nil {
+			return Descriptor{}, fmt.Errorf("field %q options: %w", definition.Key, err)
+		}
+	}
+	options, err := json.Marshal(presentationOptions)
 	if err != nil {
 		return Descriptor{}, fmt.Errorf("field %q options: %w", definition.Key, err)
 	}
@@ -116,7 +124,7 @@ func Describe(definition Definition, resolver TypeResolver) (Descriptor, error) 
 	if editor == "" {
 		editor = DescribeType(t).Editor
 	}
-	return Descriptor{Key: definition.Key, Type: definition.Type, Label: definition.Label, Required: definition.Required != nil && *definition.Required, Rules: append([]string{}, definition.Rules...), Options: options, Editor: editor, VisibleWhen: definition.VisibleWhen}, nil
+	return definitionDescriptor(definition, options, editor), nil
 }
 func DescribeDefinitions(definitions []Definition, resolver TypeResolver) ([]Descriptor, error) {
 	result := make([]Descriptor, len(definitions))
@@ -150,4 +158,16 @@ func DecodeOptions[T any](value any) (T, error) {
 		return result, fmt.Errorf("invalid trailing options data")
 	}
 	return result, nil
+}
+
+// OptionsPresenter exposes compiled composite options through ordinary field descriptors.
+type OptionsPresenter interface{ DescribeOptions() (any, error) }
+
+// definitionDescriptor is also used when encoding typed declaration options.
+// Resolver-dependent editor selection remains in Describe.
+func definitionDescriptor(definition Definition, options json.RawMessage, editor EditorCode) Descriptor {
+	return Descriptor{Key: definition.Key, Type: definition.Type, Label: definition.Label,
+		Required: definition.Required != nil && *definition.Required,
+		Rules:    append([]string{}, definition.Rules...), Options: options,
+		Editor: editor, VisibleWhen: definition.VisibleWhen}
 }

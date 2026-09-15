@@ -2332,8 +2332,10 @@ SELECT resource_id, field_key, position, is_multi, value_kind,
        value_string, value_integer, value_float, value_boolean,
        value_timestamp, value_reference, value_json,
        CASE WHEN EXISTS (SELECT 1 FROM core.resource_media_references mr
-                         WHERE mr.resource_id = fv.resource_id AND mr.field_key = fv.field_key AND mr.position = fv.position)
-            THEN 'media' ELSE '' END
+                         WHERE mr.resource_id = fv.resource_id AND mr.field_key = fv.field_key AND mr.position = fv.position AND cardinality(mr.value_path)=0)
+            THEN 'media' ELSE '' END,
+       COALESCE((SELECT jsonb_agg(jsonb_build_object('target','media','id',mr.media_id,'path',mr.value_path) ORDER BY mr.value_path)
+                 FROM core.resource_media_references mr WHERE mr.resource_id=fv.resource_id AND mr.field_key=fv.field_key AND mr.position=fv.position AND cardinality(mr.value_path)>0), '[]'::jsonb)
 FROM core.resource_field_values fv
 WHERE resource_id = ANY($1::bigint[])
 ORDER BY resource_id, field_key, position;`, ids)
@@ -2352,11 +2354,15 @@ ORDER BY resource_id, field_key, position;`, ids)
 			timestampValue *time.Time
 			referenceValue *int64
 			rawJSON        []byte
+			rawReferences  []byte
 		)
 		if err := rows.Scan(&resourceID, &stored.Key, &stored.Position, &stored.Multiple, &stored.Kind,
 			&stringValue, &integerValue, &floatValue, &booleanValue,
-			&timestampValue, &referenceValue, &rawJSON, &stored.ReferenceTarget); err != nil {
+			&timestampValue, &referenceValue, &rawJSON, &stored.ReferenceTarget, &rawReferences); err != nil {
 			return fmt.Errorf("scan resource field: %w", err)
+		}
+		if err := json.Unmarshal(rawReferences, &stored.References); err != nil {
+			return fmt.Errorf("decode field references: %w", err)
 		}
 		switch stored.Kind {
 		case field.StorageString:
@@ -2786,17 +2792,13 @@ func replaceResourceFields(ctx context.Context, tx pgx.Tx, resourceID resource.I
 	}
 	mediaIDs := append([]media.ID(nil), oldMedia...)
 	for _, stored := range values {
-		if stored.ReferenceTarget == "" {
-			continue
+		refs, err := stored.MediaReferences()
+		if err != nil {
+			return fmt.Errorf("%w: %v", resource.ErrInvalidReference, err)
 		}
-		if stored.ReferenceTarget != field.ReferenceMedia || stored.Kind != field.StorageReference || stored.Multiple {
-			return resource.ErrInvalidReference
+		for _, ref := range refs {
+			mediaIDs = append(mediaIDs, media.ID(ref.ID))
 		}
-		id, ok := stored.Value.(int64)
-		if !ok || id <= 0 {
-			return resource.ErrInvalidReference
-		}
-		mediaIDs = append(mediaIDs, media.ID(id))
 	}
 	if err := medialock.Lock(ctx, tx, mediaIDs...); err != nil {
 		return err
@@ -2862,11 +2864,16 @@ INSERT INTO core.resource_field_values (
 			stringValue, integerValue, floatValue, booleanValue, timestampValue, referenceValue, jsonValue); err != nil {
 			return fmt.Errorf("insert resource field %q: %w", stored.Key, translateError(err))
 		}
-		if stored.ReferenceTarget == field.ReferenceMedia {
-			if err := ensureMediaAvailable(ctx, tx, media.ID(stored.Value.(int64)), 0); err != nil {
+		refs, err := stored.MediaReferences()
+		if err != nil {
+			return err
+		}
+		for _, ref := range refs {
+			if err := ensureMediaAvailable(ctx, tx, media.ID(ref.ID), 0); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO core.resource_media_references(resource_id,field_key,position,media_id) VALUES($1,$2,$3,$4)`, resourceID, stored.Key, stored.Position, referenceValue); err != nil {
+			path := append([]string{}, ref.Path...)
+			if _, err := tx.Exec(ctx, `INSERT INTO core.resource_media_references(resource_id,field_key,position,value_path,media_id) VALUES($1,$2,$3,$4,$5)`, resourceID, stored.Key, stored.Position, path, ref.ID); err != nil {
 				return translateError(err)
 			}
 		}

@@ -10,14 +10,14 @@ import (
 type configuredString struct{}
 
 func (configuredString) Code() field.TypeCode { return "example.text" }
-func (configuredString) Compile(options any) (field.ValueType, error) {
+func (configuredString) Compile(ctx field.CompileContext, options any) (field.ValueType, error) {
 	if _, err := field.DecodeOptions[struct {
 		Max int `json:"max"`
 	}](options); err != nil {
 		return nil, err
 	}
 	base, _ := field.StandardTypes().FieldType(field.TypeString)
-	return base.Compile(nil)
+	return base.Compile(ctx, nil)
 }
 func TestCustomFieldCompilesAndDescribesOptions(t *testing.T) {
 	custom := field.DescribedType{Type: configuredString{}, Presentation: field.Metadata{Label: "Custom text", Editor: "textarea", Options: []field.ConfigField{{Key: "max", Label: "Limit", Type: field.TypeInteger}}}}

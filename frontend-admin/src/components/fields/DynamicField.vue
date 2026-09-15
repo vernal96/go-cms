@@ -13,11 +13,15 @@ import TextareaField from './TextareaField.vue'
 import TextField from './TextField.vue'
 import FileField from './FileField.vue'
 import JsonField from './JsonField.vue'
+import RepeaterField from './RepeaterField.vue'
+import type { DynamicFieldErrors } from './model'
 import ResourcePickerField from './ResourcePickerField.vue'
 import RichTextEditor from '../RichTextEditor.vue'
 
 const props = defineProps<{
 	field: FieldDefinition
+ errors?: DynamicFieldErrors
+ fieldPath?: string
 	siteId?: number
 	accessToken?: string
 	resourceTemplates?: Array<{ code: string; label: string }>
@@ -32,13 +36,14 @@ const resourceIDs = computed<number[]>(() => Array.isArray(model.value) ? model.
 </script>
 
 <template>
-	<component v-if="customEditor" :is="customEditor" v-model="model" :field="field" :site-id="siteId" :access-token="accessToken" />
+	<component v-if="customEditor" :is="customEditor" v-model="model" :field="field" :site-id="siteId" :access-token="token" :resource-templates="resourceTemplates" />
 	<el-alert v-else-if="field.editor?.includes('.')" type="error" :closable="false" :title="`Редактор «${field.editor}» недоступен.`" />
 	<rich-text-editor v-else-if="field.editor === 'html'" :model-value="typeof model === 'string' ? model : ''" @update:model-value="model = $event" />
 	<select-field v-else-if="field.editor === 'resource-template'" v-model="model" :choices="(resourceTemplates ?? []).map((item) => ({ value: item.code, label: item.label }))" :multiple="false" />
 	<resource-picker-field v-else-if="field.editor === 'resource-picker'" :model-value="typeof model === 'number' ? model : undefined" :site-id="siteId ?? 0" :access-token="accessToken ?? ''" @update:model-value="model = $event" />
 	<resource-picker-field v-else-if="field.editor === 'resource-multi-picker'" :model-value="resourceIDs" :site-id="siteId ?? 0" :access-token="accessToken ?? ''" multiple @update:model-value="model = $event" />
-	<media-image-field v-else-if="control === 'media'" :model-value="typeof model === 'number' ? model : null" :access-token="token" @update:model-value="model = $event" />
+	<repeater-field v-else-if="control === 'repeater'" v-model="model" :field="field" :site-id="siteId" :access-token="token" :resource-templates="resourceTemplates" :errors="errors" :field-path="fieldPath" />
+ <media-image-field v-else-if="control === 'media'" :model-value="typeof model === 'number' ? model : null" :access-token="token" @update:model-value="model = $event" />
 	<json-field v-else-if="control === 'json'" v-model="model" />
   <text-field
     v-else-if="
