@@ -8,7 +8,17 @@ COMPOSE := $(DOCKER_COMPOSE) --env-file .env
 WAIT_TIMEOUT ?= 180
 INFRA_SERVICES := postgres kafka rabbitmq redis loki grafana
 
-.PHONY: up restart env doctor config build down logs ps help
+.PHONY: up restart env doctor config build down logs ps help demo demo-start
+
+# Full first-time setup; demo-start adds demo to an already running CMS.
+demo: up demo-start
+
+demo-start: config
+	$(COMPOSE) --profile demo build demo
+	$(COMPOSE) exec -T server /usr/local/bin/console permissions guest-grant -permission=core.site.read
+	$(COMPOSE) exec -T server /usr/local/bin/console permissions guest-grant -permission=core.resource.read
+	$(COMPOSE) --profile demo run --rm --no-deps demo node scripts/seed.mjs
+	$(COMPOSE) --profile demo up --detach --wait --wait-timeout $(WAIT_TIMEOUT) demo
 
 up: build
 	@printf '\nRemoving application containers before database initialization...\n'
@@ -71,6 +81,8 @@ help:
 	@printf 'Go CMS development commands:\n'
 	@printf '  make, make up  Build, initialize, and start the complete project\n'
 	@printf '  make restart   Rebuild and restart backend and admin frontend\n'
+	@printf '  make demo      Start CMS and create the public demo website\n'
+	@printf '  make demo-start  Add/update demo when CMS is already running\n'
 	@printf '  make env       Create .env from .env.example when it is missing\n'
 	@printf '  make build     Build the server and admin images\n'
 	@printf '  make down      Stop containers without deleting persistent volumes\n'

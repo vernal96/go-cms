@@ -1,0 +1,13 @@
+{
+  "name": "@go-cms/demo",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "seed": "node scripts/seed.mjs",
+    "test": "node --test"
+  }
+}

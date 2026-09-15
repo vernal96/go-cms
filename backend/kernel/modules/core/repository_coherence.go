@@ -320,6 +320,9 @@ func (r *invalidatingResourceRepository) RestoreRevision(ctx context.Context, ac
 	err = withRepositoryCacheWrite(r.policy, resourceTags(current), func() error {
 		var mutationErr error
 		result, mutationErr = repository.RestoreRevision(ctx, actorID, current, candidate, source)
+		if mutationErr == nil {
+			r.policy.invalidate(ctx, append(resourceTags(current), resourceTags(result)...)...)
+		}
 		return mutationErr
 	})
 	return result, err

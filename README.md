@@ -63,6 +63,13 @@ make down  # stop containers without deleting persistent volumes
 make help  # show all Make targets
 ```
 
+## Public demo website
+
+Run `make demo` to start CMS and create the populated public website, or
+`make demo-start` when CMS is already running. Open
+[the demo](http://localhost:4173) and select **demo.localhost** in the admin UI.
+See [the Russian launch and editing instructions](frontend-demo/README.md).
+
 ## Filesystem configuration
 
 Physical disks are individual Go declarations under `backend/internal/filesystems`.

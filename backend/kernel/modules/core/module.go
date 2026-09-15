@@ -37,6 +37,7 @@ const defaultRepositoryCacheTTL = 5 * time.Minute
 type Config struct {
 	Images             *image.Limits
 	RepositoryCacheTTL time.Duration
+	MenuCacheTTL       time.Duration
 	ResourcePreview    resource.PreviewPolicy
 	ResourceRevisions  *resource.RevisionPolicy
 }
@@ -156,6 +157,16 @@ func (m Module) Build(
 	if config.RepositoryCacheTTL < 0 {
 		return nil, errors.New("core repository cache TTL is invalid")
 	}
+	if config.MenuCacheTTL == 0 {
+		config.MenuCacheTTL = 5 * time.Minute
+	}
+	if config.MenuCacheTTL < 0 {
+		return nil, errors.New("core menu cache TTL is invalid")
+	}
+	var hotStore cache.Store
+	if caches := ctx.Caches(); caches != nil {
+		hotStore, _ = caches.Store(HotCacheAlias)
+	}
 	revisionPolicy := resource.DefaultRevisionPolicy()
 	if config.ResourceRevisions != nil {
 		revisionPolicy = *config.ResourceRevisions
@@ -195,6 +206,8 @@ func (m Module) Build(
 		resourcePreview: config.ResourcePreview,
 		revisionPolicy:  revisionPolicy,
 		logger:          ctx.Logger(),
+		menuStore:       hotStore,
+		menuTTL:         config.MenuCacheTTL,
 	}
 	if err := buildWidgets(runtime, durableStore, ctx.Registry().ResourceTypes(), ctx.Profile().Templates); err != nil {
 		return nil, fmt.Errorf("build core widgets: %w", err)
@@ -203,6 +216,8 @@ func (m Module) Build(
 }
 
 type Runtime struct {
+	menuStore       cache.Store
+	menuTTL         time.Duration
 	database        Database
 	repositoryCache *RepositoryCacheDescriptor
 	services        *Services

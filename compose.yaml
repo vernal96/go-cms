@@ -1,4 +1,27 @@
 services:
+  demo:
+    profiles: [demo]
+    build:
+      context: ./frontend-demo
+    image: go-cms-demo:dev
+    environment:
+      DEMO_API_TARGET: http://server:8080
+      DEMO_DOMAIN: ${DEMO_DOMAIN:-demo.localhost}
+      DEMO_PORT: ${DEMO_PORT:-4173}
+      DEMO_MENU_CONFIG: /data/menu-config.json
+    volumes:
+      - demo_data:/data
+    ports:
+      - "${DEMO_PORT:-4173}:4173"
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4173/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   server:
     build:
       context: ./backend
@@ -195,6 +218,7 @@ services:
       start_period: 15s
 
 volumes:
+  demo_data:
   server_data:
   admin_node_modules:
   postgres_data:

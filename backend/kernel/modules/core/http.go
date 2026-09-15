@@ -46,6 +46,9 @@ func (r *Runtime) HTTP() httptransport.Builder {
 		}
 
 		return httptransport.Contribution{
+			Routes: func(registrar httptransport.Registrar) error {
+				return registrar.Route(httptransport.Route{Name: "core.menu", Method: http.MethodGet, Pattern: "/menu", Handler: http.HandlerFunc(r.serveMenu)})
+			},
 			ResourceHandlers: []httptransport.ResourceHandler{
 				{
 					Type:    httptransport.ResourceHandlerCode(resourcetype.Page),
