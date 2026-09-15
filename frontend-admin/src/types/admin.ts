@@ -160,6 +160,7 @@ export interface ProfileResponse {
 }
 
 export interface FieldDefinition {
+  public?: boolean
   key: string
   type: FieldType | string
   label: string

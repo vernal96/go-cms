@@ -169,6 +169,7 @@ function submit(): void {
     <tabbed-dynamic-fields-form
       v-if="selectedProfile && editing"
       :fields="selectedProfile.fields"
+      :access-token="accessToken"
       :editor-tabs="selectedProfile.editor_tabs"
       :model-value="form.settings"
       :errors="displayedFieldErrors"
@@ -177,6 +178,7 @@ function submit(): void {
     <dynamic-fields-form
       v-else-if="selectedProfile"
       :fields="selectedProfile.fields"
+      :access-token="accessToken"
       :model-value="form.settings"
       :errors="displayedFieldErrors"
       @update:model-value="form.settings = $event"

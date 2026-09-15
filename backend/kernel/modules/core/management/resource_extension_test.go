@@ -520,6 +520,9 @@ func TestResourceMetadataDescribesTemplateSlotsAndProfileWidgets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if profiles.Items[0].Fields[0].Public == nil || *profiles.Items[0].Fields[0].Public {
+		t.Fatal("site parameter privacy metadata missing or defaulted to public")
+	}
 	if len(profiles.Items) != 1 || len(profiles.Items[0].EditorTabs) != 1 ||
 		profiles.Items[0].EditorTabs[0].Fields[0] != "company" {
 		t.Fatalf("profile metadata = %#v", profiles.Items)

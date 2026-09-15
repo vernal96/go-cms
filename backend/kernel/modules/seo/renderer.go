@@ -80,7 +80,7 @@ func NewRenderer(
 		"resource.slug":       {},
 		"resource.path":       {},
 	}
-	siteParams := scalarDefinitions(profile.Params)
+	siteParams := scalarDefinitions(field.PublicDefinitions(profile.Params))
 	for variable := range site.NewTemplateVariables(site.Site{}, siteParams).Allowed() {
 		allowed[variable] = struct{}{}
 	}

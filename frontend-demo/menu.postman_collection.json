@@ -1,6 +1,6 @@
 {
   "info": {
-    "name": "GO CMS — Public menus",
+    "name": "GO CMS — Public menus and site settings",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "description": "Публичное меню: Host выбирает сайт. ID родителей доступны в админке и в выводе make demo-start."
   },
@@ -196,6 +196,36 @@
             "exec": [
               "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
               "pm.test('items array', () => pm.expect(pm.response.json().items).to.be.an('array'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Публичные параметры сайта",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Host",
+            "value": "{{domain}}"
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/site"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+              "pm.test('no-store', () => pm.expect(pm.response.headers.get('Cache-Control')).to.eql('no-store'));",
+              "pm.test('Only public demo settings', () => { const s = pm.response.json().settings; pm.expect(s).to.be.an('object'); pm.expect(s).to.have.property('string_value'); ['integer_value','float_value','checkbox_value','radio_value','select_value'].forEach(k => pm.expect(s).not.to.have.property(k)); });"
             ]
           }
         }

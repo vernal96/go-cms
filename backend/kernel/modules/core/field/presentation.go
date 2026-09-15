@@ -80,6 +80,7 @@ func DescribeType(t Type) Metadata {
 }
 
 type Descriptor struct {
+	Public      *bool           `json:"public,omitempty"`
 	Key         string          `json:"key"`
 	Type        TypeCode        `json:"type"`
 	Label       string          `json:"label"`

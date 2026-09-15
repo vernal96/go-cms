@@ -10,6 +10,7 @@ func Params() []field.Definition {
 	return []field.Definition{
 		{
 			Key:      "string_value",
+			Public:   true,
 			Type:     field.TypeString,
 			Label:    "Строка",
 			Required: &required,
@@ -64,18 +65,21 @@ func Params() []field.Definition {
 			},
 		},
 		{
-			Key:   "textarea_value",
-			Type:  field.TypeTextarea,
-			Label: "Многострочный текст",
-			Rules: []string{"max=1000"},
+			Key:    "textarea_value",
+			Public: true,
+			Type:   field.TypeTextarea,
+			Label:  "Многострочный текст",
+			Rules:  []string{"max=1000"},
 		},
 		{
-			Key:   "email_value",
-			Type:  field.TypeEmail,
-			Label: "Электронная почта",
+			Key:    "email_value",
+			Public: true,
+			Type:   field.TypeEmail,
+			Label:  "Электронная почта",
 		},
 		{
 			Key:     "phone_value",
+			Public:  true,
 			Type:    field.TypePhone,
 			Label:   "Телефон",
 			Options: field.PhoneOptions{},

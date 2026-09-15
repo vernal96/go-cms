@@ -489,6 +489,10 @@ func (m *Sites) Profiles(
 		if err != nil {
 			return SiteProfiles{}, err
 		}
+		for i, definition := range blueprint.ParamSchema().Definitions() {
+			public := definition.Public
+			fields[i].Public = &public
+		}
 		items = append(items, SiteProfile{
 			Code:       profile.Code,
 			Name:       profile.Name,

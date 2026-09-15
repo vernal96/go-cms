@@ -51,6 +51,7 @@ try {
           multi_select_value: [],
           textarea_value: "Демонстрационная архитектурная студия",
           email_value: "hello@kontur.example",
+          phone_value: "+79000000000",
         },
       })
     ).site;
@@ -59,6 +60,16 @@ try {
     throw new Error(
       "Demo domain belongs to a non-public or incompatible site; choose another DEMO_DOMAIN.",
     );
+  // Fill missing defaults only; an editor's existing values, including empty ones, win.
+  const current = (await api(`/api/sites/${site.id}`)).site;
+  const defaults = { phone_value: "+79000000000", email_value: "hello@kontur.example" };
+  if (Object.keys(defaults).some(key => !Object.hasOwn(current.settings, key))) {
+    site = (await api(`/api/sites/${site.id}`, "PATCH", {
+      domain: current.domain, profile_code: current.profile_code,
+      locale: current.locale, is_public: current.is_public,
+      settings: { ...defaults, ...current.settings },
+    })).site;
+  }
   const endpoint = `/api/sites/${site.id}/resources`;
   async function update(item, changes) {
     const names = ["parent_id", "type", "template_code", "title", "menu_title", "slug", "annotation", "content_type", "content", "target_resource_id", "external_url", "is_public", "is_searchable", "in_menu", "in_sitemap", "sort", "published_at", "unpublished_at", "fields", "type_settings", "image_media_id"];

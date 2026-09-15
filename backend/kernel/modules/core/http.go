@@ -47,7 +47,10 @@ func (r *Runtime) HTTP() httptransport.Builder {
 
 		return httptransport.Contribution{
 			Routes: func(registrar httptransport.Registrar) error {
-				return registrar.Route(httptransport.Route{Name: "core.menu", Method: http.MethodGet, Pattern: "/menu", Handler: http.HandlerFunc(r.serveMenu)})
+				if err := registrar.Route(httptransport.Route{Name: "core.menu", Method: http.MethodGet, Pattern: "/menu", Handler: http.HandlerFunc(r.serveMenu)}); err != nil {
+					return err
+				}
+				return registrar.Route(httptransport.Route{Name: "core.site", Method: http.MethodGet, Pattern: "/site", Handler: http.HandlerFunc(r.serveSite)})
 			},
 			ResourceHandlers: []httptransport.ResourceHandler{
 				{
@@ -184,7 +187,6 @@ type pageResourcePayload struct {
 	Path        *string           `json:"path"`
 	Annotation  string            `json:"annotation"`
 	ContentType *string           `json:"content_type"`
-	Content     string            `json:"content"`
 }
 
 type pageWidgetResponse struct {
@@ -231,7 +233,6 @@ func (h pageResourceHandler) ServeHTTP(
 			Path:        item.Path,
 			Annotation:  item.Annotation,
 			ContentType: item.ContentType,
-			Content:     item.Content,
 		},
 		Widgets: pageWidgetsResponse{
 			Body: []pageWidgetResponse{}, Sidebar: []pageWidgetResponse{},

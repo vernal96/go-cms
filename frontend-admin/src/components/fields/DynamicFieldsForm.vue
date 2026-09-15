@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ElAlert, ElFormItem } from 'element-plus'
+import { ElAlert, ElFormItem, ElTag } from 'element-plus'
 import type { FieldDefinition } from '../../types/admin'
 import DynamicField from './DynamicField.vue'
 import type { DynamicFieldErrors, DynamicValues } from './model'
@@ -41,6 +41,10 @@ function update(key: string, value: unknown): void {
     :required="field.required"
     :error="errors[field.key]"
   >
+    <template v-if="field.public !== undefined && field.type !== 'checkbox'" #label>
+      {{ field.label }}
+      <el-tag size="small" :type="field.public ? 'success' : 'info'">{{ field.public ? 'Публичный' : 'Приватный' }}</el-tag>
+    </template>
     <dynamic-field
       :field="field"
       :model-value="modelValue[field.key]"
@@ -49,5 +53,6 @@ function update(key: string, value: unknown): void {
 			:resource-templates="resourceTemplates ?? []"
       @update:model-value="update(field.key, $event)"
     />
+    <el-tag v-if="field.public !== undefined && field.type === 'checkbox'" size="small" :type="field.public ? 'success' : 'info'">{{ field.public ? 'Публичный' : 'Приватный' }}</el-tag>
   </el-form-item>
 </template>

@@ -1736,12 +1736,14 @@ func TestPageResourceRendersWidgetEnvelopeAndIsolatesErrors(
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Resource) != 8 ||
+	if len(payload.Resource) != 7 ||
 		payload.Resource["id"] != float64(7) ||
 		payload.Resource["title"] != "Page" ||
-		payload.Resource["annotation"] != "" ||
-		payload.Resource["content"] != "Content" {
+		payload.Resource["annotation"] != "" {
 		t.Fatalf("resource payload = %#v", payload.Resource)
+	}
+	if _, exists := payload.Resource["content"]; exists {
+		t.Fatalf("resource payload contains content: %#v", payload.Resource)
 	}
 	if len(payload.Widgets.Body) != 7 || len(payload.Widgets.Sidebar) != 0 {
 		t.Fatalf("widgets = %#v", payload.Widgets)

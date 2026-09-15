@@ -397,6 +397,7 @@ func (h *Handler) serveRuntime(
 	response http.ResponseWriter,
 	request *http.Request,
 ) {
+	response.Header().Set("Cache-Control", "no-store")
 	actor, exists := httptransport.ActorFromContext(request.Context())
 	if !exists {
 		http.Error(
@@ -436,6 +437,11 @@ func (h *Handler) serveRuntime(
 		return
 	}
 
+	settings, err := core.PublicSiteSettings(request.Context(), runtime)
+	if err != nil {
+		http.Error(response, "site settings unavailable", http.StatusInternalServerError)
+		return
+	}
 	item := runtime.Site()
 	response.Header().Set("Content-Type", "application/json; charset=utf-8")
 
@@ -444,7 +450,7 @@ func (h *Handler) serveRuntime(
 		Domain:      item.Domain,
 		Locale:      item.Locale,
 		ProfileCode: runtime.Profile().Profile().Code,
-		Settings:    item.Settings,
+		Settings:    settings,
 	}); err != nil {
 		http.Error(response, err.Error(), http.StatusInternalServerError)
 	}

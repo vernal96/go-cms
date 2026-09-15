@@ -222,7 +222,7 @@ func TestRendererResolvesStaticAndVariableAttachments(t *testing.T) {
 	}
 }
 
-func TestRendererPreservesRequiredFieldsAndUsesBackendSiteVariables(t *testing.T) {
+func TestRendererPreservesRequiredFieldsAndUsesPrivateSiteVariables(t *testing.T) {
 	t.Parallel()
 	required := true
 	params := []field.Definition{{Key: "company", Type: field.TypeString, Label: "Company"}}
@@ -233,6 +233,15 @@ func TestRendererPreservesRequiredFieldsAndUsesBackendSiteVariables(t *testing.T
 	}
 	template := mailTemplate()
 	template.To = []AddressTemplate{{Email: "person@example.net"}}
+	found := false
+	for _, variable := range renderer.SiteVariables() {
+		if variable.Variable == "site.field.company" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("private mail parameter missing from metadata")
+	}
 	template.Subject = "{{site.id}} {{site.profile_code}} {{site.domain}} {{site.locale}} {{site.is_public}} {{site.field.company}} {{data.name}}"
 	template.HTMLBody = "<p>Body</p>"
 	template.Variables = []field.Definition{{Key: "name", Type: field.TypeString, Label: "Name", Required: &required}}

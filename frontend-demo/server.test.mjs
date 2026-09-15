@@ -11,16 +11,21 @@ test("public rendering, CMS authorization and HTTP boundaries", async (t) => {
   let requests = [];
   let menuTitle = "Меню из CMS";
   let menuFailure = false;
+  let siteFailure = false;
+  let siteName = "Студия из CMS";
+  let contentType = "html";
+  let content = "<h1>Live CMS content</h1>";
+  let contentWidgets = () => [{ code: "core_content", data: { content } }];
   const api = http.createServer((req, res) => {
     requests.push({
       path: req.url,
       host: req.headers.host,
       authorization: req.headers.authorization,
     });
-    res.writeHead(menuFailure && req.url.startsWith("/menu") ? 500 : upstreamStatus, { "Content-Type": "application/json" });
+    res.writeHead((menuFailure && req.url.startsWith("/menu")) || (siteFailure && req.url === "/site") ? 500 : upstreamStatus, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify(
-        req.url.startsWith("/menu")
+        req.url === "/site" ? { settings: { string_value: siteName, email_value: "hello@example.test", phone_value: "+79000000000" } } : req.url.startsWith("/menu")
           ? { items: [{ id: 12, title: menuTitle, url: "/projects", children: [] }] }
           : req.url.startsWith("/search")
           ? {
@@ -37,9 +42,9 @@ test("public rendering, CMS authorization and HTTP boundaries", async (t) => {
               resource: {
                 title: "Demo & CMS",
                 annotation: '"quoted"',
-                content_type: "html",
-                content: "<h1>Live CMS content</h1>",
+                content_type: contentType,
               },
+              widgets: { body: contentWidgets(), sidebar: [] },
             },
       ),
     );
@@ -83,6 +88,44 @@ test("public rendering, CMS authorization and HTTP boundaries", async (t) => {
       });
     },
   );
+  await t.test("renders plain text from the content widget with HTML escaping", async () => {
+    contentType = "text";
+    content = "<script>alert(1)</script> & text";
+    try {
+      const response = await fetch(url + "/about");
+      const body = await response.text();
+      assert.equal(response.status, 200);
+      assert.match(body, /<h1>Demo &amp; CMS<\/h1>/);
+      assert.match(body, /<p>&lt;script&gt;alert\(1\)&lt;\/script&gt; &amp; text<\/p>/);
+      assert.doesNotMatch(body, /<script>/);
+    } finally {
+      contentType = "html";
+      content = "<h1>Live CMS content</h1>";
+    }
+  });
+  await t.test("reports missing or failed content widgets", async () => {
+    const original = contentWidgets;
+    try {
+      for (const widgets of [[], [{ code: "core_content", error: { code: "render_failed" } }]]) {
+        contentWidgets = () => widgets;
+        assert.equal((await fetch(url + "/about")).status, 502);
+      }
+    } finally {
+      contentWidgets = original;
+    }
+  });
+  await t.test("loads public site settings, escapes values and fails on CMS errors", async () => {
+    let body = await (await fetch(url + "/")).text();
+    assert.match(body, /Студия из CMS/);
+    assert.match(body, /hello@example.test/);
+    assert.match(body, /tel:\+79000000000/);
+    siteName = '<script>private?</script>';
+    body = await (await fetch(url + "/")).text();
+    assert.match(body, /&lt;script&gt;private\?&lt;\/script&gt;/);
+    siteFailure = true;
+    assert.equal((await fetch(url + "/")).status, 502);
+    siteFailure = false;
+  });
   await t.test("loads four CMS menus, reflects changes and reports menu failure", async () => {
     requests = [];
     const response = await fetch(url + "/projects");

@@ -17,7 +17,7 @@ import (
 func testRenderer(t *testing.T, resultLimit int) *Renderer {
 	t.Helper()
 	renderer, err := NewRenderer(kernel.Profile{
-		Params: []field.Definition{{Key: "site_name"}},
+		Params: []field.Definition{{Key: "site_name", Public: true}},
 		Templates: []template.Definition{{Fields: []field.Definition{{
 			Key: "subtitle",
 		}}}},
@@ -109,8 +109,8 @@ func TestRendererExcludesFileFieldsButKeepsScalarFields(t *testing.T) {
 	t.Parallel()
 	renderer, err := NewRenderer(kernel.Profile{
 		Params: []field.Definition{
-			{Key: "company", Type: field.TypeString},
-			{Key: "logo", Type: field.TypeFile},
+			{Key: "company", Type: field.TypeString, Public: true},
+			{Key: "logo", Type: field.TypeFile, Public: true},
 		},
 		Templates: []template.Definition{{Fields: []field.Definition{
 			{Key: "summary", Type: field.TypeString},
@@ -213,5 +213,24 @@ func TestServiceUsesDefaultsValidatesSaveAndKeepsSiteScope(t *testing.T) {
 		Settings{TitleTemplate: "{{ resource.content }}"},
 	); err == nil {
 		t.Fatal("invalid template was saved")
+	}
+}
+
+func TestPrivateSiteParametersCannotAppearInSEO(t *testing.T) {
+	renderer, err := NewRenderer(kernel.Profile{Params: []field.Definition{
+		{Key: "secret", Type: field.TypeString},
+		{Key: "name", Type: field.TypeString, Public: true},
+	}}, 1000, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, variable := range renderer.Variables() {
+		if variable == "site.field.secret" {
+			t.Fatal("private variable advertised")
+		}
+	}
+	_, err = renderer.Render(Settings{TitleTemplate: "{{site.field.secret}}"}, RenderInput{Site: site.Site{Settings: map[string]any{"secret": "never public"}}})
+	if err == nil {
+		t.Fatal("private variable rendered")
 	}
 }

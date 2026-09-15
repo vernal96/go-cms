@@ -70,8 +70,22 @@ function publicData(path) {
     request.on("error", reject);
   });
 }
-function layout(title, description, content, path, menus = [[], [], [], []]) {
-  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} — Контур</title><meta name="description" content="${escape(description)}"><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/style.css"></head><body><a class="skip" href="#main">К содержимому</a><header class="header"><a class="brand" href="/" aria-label="Контур — главная"><span class="brand-icon">К</span>контур<span class="brand-caption">архитектурная<br>студия</span></a><nav aria-label="Основная навигация">${menuLinks(menus[0], path)}</nav><a class="contact-link" href="/contacts">Обсудим идею <span>↗</span></a></header><main id="main">${menus[3]?.length ? `<nav class="project-menu" aria-label="Меню проектов">${menuLinks(menus[3], path)}</nav>` : ""}${content}</main><footer><div><a class="brand" href="/">контур<span class="dot">®</span></a><p>Архитектура начинается с внимания.</p></div><nav aria-label="Футер 1">${menuLinks(menus[1], path)}</nav><nav aria-label="Футер 2">${menuLinks(menus[2], path)}</nav><div class="footer-note">Демонстрационная студия<br>Все проекты и истории вымышлены.<br>© Контур, 2026</div></footer></body></html>`;
+async function loadChrome(path) {
+  const settings = await loadSite();
+  return [await loadMenus(path), settings];
+}
+async function loadSite() {
+  const result = await publicData('/site');
+  const settings = result.data?.settings;
+  if (result.status !== 200 || !settings || typeof settings !== 'object' || Array.isArray(settings) || typeof settings.string_value !== 'string') throw new Error('Site settings unavailable');
+  return settings;
+}
+function layout(title, description, content, path, menus = [[], [], [], []], settings = {}) {
+  const name = typeof settings.string_value === 'string' ? settings.string_value : 'CMS';
+  const email = typeof settings.email_value === 'string' ? settings.email_value : '';
+  const phone = typeof settings.phone_value === 'string' ? settings.phone_value : '';
+  const contacts = `${email ? `<a href="mailto:${escape(encodeURIComponent(email))}">${escape(email)}</a><br>` : ''}${phone ? `<a href="tel:${escape(phone.replace(/[^+0-9]/g, ''))}">${escape(phone)}</a><br>` : ''}`;
+  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} — ${escape(name)}</title><meta name="description" content="${escape(description)}"><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/style.css"></head><body><a class="skip" href="#main">К содержимому</a><header class="header"><a class="brand" href="/" aria-label="${escape(name)} — главная"><span class="brand-icon">${escape(name[0] ?? "")}</span>${escape(name)}<span class="brand-caption">архитектурная<br>студия</span></a><nav aria-label="Основная навигация">${menuLinks(menus[0], path)}</nav><a class="contact-link" href="/contacts">Обсудим идею <span>↗</span></a></header><main id="main">${menus[3]?.length ? `<nav class="project-menu" aria-label="Меню проектов">${menuLinks(menus[3], path)}</nav>` : ""}${content}</main><footer><div><a class="brand" href="/">${escape(name)}<span class="dot">®</span></a><p>Архитектура начинается с внимания.</p></div><nav aria-label="Футер 1">${menuLinks(menus[1], path)}</nav><nav aria-label="Футер 2">${menuLinks(menus[2], path)}</nav><div class="footer-note">${contacts}Демонстрационная студия<br>Все проекты и истории вымышлены.<br>© ${escape(name)}, 2026</div></footer></body></html>`;
 }
 function searchForm(q = "") {
   return `<form class="search" method="get" action="/search"><label for="q">Найти проект или статью</label><div><input id="q" name="q" type="search" minlength="3" maxlength="200" required value="${escape(q)}" placeholder="Например, свет или дом"><button type="submit">Найти ↗</button></div></form>`;
@@ -145,7 +159,7 @@ export const server = http.createServer(async (req, res) => {
           "Поиск по проектам и журналу студии.",
           content,
           url.pathname,
-          await loadMenus(url.pathname),
+          ...await loadChrome(url.pathname),
         ),
       );
     }
@@ -157,12 +171,14 @@ export const server = http.createServer(async (req, res) => {
     }
     if (!result.data.resource) throw new Error("Missing resource");
     const item = result.data.resource;
+    const contentWidget = result.data.widgets?.body?.find(widget => widget.code === "core_content");
+    if (contentWidget?.error || typeof contentWidget?.data?.content !== "string") throw new Error("Content widget unavailable");
     // HTML is authored by trusted CMS editors; CSP prevents scripts from running.
     const content =
       item.content_type === "html"
-        ? item.content
-        : `<section class="prose"><h1>${escape(item.title)}</h1><p>${escape(item.content)}</p></section>`;
-    send(200, layout(item.title, item.annotation, content, url.pathname, await loadMenus(url.pathname)));
+        ? contentWidget.data.content
+        : `<section class="prose"><h1>${escape(item.title)}</h1><p>${escape(contentWidget.data.content)}</p></section>`;
+    send(200, layout(item.title, item.annotation, content, url.pathname, ...await loadChrome(url.pathname)));
   } catch (error) {
     const status = [400, 403, 404].includes(error.status) ? error.status : 502;
     const title =

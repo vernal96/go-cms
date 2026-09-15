@@ -49,6 +49,8 @@ const (
 )
 
 type Definition struct {
+	// Public allows a Profile.Params value in public site projections.
+	Public      bool
 	Key         string
 	Type        TypeCode
 	Label       string
@@ -361,4 +363,15 @@ func (types Types) FieldTypes() []TypeCode {
 type TypeCatalog interface {
 	TypeResolver
 	FieldTypes() []TypeCode
+}
+
+// PublicDefinitions returns detached definitions explicitly allowed for public site use.
+func PublicDefinitions(definitions []Definition) []Definition {
+	result := make([]Definition, 0, len(definitions))
+	for _, definition := range definitions {
+		if definition.Public {
+			result = append(result, definition)
+		}
+	}
+	return CloneDefinitions(result)
 }
