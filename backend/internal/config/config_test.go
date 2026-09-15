@@ -13,6 +13,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core"
 	"github.com/vernal96/go-cms/kernel/modules/forms"
 	"github.com/vernal96/go-cms/kernel/modules/mail"
+	"github.com/vernal96/go-cms/kernel/modules/search"
 )
 
 func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
@@ -127,11 +128,12 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 	if definition.MainDatabase.Connector.Code() != mainpostgres.ConnectionCode {
 		t.Fatalf("connection code = %q", definition.MainDatabase.Connector.Code())
 	}
-	if len(definition.MainDatabase.Adapters) != 4 ||
+	if len(definition.MainDatabase.Adapters) != 5 ||
 		definition.MainDatabase.Adapters[0].ModuleCode() != core.ModuleCode ||
 		definition.MainDatabase.Adapters[1].ModuleCode() != "seo" ||
 		definition.MainDatabase.Adapters[2].ModuleCode() != mail.ModuleCode ||
-		definition.MainDatabase.Adapters[3].ModuleCode() != forms.ModuleCode {
+		definition.MainDatabase.Adapters[3].ModuleCode() != forms.ModuleCode ||
+		definition.MainDatabase.Adapters[4].ModuleCode() != search.ModuleCode {
 		t.Fatalf("database adapters = %#v", definition.MainDatabase.Adapters)
 	}
 	if len(definition.Profiles) != 1 || definition.Profiles[0].Code != "dev" {
@@ -155,12 +157,13 @@ func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {
 		definition.OutboxPublisher.CleanupMaxBatches != 40 {
 		t.Fatalf("outbox publisher definition = %#v", definition.OutboxPublisher)
 	}
-	if len(definition.Profiles[0].Modules) != 5 ||
+	if len(definition.Profiles[0].Modules) != 6 ||
 		definition.Profiles[0].Modules[0].Module.Code() != core.ModuleCode ||
 		definition.Profiles[0].Modules[1].Module.Code() != "seo" ||
 		definition.Profiles[0].Modules[2].Module.Code() != mail.ModuleCode ||
 		definition.Profiles[0].Modules[3].Module.Code() != forms.ModuleCode ||
-		definition.Profiles[0].Modules[4].Module.Code() != admin.ModuleCode ||
+		definition.Profiles[0].Modules[4].Module.Code() != search.ModuleCode ||
+		definition.Profiles[0].Modules[5].Module.Code() != admin.ModuleCode ||
 		len(definition.Profiles[0].Modules[0].Caches) != 2 ||
 		definition.Profiles[0].Modules[0].Caches[0].Alias != core.DurableCacheAlias ||
 		definition.Profiles[0].Modules[0].Caches[0].Code != projectcache.FilesystemCode ||

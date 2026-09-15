@@ -13,13 +13,14 @@ import (
 	corewidgets "github.com/vernal96/go-cms/kernel/modules/core/widgets"
 	"github.com/vernal96/go-cms/kernel/modules/forms"
 	"github.com/vernal96/go-cms/kernel/modules/mail"
+	"github.com/vernal96/go-cms/kernel/modules/search"
 	"github.com/vernal96/go-cms/kernel/modules/seo"
 )
 
 var profile = dev.Profile(mail.Config{}, forms.Config{}, "private")
 
 func TestProfileContainsRequiredModulesInOrder(t *testing.T) {
-	if len(profile.Modules) != 5 {
+	if len(profile.Modules) != 6 {
 		t.Fatalf("profile module count = %d", len(profile.Modules))
 	}
 	if profile.Modules[0].Module.Code() != core.ModuleCode {
@@ -34,10 +35,13 @@ func TestProfileContainsRequiredModulesInOrder(t *testing.T) {
 			profile.Modules[1].Module.Code(),
 		)
 	}
-	if profile.Modules[4].Module.Code() != admin.ModuleCode {
+	if profile.Modules[4].Module.Code() != search.ModuleCode {
+		t.Fatalf("search module = %q", profile.Modules[4].Module.Code())
+	}
+	if profile.Modules[5].Module.Code() != admin.ModuleCode {
 		t.Fatalf(
-			"third profile module = %q",
-			profile.Modules[4].Module.Code(),
+			"last profile module = %q",
+			profile.Modules[5].Module.Code(),
 		)
 	}
 }

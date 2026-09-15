@@ -22,6 +22,7 @@ import (
 	formspostgres "github.com/vernal96/go-cms/kernel/modules/forms/adapters/postgres"
 	mailmodule "github.com/vernal96/go-cms/kernel/modules/mail"
 	mailpostgres "github.com/vernal96/go-cms/kernel/modules/mail/adapters/postgres"
+	searchpostgres "github.com/vernal96/go-cms/kernel/modules/search/adapters/postgres"
 	seopostgres "github.com/vernal96/go-cms/kernel/modules/seo/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/outbox"
 )
@@ -199,6 +200,7 @@ func (c Config) Application() appkernel.Definition {
 				seopostgres.DatabaseFactory{},
 				mailpostgres.DatabaseFactory{},
 				formspostgres.DatabaseFactory{},
+				searchpostgres.DatabaseFactory{},
 			},
 		},
 		Filesystems: []filesystem.Factory{

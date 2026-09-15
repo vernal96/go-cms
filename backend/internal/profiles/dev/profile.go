@@ -14,6 +14,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/modules/forms"
 	"github.com/vernal96/go-cms/kernel/modules/mail"
+	"github.com/vernal96/go-cms/kernel/modules/search"
 	"github.com/vernal96/go-cms/kernel/modules/seo"
 )
 
@@ -35,6 +36,7 @@ func Profile(
 			{Module: seo.Module{}},
 			{Module: mail.Module{}, Config: mailConfig, Filesystems: []filesystem.Binding{{Alias: mail.SpoolFilesystemAlias, Code: spoolStorage}}},
 			{Module: forms.Module{}, Config: formsConfig, Filesystems: []filesystem.Binding{{Alias: forms.SpoolFilesystemAlias, Code: spoolStorage}}},
+			{Module: search.Module{}},
 			{Module: admin.Module{}},
 		},
 	}

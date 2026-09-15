@@ -82,10 +82,12 @@ func TestMigrationSourceIncludesIdentityAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 40 {
+	if len(entries) != 42 {
 		t.Fatalf("migration files = %#v", entries)
 	}
 	expected := map[string]bool{
+		"000021_resource_search.up.sql":                      false,
+		"000021_resource_search.down.sql":                    false,
 		"000020_entity_hook_calls.up.sql":                    false,
 		"000020_entity_hook_calls.down.sql":                  false,
 		"000019_resource_site_transfer.up.sql":               false,
@@ -213,7 +215,7 @@ func TestPostgresMigrationsAndSiteRepository(t *testing.T) {
 	if err := manager.Up(ctx, plan); err != nil {
 		t.Fatalf("up: %v", err)
 	}
-	if err := manager.Down(ctx, plan, 3); err != nil {
+	if err := manager.Down(ctx, plan, 4); err != nil {
 		t.Fatalf("down reconciliation marker: %v", err)
 	}
 	if _, err := connector.Pool().Exec(ctx, `
@@ -236,7 +238,7 @@ ALTER TABLE core.resource_field_values
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if version != 20 || !hasVersion || dirty {
+	if version != 21 || !hasVersion || dirty {
 		t.Fatalf(
 			"version = %d, hasVersion = %t, dirty = %t",
 			version,

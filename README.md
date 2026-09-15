@@ -71,6 +71,9 @@ code-only configuration, and mixing Go values with individual environment settin
 
 ## Developer extensions
 
+See [site resource search](backend/kernel/modules/search/README.md) for the public
+`GET /search` API, engine contract and PostgreSQL validation procedure.
+
 See [creating profiles, modules, fields, widgets and Forms extensions](backend/examples/extensions/README.md)
 for the declaration contracts and a compilable module example.
 
