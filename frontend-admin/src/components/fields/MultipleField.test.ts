@@ -33,13 +33,15 @@ describe('multiple standard fields', () => {
   it('wraps custom scalar editors, forwards context and indexed errors', async () => {
     const editor = defineComponent({ props: ['modelValue', 'siteId', 'accessToken'], setup: props => () => h('span', String(props.modelValue)) })
     const registry = new AdminPluginRegistry([{ code: 'example', fieldEditors: { 'example.scalar': editor } }])
-    const wrapper = mount(DynamicField, { props: { field: { ...field, editor: 'example.scalar' }, modelValue: ['One'], siteId: 7, accessToken: 'test', errors: { 'items[0]': 'Ошибка значения' } }, global: { provide: { [adminPluginRegistryKey as symbol]: registry } } })
+    const wrapper = mount(DynamicField, { props: { field: { ...field, type: 'example.text', editor: 'example.scalar' }, modelValue: ['One'], siteId: 7, accessToken: 'test', errors: { 'items[0]': 'Ошибка значения' } }, global: { provide: { [adminPluginRegistryKey as symbol]: registry } } })
+    expect(createFieldValues([{ ...field, type: 'example.text', editor: 'example.scalar' }])).toEqual({ items: [] })
+    expect(validateFieldValues([{ ...field, type: 'example.text', editor: 'example.scalar' }], { items: [''] }, registry)).toHaveProperty('items[0]')
     expect(wrapper.findComponent(editor).props()).toMatchObject({ modelValue: 'One', siteId: 7, accessToken: 'test' })
     await wrapper.vm.$nextTick()
     expect(wrapper.findComponent(ElFormItem).props('error')).toBe('Ошибка значения')
     wrapper.unmount()
   })
-  it.each(['string', 'textarea', 'email', 'phone', 'int', 'float', 'file', 'media', 'select'])('initializes %s as an array', type => {
+  it.each(['string', 'textarea', 'email', 'phone', 'int', 'float', 'file', 'media', 'select', 'example.text'])('initializes %s as an array', type => {
     expect(createFieldValues([{ ...field, type }])).toEqual({ items: [] })
   })
   it('validates count, elements, numeric zero and nested paths', () => {

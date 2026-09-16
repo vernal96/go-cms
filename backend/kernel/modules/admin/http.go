@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -13,11 +12,6 @@ import (
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
-)
-
-const (
-	authenticatedMiddleware httptransport.MiddlewareCode = "admin.authenticated"
-	authorizedMiddleware    httptransport.MiddlewareCode = "admin.authorized"
 )
 
 type sessionResponse struct {
@@ -36,42 +30,7 @@ type sessionUser struct {
 	AvatarUpdatedAt *time.Time       `json:"avatar_updated_at"`
 }
 
-func (r *Runtime) HTTP() httptransport.Builder {
-	return httptransport.BuilderFunc(func(
-		context.Context,
-	) (httptransport.Contribution, error) {
-		if err := r.validateHTTP(); err != nil {
-			return httptransport.Contribution{}, err
-		}
-
-		return httptransport.Contribution{
-			Middleware: []httptransport.MiddlewareDefinition{
-				{
-					Code:       authenticatedMiddleware,
-					Scope:      httptransport.MiddlewareModule,
-					Middleware: httptransport.RequireAuthenticated,
-				},
-				{
-					Code:       authorizedMiddleware,
-					Scope:      httptransport.MiddlewareModule,
-					Middleware: r.requireAccess,
-				},
-			},
-			Routes: func(registrar httptransport.Registrar) error {
-				return registrar.Route(httptransport.Route{
-					Name:    "admin.session",
-					Method:  http.MethodGet,
-					Pattern: "/api/admin/session",
-					Handler: http.HandlerFunc(r.serveSession),
-				})
-			},
-		}, nil
-	})
-}
-
-// SessionHandler exposes the site-independent admin session endpoint to the
-// platform router. The same controller remains registered in the module HTTP
-// contribution so profile compilation validates the module-owned route.
+// SessionHandler exposes the site-independent admin session endpoint.
 func (r *Runtime) SessionHandler() (http.Handler, error) {
 	if err := r.validateHTTP(); err != nil {
 		return nil, err
@@ -255,5 +214,3 @@ func writeUnauthorized(response http.ResponseWriter) {
 		"authentication required",
 	)
 }
-
-var _ httptransport.Provider = (*Runtime)(nil)

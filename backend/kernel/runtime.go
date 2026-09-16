@@ -231,6 +231,25 @@ type ConfiguredRegistryProvider interface {
 	RegistryForConfig(any) (ModuleRegistry, error)
 }
 
+// RegistryForModule resolves the same declarations for profile compilation and
+// application-wide catalogs. Configured declarations take precedence.
+func RegistryForModule(module ProfileModule) (ModuleRegistry, error) {
+	if module.Module == nil || isNilValue(module.Module) {
+		return ModuleRegistry{}, errors.New("module is nil")
+	}
+	if provider, ok := module.Module.(ConfiguredRegistryProvider); ok {
+		registry, err := provider.RegistryForConfig(module.Config)
+		if err != nil {
+			return ModuleRegistry{}, fmt.Errorf("module %q registry: %w", module.Module.Code(), err)
+		}
+		return registry, nil
+	}
+	if provider, ok := module.Module.(RegistryProvider); ok {
+		return provider.Registry(), nil
+	}
+	return ModuleRegistry{}, nil
+}
+
 type RegistryProvider interface {
 	Registry() ModuleRegistry
 }
@@ -895,17 +914,9 @@ func (f *ProfileRuntimeFactory) Compile(
 	registry := newRuntimeRegistry()
 
 	for _, profileModule := range profile.Modules {
-		var moduleRegistry ModuleRegistry
-		if provider, ok := profileModule.Module.(ConfiguredRegistryProvider); ok {
-			var err error
-			moduleRegistry, err = provider.RegistryForConfig(profileModule.Config)
-			if err != nil {
-				return nil, fmt.Errorf("module %q registry: %w", profileModule.Module.Code(), err)
-			}
-		} else if provider, ok := profileModule.Module.(RegistryProvider); ok {
-			moduleRegistry = provider.Registry()
-		} else {
-			continue
+		moduleRegistry, err := RegistryForModule(profileModule)
+		if err != nil {
+			return nil, err
 		}
 
 		for index, fieldType := range moduleRegistry.FieldTypes {
@@ -927,6 +938,9 @@ func (f *ProfileRuntimeFactory) Compile(
 					err,
 				)
 			}
+		}
+		if len(moduleRegistry.PermissionEntities) == 0 {
+			continue
 		}
 		permissionDefinitions, err := permission.Definitions(
 			string(profileModule.Module.Code()),

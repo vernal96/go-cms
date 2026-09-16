@@ -230,6 +230,10 @@ func (a *App) boot(ctx context.Context) error {
 		return err
 	}
 
+	if err := catalog.AddRuntimePreparer(ctx, adminManagement.PrepareRuntimes); err != nil {
+		return fmt.Errorf("prepare admin navigation: %w", err)
+	}
+
 	a.profileBlueprints = profileBlueprints
 	a.sites = catalog
 	a.services = servicesFromCore(coreServices)

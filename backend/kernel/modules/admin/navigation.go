@@ -129,6 +129,16 @@ func (c *navigationComposer) compose(
 		return nil, errors.New("admin navigation composer is unavailable")
 	}
 
+	items, err := c.compile(runtime)
+	if err != nil {
+		return nil, err
+	}
+	return c.filter(ctx, actor, items)
+}
+
+// compile is independent of the current actor. Validate all contributed items,
+// including hidden ones, before accepting a candidate site runtime.
+func (c *navigationComposer) compile(runtime *site.Runtime) ([]adminui.NavigationItem, error) {
 	var siteItems []adminui.NavigationItem
 	if runtime != nil {
 		profileRuntime := runtime.Profile()
@@ -165,11 +175,21 @@ func (c *navigationComposer) compose(
 	if err != nil {
 		return nil, err
 	}
-	visible, err := c.filter(ctx, actor, items)
-	if err != nil {
-		return nil, err
+	return items, nil
+}
+
+// PrepareRuntimes validates navigation before the site catalog persists or
+// publishes any candidate. Permission filtering remains request-scoped.
+func (m *Management) PrepareRuntimes(ctx context.Context, plan site.RuntimePlan) (site.RuntimePreparation, error) {
+	for _, runtime := range plan.Next() {
+		if err := ctx.Err(); err != nil {
+			return site.RuntimePreparation{}, err
+		}
+		if _, err := m.navigation.compile(runtime); err != nil {
+			return site.RuntimePreparation{}, err
+		}
 	}
-	return visible, nil
+	return site.RuntimePreparation{}, nil
 }
 
 func (c *navigationComposer) filter(

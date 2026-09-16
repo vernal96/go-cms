@@ -53,6 +53,10 @@ func TestExternalModuleHTTPPersistenceAndSiteIsolation(t *testing.T) {
 	if !bytes.Contains(metadata, []byte(`"editor":"example.text"`)) {
 		t.Fatalf("custom field missing: %s", metadata)
 	}
+	navigation := call("GET", "/api/admin/navigation?site_id=1", nil, 200)
+	if !bytes.Contains(navigation, []byte(`"code":"example.notice"`)) {
+		t.Fatalf("configured permission missing from navigation: %s", navigation)
+	}
 	for id := 1; id <= 2; id++ {
 		runtime, ok := application.Sites().RuntimeByID(site.ID(id))
 		if !ok {
@@ -63,8 +67,8 @@ func TestExternalModuleHTTPPersistenceAndSiteIsolation(t *testing.T) {
 			t.Fatalf("module leaked for site %d", id)
 		}
 	}
-	call("PATCH", "/api/sites/1", map[string]any{"profile_code": "extended", "domain": "extended.example.test", "locale": "ru-RU", "is_public": true, "settings": map[string]any{"message": "backend round trip"}}, 200)
-	if raw := call("GET", "/api/sites/1", nil, 200); !bytes.Contains(raw, []byte("backend round trip")) {
+	call("PATCH", "/api/sites/1", map[string]any{"profile_code": "extended", "domain": "extended.example.test", "locale": "ru-RU", "is_public": true, "settings": map[string]any{"message": "backend round trip", "messages": []string{"first", "second"}}}, 200)
+	if raw := call("GET", "/api/sites/1", nil, 200); !bytes.Contains(raw, []byte("backend round trip")) || !bytes.Contains(raw, []byte(`"messages":["first","second"]`)) {
 		t.Fatalf("custom field was not persisted: %s", raw)
 	}
 	if raw := call("GET", "/api/sites/2", nil, 200); bytes.Contains(raw, []byte("backend round trip")) {

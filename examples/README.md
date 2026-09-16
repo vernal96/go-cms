@@ -12,15 +12,37 @@ The application uses public Core/Mail/Forms PostgreSQL adapters and the public
 HTTP server. Project seeds are declared on the database binding.
 
 Run `python3 scripts/check-external-packages.py` from the repository root. It
-copies the consumer into a temporary directory, compiles it, and independently
-relocates and builds every connector under `example.org/connector-*`. Without
-integration environment variables the persistence test explicitly skips.
+copies only `kernel` into the CMS module, puts every connector and shared support
+into separate Go modules using `scripts/go-packages.json`. Each exported module
+gets a tidied `go.mod`/`go.sum` with explicit versioned dependencies. A temporary
+file-based Go proxy supplies immutable module archives; all checks use
+`GOWORK=off` and no `replace` directives. Every module runs test/vet/build, then
+the external consumer installs those versions and runs its build/tests/vet.
+Test skips are printed explicitly. Without integration environment variables
+the persistence test skips.
+
+Use `--output /tmp/cms-package-check` (a new directory) to retain the exported
+`modules/`, `proxy/`, `consumer/`, test `logs/` and `result.json` for inspection.
+The script starts from root dependency versions, prunes each module with Go's
+dependency resolver, and uses separate bootstrap/final versions to resolve the
+module graph without changing any published artifact. Third-party checksum
+verification remains enabled. It never creates a repository or publishes to a
+remote registry.
+
+Public import paths are retained: PostgreSQL adapters consume connector types
+from those paths. The module graph has cycles between CMS adapters and low-level
+connectors using kernel contracts; Go supports this because package imports are
+acyclic. Actual repository extraction still requires choosing repository URLs
+and release versions. If module paths change, update all owning and consuming
+imports together (including adapters), then repeat these checks. The local proxy
+does not verify remote hosting, credentials or release/tag configuration.
 
 For integration tests create a **fresh isolated database**, with a name beginning
 `cms_extension_`, then export `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`,
 `EXAMPLE_DATABASE` and an arbitrary temporary `EXAMPLE_TOKEN`. Run the same script
 or `go -C examples/external-app test -count=1 -v ./...`. The test covers metadata,
-save/read of the custom field and Forms element, site isolation, and rejection
+save/read of scalar and multi-value custom fields and a Forms element, configured
+module permissions in navigation, site isolation, and rejection
 of an element on a site without the extension.
 
 `go -C examples/external-app run .` serves the fixture at `127.0.0.1:18081`.
@@ -34,7 +56,6 @@ Use Node 24+. From `frontend-admin`, run:
 
 ```sh
 npm ci
-npm run build:sdk
 npm pack --pack-destination /tmp
 ```
 
@@ -53,6 +74,12 @@ to the external Go application. In the browser set
 `http://127.0.0.1:18082/admin/example`. The page edits the custom site setting and
 Forms element through real CMS APIs. Create the example form if it does not yet
 exist. `?missing=1` omits the field editor to exercise blocked saving.
+
+For an automated clean packaging check, run
+`python3 scripts/check-admin-package.py` from the repository root with Node 24+
+on `PATH`. It verifies the archive exports, installs the archive in a temporary
+plugin copy, and compiles the plugin declarations and demo host without source
+aliases. This packaging check does not run the browser scenario below.
 
 With Playwright available to Node, run
 `node examples/admin-plugin/tests/browser.cjs` from the repository root, passing

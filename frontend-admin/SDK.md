@@ -1,9 +1,18 @@
 # Admin extension SDK
 
-Build with Node 24+: `npm ci && npm run build:sdk`. The public package entry is
+Package with Node 24+: `npm ci && npm pack`. The public package entry is
 `@go-cms/admin/sdk`; component styles are exported as `@go-cms/admin/sdk.css`.
-`npm pack` creates a local installable archive. This application remains private;
-no registry publication is required to test extensions.
+`prepack` rebuilds the SDK and validates its JavaScript, declarations and CSS
+before creating the archive. Only `dist-sdk`, this guide and package metadata
+are packaged. The package is publishable; these commands do not publish it.
+`npm run build:sdk` remains available for local development.
+
+From the repository root, `python3 scripts/check-admin-package.py` verifies a
+clean source copy: installs locked build dependencies, packs without a manual
+build, checks the actual archive exports, installs it into the independent
+example plugin, and builds both the plugin/types and its demo host. Vue and the
+shared UI libraries remain peer dependencies. Browser/API behavior is checked
+separately as described in `../examples/README.md`.
 
 The SDK exports:
 
@@ -46,3 +55,8 @@ default case-insensitive, non-strict Vue Router configuration.
 
 The independent package in `../examples/admin-plugin` demonstrates a page, field
 editor and Forms configuration editor using only this public entrypoint.
+
+`options.multiple: true` opts a scalar field into the shared ordered-list editor,
+including custom semantic types. The registered editor receives one scalar value
+per item; list bounds and indexed errors are handled by the SDK. The backend
+compiler must support the same list options and validate the resulting array.

@@ -9,6 +9,10 @@ const assert = require('node:assert/strict');
  try{
   await page.goto(base+'/admin/example',{waitUntil:'networkidle'});
   await page.getByRole('textbox',{name:'Message',exact:true}).fill('Browser field round trip');
+  const listEditors=page.getByRole('textbox',{name:'Messages',exact:true});
+  while(await listEditors.count()<2) await page.getByRole('button',{name:'Добавить',exact:true}).click();
+  await listEditors.nth(0).fill('First custom list value');
+  await listEditors.nth(1).fill('Second custom list value');
   const create=page.getByRole('button',{name:'Создать форму примера'});
   if(await create.count())await create.click();
   await page.getByRole('textbox',{name:'Text',exact:true}).fill('Browser element round trip');
@@ -18,6 +22,8 @@ const assert = require('node:assert/strict');
   await page.getByRole('textbox',{name:'Text',exact:true}).waitFor();
   assert.equal(await page.getByRole('textbox',{name:'Message',exact:true}).inputValue(),'Browser field round trip');
   assert.equal(await page.getByRole('textbox',{name:'Text',exact:true}).inputValue(),'Browser element round trip');
+  assert.equal(await listEditors.nth(0).inputValue(),'First custom list value');
+  assert.equal(await listEditors.nth(1).inputValue(),'Second custom list value');
   await page.getByLabel('Сайт',{exact:true}).selectOption({label:'plain.example.test'});
   await page.getByText('Модуль недоступен на выбранном сайте.').waitFor();
   assert.equal(await page.getByRole('textbox',{name:'Message',exact:true}).count(),0);
@@ -31,6 +37,6 @@ const assert = require('node:assert/strict');
   await page.getByRole('alert').filter({hasText:'message: Редактор'}).waitFor();
   assert.equal(mutations,0,'missing editor must block all writes');
   assert.deepEqual(errors,[]);
-  console.log('PASS: external SDK page, field + Forms element persistence, site switch, missing editor blocks writes; no page errors');
+  console.log('PASS: external SDK page, scalar + custom list + Forms element persistence, site switch, missing editor blocks writes; no page errors');
  }finally{await browser.close()}
 })().catch(error=>{console.error(error);process.exit(1)});

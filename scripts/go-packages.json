@@ -1,0 +1,14 @@
+{
+  "cms": {"source": "kernel", "target": "kernel", "dependencies": ["localstorage", "pgtrgm", "postgres"]},
+  "filelogger": {"dependencies": ["cms"]},
+  "filesystemcache": {"dependencies": ["cms", "localstorage", "support"]},
+  "kafkaeventbus": {"dependencies": ["cms", "support"]},
+  "localstorage": {"dependencies": ["cms"]},
+  "lokilogger": {"dependencies": ["cms"]},
+  "pgtrgm": {"dependencies": ["postgres"]},
+  "postgres": {"dependencies": ["cms"]},
+  "rabbiteventbus": {"dependencies": ["cms", "support"]},
+  "redis": {"dependencies": ["cms", "support"]},
+  "s3": {"dependencies": ["cms", "filesystemcache"]},
+  "support": {"dependencies": ["cms"]}
+}

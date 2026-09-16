@@ -168,3 +168,32 @@ func TestMigrationFilesRequireUpAndDown(t *testing.T) {
 		})
 	}
 }
+
+func TestManagerRejectsSharedHistoryBeforeAnySQL(t *testing.T) {
+	driver, _ := stub.WithInstance(nil, &stub.Config{})
+	target := &stubTarget{driver: driver.(*stub.Stub)}
+	plans := []Plan{}
+	for _, name := range []string{"core", "custom"} {
+		plans = append(plans, Plan{Connection: "main", Target: target, Source: Source{ID: name, Schema: "core", Path: ".", FS: fstest.MapFS{
+			"000001_create.up.sql": {Data: []byte("CREATE " + name)}, "000001_create.down.sql": {Data: []byte("DROP " + name)},
+		}}})
+	}
+	if err := NewManager().UpAll(context.Background(), plans); err == nil {
+		t.Fatal("shared history accepted")
+	}
+	if len(target.driver.MigrationSequence) != 0 {
+		t.Fatal("executed SQL before validation")
+	}
+	if err := NewManager().DownAll(context.Background(), plans, 1); err == nil {
+		t.Fatal("shared history accepted on rollback")
+	}
+	plans[1].Source.Schema = "custom"
+	if err := ValidateHistories(plans); err != nil {
+		t.Fatal(err)
+	}
+	plans[1].Source.Schema = "core"
+	plans[1].Connection = "another"
+	if err := ValidateHistories(plans); err != nil {
+		t.Fatal(err)
+	}
+}

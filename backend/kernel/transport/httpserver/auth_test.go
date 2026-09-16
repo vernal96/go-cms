@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	jwtsecurity "github.com/vernal96/go-cms/internal/security/jwt"
 	coreuser "github.com/vernal96/go-cms/kernel/modules/core/user"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
@@ -102,20 +101,15 @@ func TestLoginHandlerIssuesAccessToken(t *testing.T) {
 	}
 }
 
-func TestLoginHandlerReturnsVerifiableJWT(t *testing.T) {
-	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
-	tokens, err := jwtsecurity.New(
-		jwtsecurity.Config{
-			SigningKey: strings.Repeat("k", 32),
-			Issuer:     "cms.test",
-			Audience:   "cms-api.test",
-			AccessTTL:  15 * time.Minute,
-			ClockSkew:  0,
+// JWT signing and claim verification belong to internal/security/jwt tests.
+// The reusable transport exercises the public token contract end to end.
+func TestLoginTokenAuthenticatesNextRequest(t *testing.T) {
+	tokens := &stubAccessTokens{
+		accessToken: security.AccessToken{
+			Value:     "opaque-token",
+			ExpiresAt: time.Date(2026, 7, 29, 12, 15, 0, 0, time.UTC),
 		},
-		jwtsecurity.WithClock(func() time.Time { return now }),
-	)
-	if err != nil {
-		t.Fatal(err)
+		verifiedActor: security.User(42),
 	}
 	handler, err := newLoginHandler(
 		&stubAuthenticator{user: coreuser.User{ID: 42}},
@@ -144,12 +138,17 @@ func TestLoginHandlerReturnsVerifiableJWT(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
 		t.Fatal(err)
 	}
-	actor, err := tokens.VerifyAccessToken(
-		context.Background(),
-		payload.AccessToken,
-	)
-	if err != nil {
-		t.Fatal(err)
+	var actor security.Actor
+	protected := optionalAuthentication(tokens)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		actor, _ = httptransport.ActorFromContext(r.Context())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	nextRequest := httptest.NewRequest(http.MethodGet, "/resource", nil)
+	nextRequest.Header.Set("Authorization", payload.TokenType+" "+payload.AccessToken)
+	nextResponse := httptest.NewRecorder()
+	protected.ServeHTTP(nextResponse, nextRequest)
+	if nextResponse.Code != http.StatusNoContent || tokens.verifiedValue != tokens.accessToken.Value {
+		t.Fatalf("authenticated response = %d, verified token = %q", nextResponse.Code, tokens.verifiedValue)
 	}
 	id, exists := actor.UserID()
 	if !exists || id != 42 ||

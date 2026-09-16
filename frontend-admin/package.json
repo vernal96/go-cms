@@ -1,6 +1,5 @@
 {
   "name": "@go-cms/admin",
-  "private": true,
   "version": "0.1.0",
   "type": "module",
   "engines": {
@@ -12,7 +11,8 @@
     "typecheck": "vue-go-tsc -p tsconfig.json --noEmit",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
-    "build:sdk": "vite build --config vite.sdk.config.ts && vue-go-tsc -p tsconfig.sdk.json"
+    "build:sdk": "vite build --config vite.sdk.config.ts && vue-go-tsc -p tsconfig.sdk.json",
+    "prepack": "npm run build:sdk && node scripts/verify-sdk-package.mjs"
   },
   "devDependencies": {
     "@types/node": "26.1.2",
@@ -42,7 +42,8 @@
     "./sdk.css": "./dist-sdk/sdk.css"
   },
   "files": [
-    "dist-sdk"
+    "dist-sdk",
+    "SDK.md"
   ],
   "peerDependencies": {
     "@element-plus/icons-vue": "^2.3.2",

@@ -892,3 +892,33 @@ func TestProfileKeepsDistinctRoutes(t *testing.T) {
 		}
 	}
 }
+
+func TestPlatformNamespacesRejectProfileRoutesAndMounts(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
+	for _, pattern := range []string{"/api", "/api/custom", "/_cms", "/_cms/runtime"} {
+		for _, mount := range []bool{false, true} {
+			contribution := httptransport.Contribution{Routes: func(r httptransport.Registrar) error {
+				return r.Group("/", nil, func(r httptransport.Registrar) error {
+					if mount {
+						return r.Mount(httptransport.Mount{Pattern: pattern, Handler: handler})
+					}
+					return r.Route(httptransport.Route{Method: "GET", Pattern: pattern, Handler: handler})
+				})
+			}}
+			runtime := makeCompilerProfile(t, "reserved", compilerModule{code: "extension", contribution: contribution})
+			_, err := httpserver.CompileProfile(context.Background(), runtime)
+			if err == nil || !strings.Contains(err.Error(), "reserved by platform") || !strings.Contains(err.Error(), "extension") {
+				t.Fatalf("%s mount=%t: %v", pattern, mount, err)
+			}
+		}
+	}
+	runtime := makeCompilerProfile(t, "allowed", compilerModule{code: "extension", contribution: httptransport.Contribution{Routes: func(r httptransport.Registrar) error {
+		for _, pattern := range []string{"/apiary", "/_cms-other", "/custom/api"} {
+			if err := r.Route(httptransport.Route{Method: "GET", Pattern: pattern, Handler: handler}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}}})
+	compileProfileForTest(t, runtime)
+}

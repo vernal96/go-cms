@@ -7,14 +7,15 @@ import (
 	"github.com/vernal96/go-cms/kernel/adminui"
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/forms"
+	"github.com/vernal96/go-cms/kernel/permission"
 )
 
 type Module struct{}
 
 func (Module) Code() kernel.ModuleCode           { return "example" }
 func (Module) Dependencies() []kernel.ModuleCode { return []kernel.ModuleCode{forms.ModuleCode} }
-func (Module) Registry() kernel.ModuleRegistry {
-	return kernel.ModuleRegistry{FieldTypes: []field.Type{field.DescribedType{Type: textType{}, Presentation: field.Metadata{Label: "Example text", Editor: "example.text"}}}}
+func (Module) RegistryForConfig(any) (kernel.ModuleRegistry, error) {
+	return kernel.ModuleRegistry{PermissionEntities: []permission.Entity{{Code: "notice", Actions: []permission.Action{permission.Read}}}, FieldTypes: []field.Type{field.DescribedType{Type: textType{}, Presentation: field.Metadata{Label: "Example text", Editor: "example.text"}}}}, nil
 }
 func (Module) Build(_ context.Context, ctx kernel.ModuleContext) (kernel.ModuleRuntime, error) {
 	registrar, err := kernel.ModuleDependencyFrom[interface {
@@ -38,7 +39,7 @@ type Runtime struct{ SiteID string }
 
 func (Runtime) ModuleCode() kernel.ModuleCode { return "example" }
 func (Runtime) AdminNavigation() []adminui.NavigationItem {
-	return []adminui.NavigationItem{{Code: "example.notice", Label: "Example notice", Route: "example.notice", Scope: adminui.NavigationSite, Order: 80}}
+	return []adminui.NavigationItem{{Code: "example.notice", Label: "Example notice", Route: "example.notice", Scope: adminui.NavigationSite, Order: 80, Permission: "example.notice.read"}}
 }
 
 type textType struct{}

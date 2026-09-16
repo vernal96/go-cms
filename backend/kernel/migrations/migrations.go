@@ -40,6 +40,21 @@ type Plan struct {
 	Source     Source
 }
 
+// ValidateHistories rejects independent sources sharing one physical history.
+// A Manager uses the same history-table name for all its plans.
+func ValidateHistories(plans []Plan) error {
+	type key struct{ connection, schema string }
+	seen := make(map[key]string)
+	for _, plan := range plans {
+		identity := key{plan.Connection, plan.Source.Schema}
+		if previous, exists := seen[identity]; exists {
+			return fmt.Errorf("migration sources %q and %q on connection %q share history in schema %q", previous, plan.Source.ID, plan.Connection, plan.Source.Schema)
+		}
+		seen[identity] = plan.Source.ID
+	}
+	return nil
+}
+
 type MigrationStatus struct {
 	Version    uint   `json:"version"`
 	Identifier string `json:"identifier"`
@@ -93,6 +108,9 @@ func (m *Manager) UpAll(
 	ctx context.Context,
 	plans []Plan,
 ) error {
+	if err := ValidateHistories(plans); err != nil {
+		return err
+	}
 	for _, plan := range plans {
 		if err := m.Up(ctx, plan); err != nil {
 			return fmt.Errorf(
@@ -137,6 +155,9 @@ func (m *Manager) DownAll(
 	plans []Plan,
 	steps int,
 ) error {
+	if err := ValidateHistories(plans); err != nil {
+		return err
+	}
 	for index := len(plans) - 1; index >= 0; index-- {
 		plan := plans[index]
 

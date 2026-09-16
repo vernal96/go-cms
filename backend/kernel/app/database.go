@@ -158,5 +158,8 @@ func (a *App) openBinding(
 		}
 		a.seedPlan = append(a.seedPlan, plans...)
 	}
+	if err := migrations.ValidateHistories(a.migrationPlan); err != nil {
+		return nil, err
+	}
 	return binding, nil
 }

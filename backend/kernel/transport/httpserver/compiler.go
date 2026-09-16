@@ -518,6 +518,9 @@ func (r *scopedRegistrar) Route(route httptransport.Route) error {
 		)
 	}
 
+	if err := validatePlatformRoute(pattern); err != nil {
+		return r.routeError("REGISTER", pattern, err)
+	}
 	shape, err := routeShape(pattern)
 	if err != nil {
 		return r.routeError(method, pattern, err)
@@ -587,6 +590,9 @@ func (r *scopedRegistrar) Mount(mount httptransport.Mount) error {
 	pattern, err := joinRoutePattern(r.prefix, mount.Pattern)
 	if err != nil {
 		return r.routeError("MOUNT", mount.Pattern, err)
+	}
+	if err := validatePlatformRoute(pattern); err != nil {
+		return r.routeError("REGISTER", pattern, err)
 	}
 	shape, err := routeShape(pattern)
 	if err != nil {
@@ -869,3 +875,14 @@ func (r *compiledResourceHandlers) Handler(
 
 var _ httptransport.Registrar = (*scopedRegistrar)(nil)
 var _ httptransport.ResourceHandlers = (*compiledResourceHandlers)(nil)
+
+// Platform namespaces are handled before profile dispatch. Registering a
+// literal route below them would succeed in chi but never reach the module.
+func validatePlatformRoute(pattern string) error {
+	for _, prefix := range []string{"/api", "/_cms"} {
+		if pattern == prefix || strings.HasPrefix(pattern, prefix+"/") {
+			return fmt.Errorf("path is reserved by platform mount %q", prefix)
+		}
+	}
+	return nil
+}

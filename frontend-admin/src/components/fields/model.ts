@@ -20,10 +20,8 @@ const supportedTypes = new Set([
 	'json',
 ])
 
-const multipleTypes = new Set(['string', 'textarea', 'email', 'phone', 'int', 'float', 'file', 'media', 'select'])
-
 export function isMultipleField(field: FieldDefinition): boolean {
-  return multipleTypes.has(field.type) && field.options?.multiple === true
+  return field.options?.multiple === true
 }
 
 export function singleValueField(field: FieldDefinition): FieldDefinition {

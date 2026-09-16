@@ -57,7 +57,7 @@ func validateApplicationProfile(profile kernel.Profile) error {
 func buildPermissionCatalog(
 	profiles []kernel.Profile,
 ) (*permission.Catalog, error) {
-	seenModules := make(map[kernel.ModuleCode]struct{})
+	seenPermissions := make(map[permission.Code]permission.Definition)
 	definitions := make([]permission.Definition, 0)
 
 	for _, profile := range profiles {
@@ -66,18 +66,16 @@ func buildPermissionCatalog(
 				continue
 			}
 			moduleCode := profileModule.Module.Code()
-			if _, exists := seenModules[moduleCode]; exists {
-				continue
+			registry, err := kernel.RegistryForModule(profileModule)
+			if err != nil {
+				return nil, err
 			}
-			seenModules[moduleCode] = struct{}{}
-
-			provider, exists := profileModule.Module.(kernel.RegistryProvider)
-			if !exists {
+			if len(registry.PermissionEntities) == 0 {
 				continue
 			}
 			moduleDefinitions, err := permission.Definitions(
 				string(moduleCode),
-				provider.Registry().PermissionEntities,
+				registry.PermissionEntities,
 			)
 			if err != nil {
 				return nil, fmt.Errorf(
@@ -86,7 +84,16 @@ func buildPermissionCatalog(
 					err,
 				)
 			}
-			definitions = append(definitions, moduleDefinitions...)
+			for _, definition := range moduleDefinitions {
+				if previous, exists := seenPermissions[definition.Code]; exists {
+					if previous != definition {
+						return nil, fmt.Errorf("permission %q has inconsistent declarations across profiles", definition.Code)
+					}
+					continue
+				}
+				seenPermissions[definition.Code] = definition
+				definitions = append(definitions, definition)
+			}
 		}
 	}
 

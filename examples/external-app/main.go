@@ -50,7 +50,10 @@ func profile(code kernel.ProfileCode, extended bool) kernel.Profile {
 	result := kernel.Profile{Code: code, Name: string(code)}
 	if extended {
 		modules = append(modules, kernel.ProfileModule{Module: notice.Module{}})
-		result.Params = []field.Definition{{Key: "message", Label: "Message", Type: "example.text"}}
+		result.Params = []field.Definition{
+			{Key: "message", Label: "Message", Type: "example.text"},
+			{Key: "messages", Label: "Messages", Type: "example.text", Options: field.StringOptions{Multiple: true, MaxItems: 3}},
+		}
 	}
 	result.Modules = append(modules, kernel.ProfileModule{Module: admin.Module{}})
 	return result
