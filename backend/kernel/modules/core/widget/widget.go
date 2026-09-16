@@ -191,12 +191,13 @@ func ValidArea(code AreaCode) bool {
 }
 
 type Binding struct {
-	ID           BindingID
-	Code         Code
-	Area         AreaCode
-	Position     int
-	Presentation Presentation
-	Params       map[string]any
+	ID            BindingID
+	Code          Code
+	Area          AreaCode
+	Position      int
+	Presentation  Presentation
+	Params        map[string]any
+	ParamBindings ParamBindings
 }
 
 type Order struct {
@@ -206,13 +207,14 @@ type Order struct {
 }
 
 type Placement struct {
-	Key          string
-	BindingID    BindingID
-	Code         Code
-	Area         AreaCode
-	Position     int
-	Presentation Presentation
-	Params       map[string]any
+	Key           string
+	BindingID     BindingID
+	Code          Code
+	Area          AreaCode
+	Position      int
+	Presentation  Presentation
+	Params        map[string]any
+	ParamBindings ParamBindings
 }
 
 type Placements struct {
@@ -222,6 +224,7 @@ type Placements struct {
 
 func CloneBinding(binding Binding) Binding {
 	binding.Params = cloneMap(binding.Params)
+	binding.ParamBindings = CloneParamBindings(binding.ParamBindings)
 	return binding
 }
 
@@ -538,7 +541,7 @@ func cloneMap(source map[string]any) map[string]any {
 	}
 	result := make(map[string]any, len(source))
 	for key, value := range source {
-		result[key] = value
+		result[key] = cloneParamValue(value)
 	}
 	return result
 }

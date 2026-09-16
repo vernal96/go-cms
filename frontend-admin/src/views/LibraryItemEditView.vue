@@ -33,6 +33,8 @@ const canUpdate = ref(true)
 const canReadHistory = ref(false)
 const canDeleteHistory = ref(false)
 const resourceWidgets = ref<ResourceWidget[]>([])
+const savedTemplateCode = ref<string | null>(null)
+const savedTemplate = computed(() => metadata.value.templates.find((item) => item.code === savedTemplateCode.value) ?? null)
 const resourceVersion = ref(0)
 const ownerLibraryId = ref(0)
 const activeTab = ref('main')
@@ -83,6 +85,7 @@ async function load(): Promise<void> {
       canUpdate.value = details.permissions.update
       canReadHistory.value = details.permissions.history_read
       canDeleteHistory.value = details.permissions.history_delete
+      savedTemplateCode.value = item.template_code
       resourceWidgets.value = item.widgets
       Object.assign(form, { image_media_id: item.image_media_id ?? null, library_id: item.library_id, template_code: item.template_code, title: item.title, slug: item.slug, annotation: item.annotation, content: item.content, is_public: item.is_public, is_searchable: item.is_searchable, published_at: item.published_at ? new Date(item.published_at) : null, unpublished_at: item.unpublished_at ? new Date(item.unpublished_at) : null, fields: createFieldValues(loadedMetadata.templates.find((template) => template.code === item.template_code)?.fields ?? [], item.fields) })
     }
@@ -163,13 +166,14 @@ onMounted(() => void load())
         </el-tab-pane>
 
         <el-tab-pane v-if="showWidgetsTab" label="Виджеты" name="widgets">
+          <el-alert v-if="form.template_code !== savedTemplateCode" title="Сначала сохраните изменение шаблона ресурса." type="info" :closable="false" />
           <resource-widgets-editor
-            v-if="selectedTemplate"
+            v-if="savedTemplate && form.template_code === savedTemplateCode"
             v-model="resourceWidgets"
             :access-token="accessToken"
             :site-id="siteId"
             :resource-id="itemId!"
-            :template="selectedTemplate"
+            :template="savedTemplate"
             :definitions="metadata.widgets"
             :can-update="canUpdate"
             :resource-version="resourceVersion"

@@ -480,13 +480,14 @@ func (h *contentHTTP) updateResource(response http.ResponseWriter, request *http
 }
 
 type resourceWidgetPresentationRequest struct {
-	ExpectedVersion int64           `json:"expected_version"`
-	View            widget.ViewCode `json:"view"`
-	Columns         int             `json:"columns"`
-	MarginTop       int             `json:"margin_top"`
-	MarginBottom    int             `json:"margin_bottom"`
-	Enabled         *bool           `json:"enabled"`
-	Params          map[string]any  `json:"params"`
+	ExpectedVersion int64                `json:"expected_version"`
+	View            widget.ViewCode      `json:"view"`
+	Columns         int                  `json:"columns"`
+	MarginTop       int                  `json:"margin_top"`
+	MarginBottom    int                  `json:"margin_bottom"`
+	Enabled         *bool                `json:"enabled"`
+	Params          map[string]any       `json:"params"`
+	ParamBindings   widget.ParamBindings `json:"param_bindings"`
 }
 
 type createResourceWidgetRequest struct {
@@ -516,7 +517,7 @@ func (h *contentHTTP) createResourceWidget(response http.ResponseWriter, request
 		Code: payload.Code, Area: payload.Area, View: payload.View, Columns: payload.Columns,
 		ExpectedVersion: payload.ExpectedVersion,
 		MarginTop:       payload.MarginTop, MarginBottom: payload.MarginBottom,
-		Enabled: payload.Enabled, Params: payload.Params,
+		Enabled: payload.Enabled, Params: payload.Params, ParamBindings: payload.ParamBindings,
 	})
 	writeResult(response, http.StatusCreated, result, err)
 }
@@ -545,7 +546,7 @@ func (h *contentHTTP) updateResourceWidget(response http.ResponseWriter, request
 	result, err := h.resources.UpdateResourceWidget(request.Context(), actor(request), siteID, resourceID, bindingID, resource.UpdateWidgetInput{
 		View: payload.View, Columns: payload.Columns, MarginTop: payload.MarginTop,
 		ExpectedVersion: payload.ExpectedVersion,
-		MarginBottom:    payload.MarginBottom, Enabled: payload.Enabled, Params: payload.Params,
+		MarginBottom:    payload.MarginBottom, Enabled: payload.Enabled, Params: payload.Params, ParamBindings: payload.ParamBindings,
 	})
 	writeResult(response, http.StatusOK, result, err)
 }

@@ -203,6 +203,7 @@ func (r *Repository) prepareWidgetDraft(ctx context.Context, tx pgx.Tx, before r
 		}
 		binding := loaded[0].Widgets[i]
 		binding.Params = item.Params
+		binding.ParamBindings = widget.CloneParamBindings(item.ParamBindings)
 		binding.Presentation = widget.Presentation{View: item.View, Columns: item.Columns, MarginTop: item.MarginTop, MarginBottom: item.MarginBottom, Enabled: item.Enabled}
 		if err := resource.ValidateMutationWidget(ctx, state.SiteID, state.Data.Template, &binding); err != nil {
 			return err
@@ -211,7 +212,7 @@ func (r *Repository) prepareWidgetDraft(ctx context.Context, tx pgx.Tx, before r
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE core.resource_widgets SET view=$3,columns=$4,margin_top=$5,margin_bottom=$6,enabled=$7,params=$8::jsonb WHERE resource_id=$1 AND id=$2`, before.ID, binding.ID, binding.Presentation.View, binding.Presentation.Columns, binding.Presentation.MarginTop, binding.Presentation.MarginBottom, binding.Presentation.Enabled, string(raw)); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE core.resource_widgets SET view=$3,columns=$4,margin_top=$5,margin_bottom=$6,enabled=$7,params=$8::jsonb,param_bindings=$9::jsonb WHERE resource_id=$1 AND id=$2`, before.ID, binding.ID, binding.Presentation.View, binding.Presentation.Columns, binding.Presentation.MarginTop, binding.Presentation.MarginBottom, binding.Presentation.Enabled, string(raw), nonNilParamBindings(binding.ParamBindings)); err != nil {
 			return translateError(err)
 		}
 	}

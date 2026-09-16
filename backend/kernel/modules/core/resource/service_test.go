@@ -2418,3 +2418,36 @@ func updateInputFrom(item Resource) UpdateInput {
 func testStringPointer(value string) *string {
 	return &value
 }
+
+func TestBoundWidgetDoesNotBlockResourceSaveForMissingRequiredValue(t *testing.T) {
+	service, _, _ := newTestService(t)
+	ctx := context.Background()
+	actor := security.System()
+	code := template.Code("empty")
+	current, err := service.Create(ctx, actor, CreateInput{SiteID: 1, Template: &code, Title: "Page"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.CreateWidget(ctx, actor, current.ID, CreateWidgetInput{ExpectedVersion: current.Version, Code: "test_summary", Area: widget.AreaBody, Columns: 12, ParamBindings: widget.ParamBindings{"title": widget.ResourceProperty("menu_title")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err = service.Get(ctx, actor, current.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err = service.Update(ctx, actor, UpdateInput{ID: current.ID, ExpectedVersion: current.Version, Template: &code, Type: current.Type, Title: "Updated page"})
+	if err != nil {
+		t.Fatalf("bound required field blocked content save: %v", err)
+	}
+	snapshot := SnapshotFromResource(current)
+	if snapshot.Widgets[0].ParamBindings["title"] != widget.ResourceProperty("menu_title") {
+		t.Fatal("snapshot lost source")
+	}
+	runtime, _ := service.sites.RuntimeByID(current.SiteID)
+	widgetRuntime, _ := runtime.Profile().Widget("test_summary")
+	templateRuntime, _ := runtime.Profile().Template(code)
+	if _, err := widgetRuntime.NewResolved(current.Widgets[0].Params, current.Widgets[0].ParamBindings, templateRuntime.FieldSchema(), current.WidgetValues()); !errors.Is(err, widget.ErrInvalidParams) {
+		t.Fatalf("render must reject missing required value: %v", err)
+	}
+}

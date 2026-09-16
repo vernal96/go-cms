@@ -73,6 +73,8 @@ const serverFieldErrors = ref<FieldValidationError[]>([])
 const localFieldErrors = ref<DynamicFieldErrors>({})
 const localSettingsErrors = ref<DynamicFieldErrors>({})
 const resourceWidgets = ref<ResourceWidget[]>([])
+const savedTemplateCode = ref<string | null>(null)
+const savedTemplate = computed(() => metadata.value.templates.find((item) => item.code === savedTemplateCode.value) ?? null)
 const resourcePath = ref<string | null>(null)
 const resourceVersion = ref(0)
 const canReadHistory = ref(false)
@@ -175,6 +177,7 @@ async function load(): Promise<void> {
     siteDomain.value = loadedSite.site.domain
     deleted.value = item.deleted
     deletedAt.value = item.deleted_at
+    savedTemplateCode.value = item.template_code
     resourceWidgets.value = item.widgets ?? []
     Object.assign(form, {
  image_media_id: item.image_media_id ?? null,
@@ -521,13 +524,14 @@ watch(() => [route.params.siteId, route.params.resourceId], () => void load())
         </el-tab-pane>
 
         <el-tab-pane v-if="showWidgetsTab" label="Виджеты" name="widgets">
+          <el-alert v-if="form.template_code !== savedTemplateCode" title="Сначала сохраните изменение шаблона ресурса." type="info" :closable="false" />
           <resource-widgets-editor
-            v-if="selectedTemplate"
+            v-if="savedTemplate && form.template_code === savedTemplateCode"
             v-model="resourceWidgets"
             :access-token="accessToken"
             :site-id="siteId"
             :resource-id="resourceId"
-              :template="selectedTemplate!"
+            :template="savedTemplate"
             :definitions="metadata.widgets"
 			:can-update="canUpdate && !deleted"
 			:resource-version="resourceVersion"

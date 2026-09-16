@@ -9,6 +9,8 @@ import (
 	"net/http"
 
 	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	"github.com/vernal96/go-cms/kernel/modules/core/file"
 	"github.com/vernal96/go-cms/kernel/modules/core/resource"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
@@ -55,11 +57,11 @@ func (r *Runtime) HTTP() httptransport.Builder {
 			ResourceHandlers: []httptransport.ResourceHandler{
 				{
 					Type:    httptransport.ResourceHandlerCode(resourcetype.Page),
-					Handler: pageResourceHandler{logger: r.logger},
+					Handler: pageResourceHandler{logger: r.logger, files: r.Files()},
 				},
 				{
 					Type:    httptransport.ResourceHandlerCode(resourcetype.Library),
-					Handler: pageResourceHandler{logger: r.logger},
+					Handler: pageResourceHandler{logger: r.logger, files: r.Files()},
 				},
 				{
 					Type:    httptransport.ResourceHandlerCode(resourcetype.Link),
@@ -206,6 +208,7 @@ type pageWidgetError struct {
 
 type pageResourceHandler struct {
 	logger *slog.Logger
+	files  file.Service
 }
 
 func (h pageResourceHandler) ServeHTTP(
@@ -316,7 +319,8 @@ func (h pageResourceHandler) renderWidgets(
 			continue
 		}
 
-		instance, err := runtime.New(placement.Params)
+		templateRuntime, _ := siteRuntime.Profile().Template(*item.Template)
+		instance, err := h.newWidgetInstance(ctx, runtime, placement, templateRuntime.FieldSchema(), item.WidgetValues())
 		if err != nil {
 			code := instanceFailedError
 			if errors.Is(err, widget.ErrInvalidParams) {
@@ -582,3 +586,35 @@ func writeResourceRouteError(
 }
 
 var _ httptransport.Provider = (*Runtime)(nil)
+
+// Bound file values inherit the target field's disk/MIME restrictions, including
+// references nested in repeaters. The source resource has already been authorized.
+func (h pageResourceHandler) newWidgetInstance(ctx context.Context, runtime *widget.Runtime, placement widget.Placement, schema *field.Schema, values widget.ResourceValues) (widget.Instance, error) {
+	params, err := runtime.ResolveParams(placement.Params, placement.ParamBindings, schema, values)
+	if err != nil {
+		return nil, err
+	}
+	bound := make(map[string]any, len(placement.ParamBindings))
+	for key := range placement.ParamBindings {
+		if value, exists := params[key]; exists {
+			bound[key] = value
+		}
+	}
+	refs, err := runtime.FieldSchema().FileReferences(bound)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", widget.ErrInvalidParams, err)
+	}
+	for _, ref := range refs {
+		if h.files == nil {
+			return nil, fmt.Errorf("%w: file service is unavailable", widget.ErrInvalidParams)
+		}
+		item, err := h.files.GetFile(ctx, security.System(), file.ID(ref.ID))
+		if err != nil {
+			return nil, fmt.Errorf("%w: file parameter %q: %v", widget.ErrInvalidParams, ref.Key, err)
+		}
+		if !field.FileMatches(ref.Options, item.Storage, item.MIMEType) {
+			return nil, fmt.Errorf("%w: file parameter %q rejects selected file", widget.ErrInvalidParams, ref.Key)
+		}
+	}
+	return runtime.New(params)
+}

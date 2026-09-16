@@ -559,13 +559,14 @@ func (m *Resources) ResourceChildren(
 }
 
 type ResourceTemplate struct {
-	Code                    template.Code      `json:"code"`
-	Label                   string             `json:"label"`
-	Icon                    string             `json:"icon"`
-	Fields                  []field.Descriptor `json:"fields"`
-	EditorTabs              []FieldEditorTab   `json:"editor_tabs"`
-	SupportsResourceWidgets bool               `json:"supports_resource_widgets"`
-	WidgetAreas             []widget.AreaCode  `json:"widget_areas"`
+	Code                    template.Code        `json:"code"`
+	Label                   string               `json:"label"`
+	Icon                    string               `json:"icon"`
+	Fields                  []field.Descriptor   `json:"fields"`
+	EditorTabs              []FieldEditorTab     `json:"editor_tabs"`
+	SupportsResourceWidgets bool                 `json:"supports_resource_widgets"`
+	WidgetAreas             []widget.AreaCode    `json:"widget_areas"`
+	WidgetValueSources      []widget.ValueSource `json:"widget_value_sources"`
 }
 
 type FieldEditorTab struct {
@@ -592,16 +593,17 @@ type WidgetView struct {
 }
 
 type WidgetDefinition struct {
-	Code              widget.Code        `json:"code"`
-	ModuleCode        string             `json:"module_code"`
-	ModuleLabel       string             `json:"module_label"`
-	ModuleDescription string             `json:"module_description"`
-	Label             string             `json:"label"`
-	Description       string             `json:"description"`
-	Fields            []field.Descriptor `json:"fields"`
-	EditorTabs        []FieldEditorTab   `json:"editor_tabs"`
-	SummaryFields     []string           `json:"summary_fields"`
-	Views             []WidgetView       `json:"views"`
+	Code              widget.Code                 `json:"code"`
+	ModuleCode        string                      `json:"module_code"`
+	ModuleLabel       string                      `json:"module_label"`
+	ModuleDescription string                      `json:"module_description"`
+	Label             string                      `json:"label"`
+	Description       string                      `json:"description"`
+	Fields            []field.Descriptor          `json:"fields"`
+	EditorTabs        []FieldEditorTab            `json:"editor_tabs"`
+	SummaryFields     []string                    `json:"summary_fields"`
+	Views             []WidgetView                `json:"views"`
+	ParamTypes        map[string]field.ValueShape `json:"param_types"`
 }
 
 type ResourceType struct {
@@ -666,6 +668,7 @@ func (m *Resources) ResourceMetadata(
 			EditorTabs:              editorTabs(definition.EditorTabs),
 			SupportsResourceWidgets: templateRuntime.SupportsResourceWidgets(),
 			WidgetAreas:             templateRuntime.ResourceAreas(),
+			WidgetValueSources:      widget.ValueSources(templateRuntime.FieldSchema()),
 		}
 	}
 	widgetDefinitions := runtime.Profile().Widgets()
@@ -679,8 +682,14 @@ func (m *Resources) ResourceMetadata(
 		for viewIndex, view := range definition.Views {
 			views[viewIndex] = WidgetView{Code: view.Code(), Label: view.Label()}
 		}
+		widgetRuntime, _ := runtime.Profile().Widget(definition.Code)
+		paramTypes := make(map[string]field.ValueShape, len(definition.Fields))
+		for _, def := range definition.Fields {
+			paramTypes[def.Key], _ = widgetRuntime.FieldSchema().Shape(def.Key)
+		}
 		widgets[index] = WidgetDefinition{
-			Code: definition.Code, ModuleCode: definition.Module.Code,
+			ParamTypes: paramTypes,
+			Code:       definition.Code, ModuleCode: definition.Module.Code,
 			ModuleLabel: definition.Module.Label, ModuleDescription: definition.Module.Description,
 			Label: definition.Label, Description: definition.Description, Fields: fields,
 			EditorTabs: editorTabs(definition.EditorTabs), SummaryFields: append([]string{}, definition.SummaryFields...), Views: views,
@@ -955,17 +964,18 @@ type ResourceDTO struct {
 }
 
 type ResourceWidget struct {
-	ID              widget.BindingID `json:"id"`
-	Code            widget.Code      `json:"code"`
-	Area            widget.AreaCode  `json:"area"`
-	Position        int              `json:"position"`
-	View            widget.ViewCode  `json:"view"`
-	Columns         int              `json:"columns"`
-	MarginTop       int              `json:"margin_top"`
-	MarginBottom    int              `json:"margin_bottom"`
-	Enabled         bool             `json:"enabled"`
-	Params          map[string]any   `json:"params"`
-	ResourceVersion int64            `json:"resource_version,omitempty"`
+	ID              widget.BindingID     `json:"id"`
+	Code            widget.Code          `json:"code"`
+	Area            widget.AreaCode      `json:"area"`
+	Position        int                  `json:"position"`
+	View            widget.ViewCode      `json:"view"`
+	Columns         int                  `json:"columns"`
+	MarginTop       int                  `json:"margin_top"`
+	MarginBottom    int                  `json:"margin_bottom"`
+	Enabled         bool                 `json:"enabled"`
+	Params          map[string]any       `json:"params"`
+	ParamBindings   widget.ParamBindings `json:"param_bindings"`
+	ResourceVersion int64                `json:"resource_version,omitempty"`
 }
 
 type ResourceDetails struct {
@@ -2109,6 +2119,10 @@ func resourceDTO(item resource.Resource) ResourceDTO {
 func resourceWidgets(source []widget.Binding) []ResourceWidget {
 	result := make([]ResourceWidget, len(source))
 	for index, binding := range source {
+		bindings := widget.CloneParamBindings(binding.ParamBindings)
+		if bindings == nil {
+			bindings = widget.ParamBindings{}
+		}
 		params := make(map[string]any, len(binding.Params))
 		for key, value := range binding.Params {
 			params[key] = value
@@ -2117,7 +2131,7 @@ func resourceWidgets(source []widget.Binding) []ResourceWidget {
 			ID: binding.ID, Code: binding.Code, Area: binding.Area, Position: binding.Position,
 			View: widget.PublicView(binding.Presentation.View), Columns: binding.Presentation.Columns,
 			MarginTop: binding.Presentation.MarginTop, MarginBottom: binding.Presentation.MarginBottom,
-			Enabled: binding.Presentation.Enabled, Params: params,
+			Enabled: binding.Presentation.Enabled, Params: params, ParamBindings: bindings,
 		}
 	}
 	return result

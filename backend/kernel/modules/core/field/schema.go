@@ -23,6 +23,27 @@ type Schema struct {
 	validator   *validator.Validate
 }
 
+// ValueShape describes binding compatibility, independently of value constraints.
+type ValueShape struct {
+	Type     TypeCode `json:"type"`
+	Multiple bool     `json:"multiple"`
+}
+
+func (s *Schema) Shape(key string) (ValueShape, bool) {
+	if s == nil {
+		return ValueShape{}, false
+	}
+	compiled, exists := s.fields[key]
+	if !exists {
+		return ValueShape{}, false
+	}
+	shape := ValueShape{Type: compiled.definition.Type}
+	if cardinality, ok := compiled.valueType.(interface{ Multiple() bool }); ok {
+		shape.Multiple = cardinality.Multiple()
+	}
+	return shape, true
+}
+
 func Compile(
 	definitions []Definition,
 	resolver TypeResolver,
@@ -313,6 +334,27 @@ func (s *Schema) validate(
 	values map[string]any,
 	requireAll bool,
 ) (map[string]any, error) {
+	return s.validateDeferred(values, requireAll, nil)
+}
+
+// ValidateDeferred validates literal values while leaving explicitly deferred
+// fields for a later full Validate call. Deferred values cannot also be literals.
+func (s *Schema) ValidateDeferred(values map[string]any, deferred map[string]struct{}) (map[string]any, error) {
+	if s == nil {
+		return nil, errors.New("field schema is nil")
+	}
+	for key := range deferred {
+		if _, exists := s.fields[key]; !exists {
+			return nil, fmt.Errorf("unknown deferred field %q", key)
+		}
+		if _, exists := values[key]; exists {
+			return nil, fmt.Errorf("field %q has both a literal and a deferred value", key)
+		}
+	}
+	return s.validateDeferred(values, true, deferred)
+}
+
+func (s *Schema) validateDeferred(values map[string]any, requireAll bool, deferred map[string]struct{}) (map[string]any, error) {
 	if s == nil {
 		return nil, errors.New("field schema is nil")
 	}
@@ -335,6 +377,9 @@ func (s *Schema) validate(
 	}
 
 	for _, definition := range s.definitions {
+		if _, skip := deferred[definition.Key]; skip {
+			continue
+		}
 		compiled := s.fields[definition.Key]
 		value, exists := values[definition.Key]
 		list, isList := compiled.valueType.(listValue)

@@ -833,3 +833,77 @@ func TestConfirmedFileCascadeInvalidatesCachedResourceOwnership(t *testing.T) {
 		t.Fatal("stale media reference after cascade", err)
 	}
 }
+
+type widgetLibraryRepository struct {
+	*resourceRepositoryStub
+	resource.LibraryItemRepository
+}
+
+func (r *widgetLibraryRepository) ByID(context.Context, resource.ID) (resource.Resource, error) {
+	return resource.Resource{}, resource.ErrNotFound
+}
+func (r *widgetLibraryRepository) LibraryItemByID(_ context.Context, id resource.ID) (resource.LibraryItem, error) {
+	if id != r.item.ID {
+		return resource.LibraryItem{}, resource.ErrNotFound
+	}
+	return resource.LibraryItem{ID: r.item.ID, SiteID: r.item.SiteID, LibraryID: 10, Widgets: widget.CloneBindings(r.item.Widgets)}, nil
+}
+
+func TestLibraryWidgetMutationsInvalidateItemAndLibraryDependencies(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryCacheStore()
+	policy := newTestRepositoryCachePolicy(store)
+	base := &widgetLibraryRepository{resourceRepositoryStub: &resourceRepositoryStub{item: resource.Resource{ID: 20, SiteID: 3}}}
+	repository := &cachedResourceRepository{base: &invalidatingResourceRepository{base: base, policy: policy}, store: store, ttl: time.Minute, policy: policy}
+	binding := widget.Binding{ID: 1, Code: "test", Area: widget.AreaBody, Presentation: widget.DefaultPresentation(), ParamBindings: widget.ParamBindings{"text": widget.ResourceProperty("title")}}
+	operations := []struct {
+		name  string
+		run   func() error
+		count int
+	}{
+		{"create", func() error { _, err := repository.CreateWidget(ctx, nil, 20, 1, binding, true); return err }, 1},
+		{"update", func() error {
+			binding = widget.CloneBinding(binding)
+			binding.ParamBindings["text"] = widget.ResourceField("headline")
+			_, err := repository.UpdateWidget(ctx, nil, 20, 1, binding, true)
+			return err
+		}, 1},
+		{"reorder", func() error {
+			_, err := repository.ReorderWidgets(ctx, nil, 20, 1, []widget.Order{{ID: 1, Area: widget.AreaSidebar}}, true)
+			return err
+		}, 1},
+		{"delete", func() error { return repository.DeleteWidget(ctx, nil, 20, 1, 1, true) }, 0},
+	}
+	for _, op := range operations {
+		t.Run(op.name, func(t *testing.T) {
+			before, err := repository.LibraryItemByID(ctx, 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tags := libraryItemTags(before)
+			for _, tag := range tags {
+				if err := store.Set(ctx, string(tag), []byte("stale"), cache.SetOptions{Tags: []cache.Tag{tag}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := op.run(); err != nil {
+				t.Fatal(err)
+			}
+			for _, tag := range tags {
+				if _, err := store.Get(ctx, string(tag)); !errors.Is(err, cache.ErrMiss) {
+					t.Fatalf("stale dependency %s survived: %v", tag, err)
+				}
+			}
+			after, err := repository.LibraryItemByID(ctx, 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(after.Widgets) != op.count {
+				t.Fatalf("widget mutation lost: %#v", after.Widgets)
+			}
+			if op.count > 0 && after.Widgets[0].ParamBindings["text"] != binding.ParamBindings["text"] {
+				t.Fatal("binding lost through cache wrapper")
+			}
+		})
+	}
+}

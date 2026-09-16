@@ -758,11 +758,11 @@ func (s *Service) CreateWidget(
 	if err := runtime.ValidatePresentation(presentation); err != nil {
 		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	params, err := runtime.NormalizeParams(input.Params)
+	params, err := runtime.NormalizeConfiguration(input.Params, input.ParamBindings, templateRuntime.FieldSchema())
 	if err != nil {
 		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	if _, err := runtime.New(params); err != nil {
+	if err := validateLiteralWidgetInstance(runtime, params, input.ParamBindings); err != nil {
 		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	position := 0
@@ -776,7 +776,7 @@ func (s *Service) CreateWidget(
 	}
 	created, err := s.widgets.CreateWidget(ctx, actor.AuditUserID(), resourceID, input.ExpectedVersion, widget.Binding{
 		Code: input.Code, Area: input.Area, Position: position,
-		Presentation: presentation, Params: params,
+		Presentation: presentation, Params: params, ParamBindings: widget.CloneParamBindings(input.ParamBindings),
 	}, recordRevision)
 	if err != nil {
 		return widget.Binding{}, fmt.Errorf("create resource %d widget: %w", resourceID, err)
@@ -797,7 +797,7 @@ func (s *Service) UpdateWidget(
 	}
 	defer finishHooks()
 
-	current, profileRuntime, _, recordRevision, err := s.widgetMutationContext(ctx, actor, resourceID)
+	current, profileRuntime, templateRuntime, recordRevision, err := s.widgetMutationContext(ctx, actor, resourceID)
 	if err != nil {
 		return widget.Binding{}, err
 	}
@@ -817,11 +817,12 @@ func (s *Service) UpdateWidget(
 	if err := runtime.ValidatePresentation(binding.Presentation); err != nil {
 		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	binding.Params, err = runtime.NormalizeParams(input.Params)
+	binding.ParamBindings = widget.CloneParamBindings(input.ParamBindings)
+	binding.Params, err = runtime.NormalizeConfiguration(input.Params, input.ParamBindings, templateRuntime.FieldSchema())
 	if err != nil {
 		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	if _, err := runtime.New(binding.Params); err != nil {
+	if err := validateLiteralWidgetInstance(runtime, binding.Params, binding.ParamBindings); err != nil {
 		return widget.Binding{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if input.ExpectedVersion != current.Version {
@@ -923,6 +924,7 @@ func (s *Service) widgetMutationContext(
 	Widget(widget.Code) (*widget.Runtime, bool)
 }, interface {
 	AllowsResourceArea(widget.AreaCode) bool
+	FieldSchema() *field.Schema
 }, bool, error) {
 	if err := validateContext(ctx, "resource widget mutation"); err != nil {
 		return Resource{}, nil, nil, false, err
@@ -1336,6 +1338,7 @@ func normalizeWidgetBindings(
 	},
 	templateRuntime interface {
 		AllowsResourceArea(widget.AreaCode) bool
+		FieldSchema() *field.Schema
 	},
 	source []widget.Binding,
 ) ([]widget.Binding, error) {
@@ -1380,7 +1383,7 @@ func normalizeWidgetBindings(
 		if err := runtime.ValidatePresentation(presentation); err != nil {
 			return nil, fmt.Errorf("validate resource widget %q presentation: %w", binding.Code, err)
 		}
-		params, err := runtime.NormalizeParams(binding.Params)
+		params, err := runtime.NormalizeConfiguration(binding.Params, binding.ParamBindings, templateRuntime.FieldSchema())
 		if err != nil {
 			return nil, fmt.Errorf(
 				"validate resource widget %q params: %w",
@@ -1389,7 +1392,7 @@ func normalizeWidgetBindings(
 			)
 		}
 
-		result[index] = binding
+		result[index] = widget.CloneBinding(binding)
 		result[index].Presentation = presentation
 		result[index].Params = params
 	}
@@ -1734,4 +1737,13 @@ func equalStrings(left, right *string) bool {
 		return left == nil && right == nil
 	}
 	return *left == *right
+}
+
+// Bound parameters are validated when their current resource values are resolved.
+func validateLiteralWidgetInstance(runtime *widget.Runtime, params map[string]any, bindings widget.ParamBindings) error {
+	if len(bindings) != 0 {
+		return nil
+	}
+	_, err := runtime.New(params)
+	return err
 }

@@ -4,7 +4,7 @@ import { moveWidget, widgetOrder } from './model'
 
 const widget = (id: number, area: 'body' | 'sidebar', position: number): ResourceWidget => ({
   id, code: 'core_content', area, position, view: 'default', columns: 12,
-  margin_top: 0, margin_bottom: 0, enabled: true, params: {},
+  margin_top: 0, margin_bottom: 0, enabled: true, params: {}, param_bindings: {},
 })
 
 describe('resource widget ordering', () => {

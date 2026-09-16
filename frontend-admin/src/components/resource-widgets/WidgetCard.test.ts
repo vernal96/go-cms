@@ -15,7 +15,7 @@ const definition: WidgetDefinition = {
   description: 'Resource content',
   fields: [],
   editor_tabs: [],
-  summary_fields: [],
+  summary_fields: [], param_types: {},
   views: [{ code: 'article', label: 'Статья' }],
 }
 
@@ -29,13 +29,13 @@ const widget: ResourceWidget = {
   margin_top: 0,
   margin_bottom: 0,
   enabled: true,
-  params: {},
+  params: {}, param_bindings: {},
 }
 
 describe('WidgetCard', () => {
   it('shows the declared custom view label instead of its storage code', () => {
     const wrapper = shallowMount(WidgetCard, {
-      props: { widget, definition },
+      props: { widget, definition, sources: [] },
       global: { renderStubDefaultSlot: true },
     })
 

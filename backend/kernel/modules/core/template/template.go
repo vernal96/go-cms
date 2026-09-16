@@ -21,12 +21,13 @@ type Item interface {
 // Widget declares one static widget. Omitted presentation values mean the
 // implicit defaults: default view, 12 columns, zero margins and enabled.
 type Widget struct {
-	Widget       widget.Ref
-	View         widget.View
-	Columns      int
-	MarginTop    int
-	MarginBottom int
-	Params       map[string]any
+	Widget        widget.Ref
+	View          widget.View
+	Columns       int
+	MarginTop     int
+	MarginBottom  int
+	Params        map[string]any
+	ParamBindings widget.ParamBindings
 }
 
 func (Widget) isTemplateItem() {}
@@ -58,11 +59,12 @@ const (
 )
 
 type compiledItem struct {
-	kind         compiledItemKind
-	key          string
-	code         widget.Code
-	presentation widget.Presentation
-	params       map[string]any
+	kind          compiledItemKind
+	key           string
+	code          widget.Code
+	presentation  widget.Presentation
+	params        map[string]any
+	paramBindings widget.ParamBindings
 }
 
 type compiledLayout struct {
@@ -237,7 +239,7 @@ func (c *Catalog) CompileWidgets(widgets widgetResolver) (*Catalog, error) {
 	}
 	for _, code := range c.order {
 		source := c.runtimes[code]
-		layout, err := compileLayout(code, source.definition.Layout, widgets)
+		layout, err := compileLayout(code, source.definition.Layout, widgets, source.schema)
 		if err != nil {
 			return nil, err
 		}
@@ -250,12 +252,12 @@ func (c *Catalog) CompileWidgets(widgets widgetResolver) (*Catalog, error) {
 	return result, nil
 }
 
-func compileLayout(code Code, layout Layout, widgets widgetResolver) (*compiledLayout, error) {
-	body, err := compileArea(code, widget.AreaBody, layout.Body, widgets)
+func compileLayout(code Code, layout Layout, widgets widgetResolver, schema *field.Schema) (*compiledLayout, error) {
+	body, err := compileArea(code, widget.AreaBody, layout.Body, widgets, schema)
 	if err != nil {
 		return nil, err
 	}
-	sidebar, err := compileArea(code, widget.AreaSidebar, layout.Sidebar, widgets)
+	sidebar, err := compileArea(code, widget.AreaSidebar, layout.Sidebar, widgets, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -267,6 +269,7 @@ func compileArea(
 	area widget.AreaCode,
 	items []Item,
 	widgets widgetResolver,
+	schema *field.Schema,
 ) ([]compiledItem, error) {
 	result := make([]compiledItem, 0, len(items))
 	for index, item := range items {
@@ -291,16 +294,17 @@ func compileArea(
 			if err := runtime.ValidatePresentation(presentation); err != nil {
 				return nil, fmt.Errorf("template %q %s widget at index %d: %w", templateCode, area, index, err)
 			}
-			params, err := runtime.NormalizeParams(declaration.Params)
+			params, err := runtime.NormalizeConfiguration(declaration.Params, declaration.ParamBindings, schema)
 			if err != nil {
 				return nil, fmt.Errorf("template %q %s widget at index %d: %w", templateCode, area, index, err)
 			}
 			result = append(result, compiledItem{
-				kind:         compiledWidget,
-				key:          fmt.Sprintf("template:%s:%s:%d", templateCode, area, index),
-				code:         code,
-				presentation: presentation,
-				params:       params,
+				kind:          compiledWidget,
+				key:           fmt.Sprintf("template:%s:%s:%d", templateCode, area, index),
+				code:          code,
+				presentation:  presentation,
+				params:        params,
+				paramBindings: widget.CloneParamBindings(declaration.ParamBindings),
 			})
 		default:
 			return nil, fmt.Errorf("template %q %s item at index %d has unsupported type %T", templateCode, area, index, item)
@@ -356,15 +360,16 @@ func composeArea(area widget.AreaCode, items []compiledItem, bindings []widget.B
 		case compiledWidget:
 			result = append(result, widget.Placement{
 				Key: item.key, Code: item.code, Area: area,
-				Presentation: item.presentation, Params: cloneMap(item.params),
+				Presentation: item.presentation, Params: cloneMap(item.params), ParamBindings: widget.CloneParamBindings(item.paramBindings),
 			})
 		case compiledResourceWidgets:
 			for _, binding := range bindings {
 				result = append(result, widget.Placement{
 					Key: fmt.Sprintf("resource-widget-%d", binding.ID), BindingID: binding.ID,
 					Code: binding.Code, Area: area, Position: binding.Position,
-					Presentation: binding.Presentation,
-					Params:       cloneMap(binding.Params),
+					Presentation:  binding.Presentation,
+					Params:        cloneMap(binding.Params),
+					ParamBindings: widget.CloneParamBindings(binding.ParamBindings),
 				})
 			}
 		default:
@@ -423,6 +428,7 @@ func cloneItems(source []Item) []Item {
 		switch declaration := item.(type) {
 		case Widget:
 			declaration.Params = cloneMap(declaration.Params)
+			declaration.ParamBindings = widget.CloneParamBindings(declaration.ParamBindings)
 			result[index] = declaration
 		case ResourceWidgets:
 			result[index] = declaration

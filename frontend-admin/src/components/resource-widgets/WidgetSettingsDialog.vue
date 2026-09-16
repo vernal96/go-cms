@@ -15,15 +15,16 @@ import {
   ElTabPane,
   ElTabs,
 } from 'element-plus'
-import DynamicFieldsForm from '../fields/DynamicFieldsForm.vue'
+import WidgetParamFields from './WidgetParamFields.vue'
 import { createFieldValues, unsupportedFieldTypes, validateFieldValues, type DynamicFieldErrors } from '../fields/model'
-import type { ResourceWidget, WidgetDefinition } from '../../types/admin'
+import type { ResourceWidget, WidgetDefinition, WidgetValueSource } from '../../types/admin'
 import type { WidgetSettingsValue } from './model'
 
 const props = defineProps<{
   modelValue: boolean
   definition: WidgetDefinition | null
   widget: ResourceWidget | null
+  sources: WidgetValueSource[]
 		siteId: number
 		accessToken: string
   saving?: boolean
@@ -35,11 +36,12 @@ const emit = defineEmits<{
 
 const form = reactive<WidgetSettingsValue>({
   view: 'default', columns: 12, margin_top: 0, margin_bottom: 0,
-  enabled: true, params: {},
+  enabled: true, params: {}, param_bindings: {},
 })
 const errors = ref<DynamicFieldErrors>({})
 const activeTab = ref('')
-const unsupported = computed(() => unsupportedFieldTypes(props.definition?.fields ?? []))
+const literalFields = computed(() => (props.definition?.fields ?? []).filter((field) => !Object.hasOwn(form.param_bindings, field.key)))
+const unsupported = computed(() => unsupportedFieldTypes(literalFields.value))
 const tabs = computed(() => props.definition?.editor_tabs ?? [])
 
 function selectAvailableTab(): void {
@@ -57,10 +59,12 @@ watch(() => [props.modelValue, props.definition, props.widget] as const, ([open]
     margin_bottom: widget?.margin_bottom ?? 0,
     enabled: widget?.enabled ?? true,
     params: createFieldValues(props.definition.fields, widget?.params ?? {}),
+    param_bindings: JSON.parse(JSON.stringify(widget?.param_bindings ?? {})),
   })
+  for (const key of Object.keys(form.param_bindings)) delete form.params[key]
   errors.value = {}
   selectAvailableTab()
-})
+}, { immediate: true })
 
 watch(() => tabs.value.map((tab) => tab.code), selectAvailableTab, { immediate: true })
 
@@ -71,7 +75,11 @@ function fieldsForTab(codes: string[]) {
 
 function save(): void {
   if (!props.definition || unsupported.value.length) return
-  errors.value = validateFieldValues(props.definition.fields, form.params)
+  errors.value = validateFieldValues(literalFields.value, form.params)
+  for (const [key, binding] of Object.entries(form.param_bindings)) {
+    const shape = props.definition.param_types[key]
+    if (!props.sources.some((source) => source.kind === binding.kind && source.key === binding.key && source.type === shape?.type && source.multiple === shape?.multiple)) errors.value[key] = 'Выберите совместимое поле ресурса'
+  }
   if (Object.keys(errors.value).length) return
   emit('save', {
     view: form.view,
@@ -80,6 +88,7 @@ function save(): void {
     margin_bottom: form.margin_bottom,
     enabled: form.enabled,
     params: { ...form.params },
+    param_bindings: JSON.parse(JSON.stringify(form.param_bindings)),
   })
 }
 </script>
@@ -118,10 +127,10 @@ function save(): void {
 
       <el-tabs v-if="tabs.length" v-model="activeTab">
         <el-tab-pane v-for="tab in tabs" :key="tab.code" :label="tab.label" :name="tab.code">
-				<dynamic-fields-form v-model="form.params" :fields="fieldsForTab(tab.fields)" :errors="errors" :site-id="siteId" :access-token="accessToken" />
+				<widget-param-fields v-model="form.params" v-model:bindings="form.param_bindings" :sources="sources" :param-types="definition.param_types" :fields="fieldsForTab(tab.fields)" :errors="errors" :site-id="siteId" :access-token="accessToken" />
         </el-tab-pane>
       </el-tabs>
-			<dynamic-fields-form v-else v-model="form.params" :fields="definition.fields" :errors="errors" :site-id="siteId" :access-token="accessToken" />
+			<widget-param-fields v-else v-model="form.params" v-model:bindings="form.param_bindings" :sources="sources" :param-types="definition.param_types" :fields="definition.fields" :errors="errors" :site-id="siteId" :access-token="accessToken" />
     </el-form>
     <template #footer>
       <el-button @click="emit('update:modelValue', false)">Отмена</el-button>

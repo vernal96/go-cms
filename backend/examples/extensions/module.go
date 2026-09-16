@@ -48,3 +48,17 @@ func RegisterElements(registrar forms.ElementRegistrar) error {
 		},
 	}})
 }
+
+// BoundPage demonstrates the same widget using an additional resource field and
+// a standard property. Only the references are compiled; values remain per resource.
+func BoundPage() template.Definition {
+	return template.Definition{
+		Code: "bound_greeting", Label: "Приветствие из полей ресурса",
+		Fields: []field.Definition{{Key: "visitor", Label: "Посетитель", Type: field.TypeString}},
+		Layout: template.Layout{Body: []template.Item{
+			template.Widget{Widget: Greeting, ParamBindings: widget.ParamBindings{"name": widget.ResourceField("visitor")}},
+			template.Widget{Widget: Greeting, ParamBindings: widget.ParamBindings{"name": widget.ResourceProperty("title")}},
+			template.ResourceWidgets{},
+		}},
+	}
+}

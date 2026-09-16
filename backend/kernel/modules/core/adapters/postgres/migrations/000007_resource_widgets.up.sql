@@ -10,6 +10,8 @@ CREATE TABLE core.resource_widgets
         CHECK (position >= 0),
     params      JSONB   NOT NULL DEFAULT '{}'::jsonb
         CHECK (jsonb_typeof(params) = 'object'),
+    param_bindings JSONB NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(param_bindings) = 'object'),
 
     PRIMARY KEY (resource_id, position),
     CONSTRAINT fk_resource_widgets_resource

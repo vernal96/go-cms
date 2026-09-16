@@ -27,15 +27,16 @@ const (
 var ErrRevisionNotFound = errors.New("resource revision not found")
 
 type WidgetSnapshot struct {
-	Code         widget.Code     `json:"code"`
-	Area         widget.AreaCode `json:"area"`
-	Position     int             `json:"position"`
-	View         widget.ViewCode `json:"view"`
-	Columns      int             `json:"columns"`
-	MarginTop    int             `json:"margin_top"`
-	MarginBottom int             `json:"margin_bottom"`
-	Enabled      bool            `json:"enabled"`
-	Params       map[string]any  `json:"params"`
+	Code          widget.Code          `json:"code"`
+	Area          widget.AreaCode      `json:"area"`
+	Position      int                  `json:"position"`
+	View          widget.ViewCode      `json:"view"`
+	Columns       int                  `json:"columns"`
+	MarginTop     int                  `json:"margin_top"`
+	MarginBottom  int                  `json:"margin_bottom"`
+	Enabled       bool                 `json:"enabled"`
+	Params        map[string]any       `json:"params"`
+	ParamBindings widget.ParamBindings `json:"param_bindings"`
 }
 
 // Snapshot is the core-owned logical state. It deliberately excludes paths,
@@ -313,7 +314,7 @@ func revisionWidgets(items []WidgetSnapshot) []widget.Binding {
 	result := make([]widget.Binding, len(items))
 	for index, item := range items {
 		result[index] = widget.Binding{Code: item.Code, Area: item.Area, Position: item.Position,
-			Presentation: widget.Presentation{View: item.View, Columns: item.Columns, MarginTop: item.MarginTop, MarginBottom: item.MarginBottom, Enabled: item.Enabled}, Params: cloneMap(item.Params)}
+			Presentation: widget.Presentation{View: item.View, Columns: item.Columns, MarginTop: item.MarginTop, MarginBottom: item.MarginBottom, Enabled: item.Enabled}, Params: cloneMap(item.Params), ParamBindings: widget.CloneParamBindings(item.ParamBindings)}
 	}
 	return result
 }
@@ -346,12 +347,12 @@ func validateSnapshotWidgets(runtime *site.Runtime, candidate *Resource) error {
 		if err := widgetRuntime.ValidatePresentation(binding.Presentation); err != nil {
 			return fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
-		params, err := widgetRuntime.NormalizeParams(binding.Params)
+		params, err := widgetRuntime.NormalizeConfiguration(binding.Params, binding.ParamBindings, templateRuntime.FieldSchema())
 		if err != nil {
 			return fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 		binding.Params = params
-		if _, err := widgetRuntime.New(params); err != nil {
+		if err := validateLiteralWidgetInstance(widgetRuntime, params, binding.ParamBindings); err != nil {
 			return fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 	}

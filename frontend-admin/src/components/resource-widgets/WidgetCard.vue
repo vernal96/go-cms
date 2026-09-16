@@ -2,13 +2,14 @@
 import { computed } from 'vue'
 import { Delete, Edit, Rank } from '@element-plus/icons-vue'
 import { ElButton, ElCard, ElIcon, ElTag } from 'element-plus'
-import type { ResourceWidget, WidgetDefinition } from '../../types/admin'
+import type { ResourceWidget, WidgetDefinition, WidgetValueSource } from '../../types/admin'
 
 const props = defineProps<{
   widget: ResourceWidget
   definition: WidgetDefinition
   disabled?: boolean
   dragging?: boolean
+  sources: WidgetValueSource[]
 }>()
 const emit = defineEmits<{
   edit: []
@@ -17,13 +18,15 @@ const emit = defineEmits<{
   dragend: []
 }>()
 
-const summaries = computed(() => (props.definition.summary_fields ?? [])
-  .filter((key) => Object.hasOwn(props.widget.params, key))
-  .map((key) => ({
-    key,
-    label: (props.definition.fields ?? []).find((field) => field.key === key)?.label ?? key,
-    value: summaryValue(props.widget.params[key]),
-  })))
+const summaries = computed(() => [...new Set([
+  ...(props.definition.summary_fields ?? []), ...Object.keys(props.widget.param_bindings),
+])].filter((key) => Object.hasOwn(props.widget.params, key) || Object.hasOwn(props.widget.param_bindings, key))
+  .map((key) => {
+    const binding = props.widget.param_bindings[key]
+    const source = binding && props.sources.find((item) => item.kind === binding.kind && item.key === binding.key)
+    return { key, label: props.definition.fields.find((field) => field.key === key)?.label ?? key,
+      value: binding ? `Поле ресурса: ${source?.label ?? binding.key}` : summaryValue(props.widget.params[key]) }
+  }))
 const viewLabel = computed(() => props.widget.view === 'default'
   ? 'Default'
   : props.definition.views.find((view) => view.code === props.widget.view)?.label ?? props.widget.view)

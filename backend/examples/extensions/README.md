@@ -179,3 +179,18 @@ GET `/api/sites/{siteID}/media/{mediaID}/settings?code=image` возвращае
 Поддерживаются ссылки `file` с проверкой доступности, диска и MIME;
 вложенные `media` и неизвестные схемы ссылок запрещены, поскольку требуют
 отдельного учёта владения и удаления.
+
+## Widget resource bindings
+
+`BoundPage()` demonstrates template widgets receiving whole values from the
+current resource. Declare `ParamBindings: widget.ParamBindings{"name":
+widget.ResourceField("visitor")}` for a template field, or use
+`widget.ResourceProperty("title")` for a standard property. The same parameter
+must not appear in `Params`.
+
+The admin widget editor exposes the same contract through `param_bindings`.
+Source and target must have exactly the same field type and multiplicity.
+References are checked when configured; values and target constraints are checked
+when rendered. An invalid current value fails only that widget. Lists, JSON and
+repeaters are passed whole. References never copy a value into persisted params,
+and strings containing `{{ ... }}` remain literal text.

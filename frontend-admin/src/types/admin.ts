@@ -289,6 +289,21 @@ export interface ResourceTemplate {
 	editor_tabs: FieldEditorTab[]
   supports_resource_widgets: boolean
   widget_areas: WidgetArea[]
+  widget_value_sources: WidgetValueSource[]
+}
+
+export interface WidgetParamBinding {
+  kind: 'resource_field' | 'resource_property'
+  key: string
+}
+
+export interface WidgetValueShape {
+  type: string
+  multiple: boolean
+}
+
+export interface WidgetValueSource extends WidgetParamBinding, WidgetValueShape {
+  label: string
 }
 
 export interface WidgetDefinition {
@@ -301,6 +316,7 @@ export interface WidgetDefinition {
   fields: FieldDefinition[]
   editor_tabs: FieldEditorTab[]
   summary_fields: string[]
+  param_types: Record<string, WidgetValueShape>
   views: Array<{ code: string; label: string }>
 }
 
@@ -316,6 +332,7 @@ export interface ResourceWidget {
   enabled: boolean
 	params: Record<string, unknown>
 	resource_version?: number
+  param_bindings: Record<string, WidgetParamBinding>
 }
 
 export interface ResourceExtensionMetadata {

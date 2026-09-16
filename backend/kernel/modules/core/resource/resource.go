@@ -145,6 +145,7 @@ type CreateWidgetInput struct {
 	MarginBottom    int
 	Enabled         *bool
 	Params          map[string]any
+	ParamBindings   widget.ParamBindings
 }
 
 type UpdateWidgetInput struct {
@@ -155,6 +156,7 @@ type UpdateWidgetInput struct {
 	MarginBottom    int
 	Enabled         *bool
 	Params          map[string]any
+	ParamBindings   widget.ParamBindings
 }
 
 type Node struct {

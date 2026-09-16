@@ -269,3 +269,55 @@ func placementCodes(source []widget.Placement) string {
 	}
 	return strings.Join(values, ",")
 }
+
+func TestTemplateWidgetBindingsCompileComposeAndResolvePerResource(t *testing.T) {
+	ref := widget.NewRef("bound")
+	catalog, err := widget.Compile([]widget.Source{{Module: widget.ModuleDescriptor{Code: "test", Label: "Test"}, Widgets: []widget.Widget{widget.Functional{
+		Description: widget.Definition{Reference: ref, Label: "Bound", Description: "Bound", Fields: []field.Definition{{Key: "text", Label: "Text", Type: field.TypeString}}},
+		Render: func(_ context.Context, _ widget.RenderInput, params map[string]any) (map[string]any, error) {
+			return params, nil
+		},
+	}}}}, nil, resolver())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := widget.ParamBindings{"text": widget.ResourceField("headline")}
+	definitions := []Definition{{Code: "bound", Label: "Bound", Fields: []field.Definition{{Key: "headline", Label: "Headline", Type: field.TypeString}}, Layout: Layout{Body: []Item{Widget{Widget: ref, ParamBindings: bindings}, ResourceWidgets{}}}}}
+	templates, err := Compile(definitions, resolver())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings["text"] = widget.ResourceField("broken") // declarations are copied
+	compiled, err := templates.CompileWidgets(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, _ := compiled.Template("bound")
+	for _, value := range []string{"first", "second"} {
+		placements, err := Compose(runtime, []widget.Binding{{ID: 1, Code: "test_bound", Area: widget.AreaBody, Presentation: widget.DefaultPresentation(), ParamBindings: widget.ParamBindings{"text": widget.ResourceField("headline")}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, placement := range placements.Body {
+			widgetRuntime, _ := catalog.Widget(placement.Code)
+			instance, err := widgetRuntime.NewResolved(placement.Params, placement.ParamBindings, runtime.FieldSchema(), widget.ResourceValues{Fields: map[string]any{"headline": value}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := instance.Render(context.Background(), widget.RenderInput{})
+			if err != nil || result["text"] != value {
+				t.Fatalf("resolved value=%v, %v", result, err)
+			}
+			placement.ParamBindings["text"] = widget.ResourceField("broken")
+		}
+	}
+	definitions[0].Layout.Body[0] = Widget{Widget: ref, ParamBindings: widget.ParamBindings{"text": widget.ResourceField("headline")}}
+	definitions[0].Fields[0].Type = field.TypeTextarea
+	templates, err = Compile(definitions, resolver())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = templates.CompileWidgets(catalog); err == nil {
+		t.Fatal("incompatible template binding compiled")
+	}
+}

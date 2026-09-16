@@ -56,7 +56,7 @@ function definition(code: string): WidgetDefinition {
   return props.definitions.find((item) => item.code === code) ?? {
     code, module_code: '', module_label: 'Недоступный модуль', module_description: '',
     label: code, description: 'Определение виджета недоступно текущему профилю.', fields: [],
-    editor_tabs: [], summary_fields: [], views: [],
+    editor_tabs: [], summary_fields: [], views: [], param_types: {},
   }
 }
 
@@ -258,6 +258,7 @@ function handleError(error: unknown, fallback: string): void {
         <widget-card
           :widget="item"
           :definition="definition(item.code)"
+          :sources="template.widget_value_sources"
           :disabled="!canUpdate || reordering"
           :dragging="draggingID === item.id"
           @dragstart="startDrag(item, $event)"
@@ -311,6 +312,7 @@ function handleError(error: unknown, fallback: string): void {
         <widget-card
           :widget="item"
           :definition="definition(item.code)"
+          :sources="template.widget_value_sources"
           :disabled="!canUpdate || reordering"
           :dragging="draggingID === item.id"
           @dragstart="startDrag(item, $event)"
@@ -334,6 +336,7 @@ function handleError(error: unknown, fallback: string): void {
     <widget-settings-dialog
       v-model="settingsOpen"
       :definition="selectedDefinition"
+      :sources="template.widget_value_sources"
       :widget="editingWidget"
 			:site-id="siteId"
 			:access-token="accessToken"

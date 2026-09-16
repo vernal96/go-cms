@@ -561,6 +561,13 @@ func (r *invalidatingResourceRepository) ReorderWidgets(ctx context.Context, act
 
 func (r *invalidatingResourceRepository) mutateWidgets(ctx context.Context, id resource.ID, mutate func() error) error {
 	current, err := r.base.ByID(ctx, id)
+	if errors.Is(err, resource.ErrNotFound) {
+		if _, ok := r.base.(resource.LibraryItemRepository); ok {
+			return r.mutateLibraryItem(ctx, id, func(resource.LibraryItemRepository) error {
+				return mutate()
+			})
+		}
+	}
 	if err != nil {
 		return err
 	}

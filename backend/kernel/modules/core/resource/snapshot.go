@@ -1,5 +1,7 @@
 package resource
 
+import "github.com/vernal96/go-cms/kernel/modules/core/widget"
+
 func SnapshotFromResource(item Resource) Snapshot {
 	widgets := make([]WidgetSnapshot, len(item.Widgets))
 	for index, binding := range item.Widgets {
@@ -7,7 +9,7 @@ func SnapshotFromResource(item Resource) Snapshot {
 			Code: binding.Code, Area: binding.Area, Position: binding.Position,
 			View: binding.Presentation.View, Columns: binding.Presentation.Columns,
 			MarginTop: binding.Presentation.MarginTop, MarginBottom: binding.Presentation.MarginBottom,
-			Enabled: binding.Presentation.Enabled, Params: binding.Params,
+			Enabled: binding.Presentation.Enabled, Params: binding.Params, ParamBindings: widget.CloneParamBindings(binding.ParamBindings),
 		}
 	}
 	return Snapshot{
@@ -30,7 +32,7 @@ func SnapshotFromLibraryItem(item LibraryItem) Snapshot {
 			Code: binding.Code, Area: binding.Area, Position: binding.Position,
 			View: binding.Presentation.View, Columns: binding.Presentation.Columns,
 			MarginTop: binding.Presentation.MarginTop, MarginBottom: binding.Presentation.MarginBottom,
-			Enabled: binding.Presentation.Enabled, Params: binding.Params,
+			Enabled: binding.Presentation.Enabled, Params: binding.Params, ParamBindings: widget.CloneParamBindings(binding.ParamBindings),
 		}
 	}
 	libraryID := item.LibraryID

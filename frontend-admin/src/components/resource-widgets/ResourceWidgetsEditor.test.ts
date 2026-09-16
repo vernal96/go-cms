@@ -21,7 +21,7 @@ const template: ResourceTemplate = {
 	fields: [],
 	editor_tabs: [],
   supports_resource_widgets: true,
-  widget_areas: ['body', 'sidebar'],
+  widget_value_sources: [], widget_areas: ['body', 'sidebar'],
 }
 const definition: WidgetDefinition = {
   code: 'core_content',
@@ -32,7 +32,7 @@ const definition: WidgetDefinition = {
   description: '',
   fields: [],
   editor_tabs: [],
-  summary_fields: [],
+  summary_fields: [], param_types: {},
   views: [],
 }
 const widget = (id: number, area: 'body' | 'sidebar', position: number): ResourceWidget => ({
@@ -45,7 +45,7 @@ const widget = (id: number, area: 'body' | 'sidebar', position: number): Resourc
   margin_top: 0,
   margin_bottom: 0,
   enabled: true,
-  params: {},
+  params: {}, param_bindings: {},
 })
 
 function dragTransfer(): DataTransfer {

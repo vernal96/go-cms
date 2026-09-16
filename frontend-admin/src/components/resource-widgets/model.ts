@@ -1,4 +1,4 @@
-import type { ResourceWidget, WidgetArea } from '../../types/admin'
+import type { ResourceWidget, WidgetArea, WidgetParamBinding } from '../../types/admin'
 
 export interface WidgetSettingsValue {
   view: string
@@ -7,6 +7,7 @@ export interface WidgetSettingsValue {
   margin_bottom: number
   enabled: boolean
   params: Record<string, unknown>
+  param_bindings: Record<string, WidgetParamBinding>
 }
 
 const areas: WidgetArea[] = ['body', 'sidebar']
@@ -23,6 +24,7 @@ export function normalizeWidgetPositions(source: ResourceWidget[]): ResourceWidg
   return sortWidgets(source).map((widget) => ({
     ...widget,
     params: { ...widget.params },
+    param_bindings: { ...widget.param_bindings },
     position: positions[widget.area]++,
   }))
 }

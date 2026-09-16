@@ -265,10 +265,10 @@ WHERE id=$1 AND site_id=$2;`, candidate.ID, candidate.SiteID, candidate.ParentID
 			return resource.Resource{}, encodeErr
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO core.resource_widgets
- (resource_id,widget_code,area,position,view,columns,margin_top,margin_bottom,enabled,params)
- VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb);`, candidate.ID, binding.Code, binding.Area,
+ (resource_id,widget_code,area,position,view,columns,margin_top,margin_bottom,enabled,params,param_bindings)
+ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb);`, candidate.ID, binding.Code, binding.Area,
 			binding.Position, binding.Presentation.View, binding.Presentation.Columns, binding.Presentation.MarginTop,
-			binding.Presentation.MarginBottom, binding.Presentation.Enabled, string(rawParams)); err != nil {
+			binding.Presentation.MarginBottom, binding.Presentation.Enabled, string(rawParams), nonNilParamBindings(binding.ParamBindings)); err != nil {
 			return resource.Resource{}, translateError(err)
 		}
 	}
@@ -389,10 +389,10 @@ WHERE id=$1 RETURNING `+libraryItemColumns+`;`, candidate.ID, candidate.LibraryI
 			return resource.LibraryItem{}, encodeErr
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO core.resource_widgets
- (resource_id,widget_code,area,position,view,columns,margin_top,margin_bottom,enabled,params)
- VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb);`, candidate.ID, binding.Code, binding.Area,
+ (resource_id,widget_code,area,position,view,columns,margin_top,margin_bottom,enabled,params,param_bindings)
+ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb);`, candidate.ID, binding.Code, binding.Area,
 			binding.Position, binding.Presentation.View, binding.Presentation.Columns, binding.Presentation.MarginTop,
-			binding.Presentation.MarginBottom, binding.Presentation.Enabled, string(rawParams)); err != nil {
+			binding.Presentation.MarginBottom, binding.Presentation.Enabled, string(rawParams), nonNilParamBindings(binding.ParamBindings)); err != nil {
 			return resource.LibraryItem{}, translateError(err)
 		}
 	}
@@ -439,7 +439,7 @@ func revisionWidgets(snapshot resource.Snapshot) []widget.Binding {
 	result := make([]widget.Binding, len(snapshot.Widgets))
 	for index, item := range snapshot.Widgets {
 		result[index] = widget.Binding{Code: item.Code, Area: item.Area, Position: item.Position,
-			Presentation: widget.Presentation{View: item.View, Columns: item.Columns, MarginTop: item.MarginTop, MarginBottom: item.MarginBottom, Enabled: item.Enabled}, Params: item.Params}
+			Presentation: widget.Presentation{View: item.View, Columns: item.Columns, MarginTop: item.MarginTop, MarginBottom: item.MarginBottom, Enabled: item.Enabled}, Params: item.Params, ParamBindings: widget.CloneParamBindings(item.ParamBindings)}
 	}
 	return result
 }

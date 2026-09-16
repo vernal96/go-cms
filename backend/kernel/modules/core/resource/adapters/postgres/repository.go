@@ -1889,12 +1889,12 @@ func (r *Repository) CreateWidget(
 	}
 	created, err := scanWidget(tx.QueryRow(ctx, `
 INSERT INTO core.resource_widgets
-    (resource_id, widget_code, area, position, view, columns, margin_top, margin_bottom, enabled, params)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
-RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bottom, enabled, params;
+    (resource_id, widget_code, area, position, view, columns, margin_top, margin_bottom, enabled, params, param_bindings)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb)
+RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bottom, enabled, params, param_bindings;
 `, resourceID, binding.Code, binding.Area, binding.Position, binding.Presentation.View,
 		binding.Presentation.Columns, binding.Presentation.MarginTop, binding.Presentation.MarginBottom,
-		binding.Presentation.Enabled, string(rawParams)))
+		binding.Presentation.Enabled, string(rawParams), nonNilParamBindings(binding.ParamBindings)))
 	if err != nil {
 		return widget.Binding{}, translateError(err)
 	}
@@ -1960,12 +1960,12 @@ func (r *Repository) UpdateWidget(
 	updated, err := scanWidget(tx.QueryRow(ctx, `
 UPDATE core.resource_widgets
 SET widget_code = $3, area = $4, position = $5, view = $6, columns = $7,
-    margin_top = $8, margin_bottom = $9, enabled = $10, params = $11::jsonb
+    margin_top = $8, margin_bottom = $9, enabled = $10, params = $11::jsonb, param_bindings = $12::jsonb
 WHERE resource_id = $1 AND id = $2
-RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bottom, enabled, params;
+RETURNING id, widget_code, area, position, view, columns, margin_top, margin_bottom, enabled, params, param_bindings;
 `, resourceID, binding.ID, binding.Code, binding.Area, binding.Position,
 		binding.Presentation.View, binding.Presentation.Columns, binding.Presentation.MarginTop,
-		binding.Presentation.MarginBottom, binding.Presentation.Enabled, string(rawParams)))
+		binding.Presentation.MarginBottom, binding.Presentation.Enabled, string(rawParams), nonNilParamBindings(binding.ParamBindings)))
 	if err != nil {
 		return widget.Binding{}, translateError(err)
 	}
@@ -2220,7 +2220,7 @@ func scanWidget(scanner rowScanner) (widget.Binding, error) {
 		&binding.ID, &binding.Code, &binding.Area, &binding.Position,
 		&binding.Presentation.View, &binding.Presentation.Columns,
 		&binding.Presentation.MarginTop, &binding.Presentation.MarginBottom,
-		&binding.Presentation.Enabled, &rawParams,
+		&binding.Presentation.Enabled, &rawParams, &binding.ParamBindings,
 	); err != nil {
 		return widget.Binding{}, err
 	}
@@ -2254,7 +2254,7 @@ func loadResourceWidgets(
 
 	rows, err := queryer.Query(ctx, `
 SELECT resource_id, id, widget_code, area, position, view, columns,
-       margin_top, margin_bottom, enabled, params
+       margin_top, margin_bottom, enabled, params, param_bindings
 FROM core.resource_widgets
 WHERE resource_id = ANY($1::bigint[])
 ORDER BY resource_id, area, position, id;
@@ -2282,6 +2282,7 @@ ORDER BY resource_id, area, position, id;
 			&binding.Presentation.MarginBottom,
 			&binding.Presentation.Enabled,
 			&rawParams,
+			&binding.ParamBindings,
 		); err != nil {
 			return fmt.Errorf("scan resource widget: %w", err)
 		}
@@ -2901,3 +2902,10 @@ var _ resource.WidgetRepository = (*Repository)(nil)
 var _ resource.ManagementRepository = (*Repository)(nil)
 var _ resource.StatisticsRepository = (*Repository)(nil)
 var _ resource.QueryRepository = (*Repository)(nil)
+
+func nonNilParamBindings(bindings widget.ParamBindings) widget.ParamBindings {
+	if bindings == nil {
+		return widget.ParamBindings{}
+	}
+	return bindings
+}

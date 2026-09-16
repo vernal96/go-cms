@@ -1291,6 +1291,7 @@ func newTransportTestApp(
 	t *testing.T,
 	module transportModule,
 	resources resource.Repository,
+	extraTemplates ...template.Definition,
 ) *appkernel.App {
 	t.Helper()
 	runtimeApp, err := appkernel.New(
@@ -1308,11 +1309,11 @@ func newTransportTestApp(
 			},
 			Profiles: []kernel.Profile{{
 				Code: "dev",
-				Templates: []template.Definition{
+				Templates: append([]template.Definition{
 					{Code: "widgets", Label: "Widgets", Layout: template.Layout{Body: []template.Item{template.ResourceWidgets{}}}},
 					{Code: "content", Label: "Content", Layout: template.Layout{Body: []template.Item{template.Widget{Widget: corewidgets.Content}}}},
 					{Code: "empty", Label: "Empty"},
-				},
+				}, extraTemplates...),
 				Modules: []kernel.ProfileModule{
 					{Module: core.Module{}},
 					{Module: admin.Module{}},
@@ -2546,4 +2547,64 @@ func accessLogRecords(
 		t.Fatal(err)
 	}
 	return records
+}
+
+func TestPageWidgetBindingsResolveCurrentResourceAndIsolateInvalidValues(t *testing.T) {
+	ref := widget.NewRef("bound")
+	required := true
+	echo := widget.Functional{Description: widget.Definition{Reference: ref, Label: "Bound", Description: "Bound values", Fields: []field.Definition{{Key: "text", Label: "Text", Type: field.TypeString, Required: &required, Rules: []string{"min=3"}}}}, Render: func(_ context.Context, _ widget.RenderInput, params map[string]any) (map[string]any, error) {
+		return params, nil
+	}}
+	order := []string{}
+	module := transportModule{code: "binding", resourceType: transportResourceType{code: "binding_test"}, order: &order, widgets: []widget.Widget{echo}}
+	code := template.Code("bound_page")
+	repo := resourceRepository{byPath: map[string]resource.Resource{"/bound": {ID: 7, SiteID: 1, Type: resourcetype.Page, Template: &code, Title: "First title", Path: stringPointer("/bound"), IsPublic: true, Fields: map[string]any{"headline": "First field"}, Widgets: []widget.Binding{{ID: 1, Code: "binding_bound", Area: widget.AreaBody, Presentation: widget.DefaultPresentation(), ParamBindings: widget.ParamBindings{"text": widget.ResourceField("headline")}}}}}}
+	app := newTransportTestApp(t, module, repo, template.Definition{Code: code, Label: "Bound", Fields: []field.Definition{{Key: "headline", Label: "Headline", Type: field.TypeString}}, Layout: template.Layout{Body: []template.Item{template.Widget{Widget: ref, ParamBindings: widget.ParamBindings{"text": widget.ResourceProperty("title")}}, template.ResourceWidgets{}}}})
+	handler, err := newTestHandler(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, values := range []struct {
+		title, headline string
+		invalid         bool
+	}{{"First title", "First field", false}, {"Next title", "Next field", false}, {"Still valid", "x", true}} {
+		current := repo.byPath["/bound"]
+		current.Title = values.title
+		current.Fields["headline"] = values.headline
+		repo.byPath["/bound"] = current
+		request := httptest.NewRequest(http.MethodGet, "/bound", nil)
+		request.Host = "example.com"
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+		var payload struct {
+			Widgets struct {
+				Body []struct {
+					Data  map[string]any `json:"data"`
+					Error *struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				} `json:"body"`
+			} `json:"widgets"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if len(payload.Widgets.Body) != 2 || payload.Widgets.Body[0].Data["text"] != values.title {
+			t.Fatalf("template widget: %s", response.Body.String())
+		}
+		bound := payload.Widgets.Body[1]
+		if values.invalid {
+			if bound.Error == nil || bound.Error.Code != "invalid_params" {
+				t.Fatalf("error not isolated: %s", response.Body.String())
+			}
+		} else if bound.Error != nil || bound.Data["text"] != values.headline {
+			t.Fatalf("resource widget: %s", response.Body.String())
+		}
+		if strings.Contains(response.Body.String(), "param_bindings") {
+			t.Fatal("configuration leaked into public envelope")
+		}
+	}
 }
