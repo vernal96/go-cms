@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"testing"
 
-	httpserver "github.com/vernal96/go-cms/internal/server/http"
 	"github.com/vernal96/go-cms/kernel"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
@@ -16,6 +15,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/site"
 	"github.com/vernal96/go-cms/kernel/modules/core/user/adapters/argon2id"
 	"github.com/vernal96/go-cms/kernel/security"
+	httpserver "github.com/vernal96/go-cms/kernel/transport/httpserver"
 )
 
 func TestSiteSettingsHTTPPrivacyAndUpdates(t *testing.T) {

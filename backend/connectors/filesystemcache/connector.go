@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vernal96/go-cms/connectors/internal/cacheentry"
+	"github.com/vernal96/go-cms/connectors/support/cacheentry"
 	"github.com/vernal96/go-cms/kernel/cache"
 	"github.com/vernal96/go-cms/kernel/filesystem"
 )

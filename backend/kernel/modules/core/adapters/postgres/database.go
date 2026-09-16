@@ -34,7 +34,7 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-//go:embed seeds/shared/*.sql seeds/dev/*.sql
+//go:embed seeds/shared/*.sql
 var seedFiles embed.FS
 
 type Database struct {
@@ -183,13 +183,6 @@ func (d *Database) SeedSources() []seeds.Source {
 			Schema: "core",
 			FS:     seedFiles,
 			Path:   "seeds/shared",
-		},
-		{
-			ID:     "sites_dev",
-			Tags:   []seeds.Tag{"dev"},
-			Schema: "core",
-			FS:     seedFiles,
-			Path:   "seeds/dev",
 		},
 	}
 }

@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	httpserver "github.com/vernal96/go-cms/internal/server/http"
 	"github.com/vernal96/go-cms/kernel"
 	"github.com/vernal96/go-cms/kernel/eventbus"
 	"github.com/vernal96/go-cms/kernel/modules/core/resourcetype"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
+	httpserver "github.com/vernal96/go-cms/kernel/transport/httpserver"
 )
 
 type compilerResolver struct{}
@@ -789,7 +789,7 @@ func TestCompilerValidatesMiddlewareNamesHandlersPatternsAndMounts(
 					http.NotFoundHandler(),
 				),
 			}},
-			want: "chi registration panic",
+			want: "closing delimiter",
 		},
 		{
 			name: "mount conflict",
@@ -855,4 +855,40 @@ func TestCompilerValidatesMiddlewareNamesHandlersPatternsAndMounts(
 
 func identityMiddleware(next http.Handler) http.Handler {
 	return next
+}
+
+func TestProfileRejectsEquivalentRouteShapes(t *testing.T) {
+	for _, patterns := range [][2]string{
+		{"/items/{id}", "/items/{slug}"},
+		{"/items/{id:[0-9]{2}}", "/items/{slug:^[0-9]{2}$}"},
+		{"/{site}/items/{id}", "/{domain}/items/{slug}"},
+	} {
+		t.Run(patterns[0], func(t *testing.T) {
+			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
+			runtime := makeCompilerProfile(t, "shapes",
+				compilerModule{code: "alpha", contribution: routeContribution("GET", patterns[0], handler)},
+				compilerModule{code: "beta", contribution: routeContribution("GET", patterns[1], handler)},
+			)
+			_, err := httpserver.CompileProfile(context.Background(), runtime)
+			if err == nil || !strings.Contains(err.Error(), "alpha") || !strings.Contains(err.Error(), "beta") {
+				t.Fatalf("collision error=%v", err)
+			}
+		})
+	}
+}
+
+func TestProfileKeepsDistinctRoutes(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
+	runtime := makeCompilerProfile(t, "distinct",
+		compilerModule{code: "one", contribution: routeContribution("GET", "/items/{id:[0-9]+}", handler)},
+		compilerModule{code: "two", contribution: routeContribution("GET", "/items/{name:[a-z]+}", handler)},
+		compilerModule{code: "three", contribution: routeContribution("GET", "/items/new", handler)},
+		compilerModule{code: "four", contribution: routeContribution("POST", "/items/{id:[0-9]+}", handler)},
+	)
+	compiled := compileProfileForTest(t, runtime)
+	for _, path := range []string{"/items/12", "/items/abc", "/items/new"} {
+		if got := serveProfile(compiled, "GET", path); got.Code != 204 {
+			t.Fatalf("%s: %d", path, got.Code)
+		}
+	}
 }

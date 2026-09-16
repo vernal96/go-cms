@@ -18,7 +18,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vernal96/go-cms/connectors/localstorage"
-	httpserver "github.com/vernal96/go-cms/internal/server/http"
 	"github.com/vernal96/go-cms/kernel"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
 	"github.com/vernal96/go-cms/kernel/eventbus"
@@ -42,6 +41,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/permission"
 	"github.com/vernal96/go-cms/kernel/security"
 	httptransport "github.com/vernal96/go-cms/kernel/transport/http"
+	httpserver "github.com/vernal96/go-cms/kernel/transport/httpserver"
 )
 
 type connector struct{}
@@ -1077,15 +1077,18 @@ func (m publicationModule) Build(
 	}
 	settings := ctx.Scope().Settings()
 	broken, _ := settings["broken"].(bool)
+	collision, _ := settings["collision"].(bool)
 	return publicationRuntime{
-		domain: ctx.Scope().Domain(),
-		broken: broken,
+		domain:    ctx.Scope().Domain(),
+		broken:    broken,
+		collision: collision,
 	}, nil
 }
 
 type publicationRuntime struct {
-	domain string
-	broken bool
+	domain    string
+	broken    bool
+	collision bool
 }
 
 func (publicationRuntime) ModuleCode() kernel.ModuleCode {
@@ -1103,6 +1106,13 @@ func (r publicationRuntime) HTTP() httptransport.Builder {
 		}
 		return httptransport.Contribution{
 			Routes: func(registrar httptransport.Registrar) error {
+				if r.collision {
+					for _, pattern := range []string{"/items/{id}", "/items/{slug}"} {
+						if err := registrar.Route(httptransport.Route{Method: "GET", Pattern: pattern, Handler: http.NotFoundHandler()}); err != nil {
+							return err
+						}
+					}
+				}
 				return registrar.Route(httptransport.Route{
 					Method:  http.MethodGet,
 					Pattern: "/version",
@@ -1363,7 +1373,7 @@ func TestSiteHTTPPublicationIsAtomicAcrossUpdateCreateAndReload(t *testing.T) {
 			},
 			Params: []field.Definition{{
 				Key: "broken", Type: field.TypeCheckbox, Label: "Broken",
-			}},
+			}, {Key: "collision", Type: field.TypeCheckbox, Label: "Collision"}},
 		}},
 	})
 	if err != nil {
@@ -1426,6 +1436,18 @@ func TestSiteHTTPPublicationIsAtomicAcrossUpdateCreateAndReload(t *testing.T) {
 	}
 	assertResponse("first.test", "first.test")
 
+	_, err = application.Sites().Update(ctx, security.System(), site.UpdateInput{
+		ID: 1, ProfileCode: "dev", Domain: "collision.test", Locale: "en-US", IsPublic: true,
+		Settings: map[string]any{"broken": false, "collision": true},
+	})
+	if err == nil || !strings.Contains(err.Error(), "duplicates") {
+		t.Fatalf("collision update=%v", err)
+	}
+	preserved, _ = application.Sites().RuntimeByID(1)
+	if preserved != initialRuntime || repository.updateCalls != 0 {
+		t.Fatal("collision published or persisted candidate")
+	}
+	assertResponse("first.test", "first.test")
 	updated, err := application.Sites().Update(ctx, security.System(), site.UpdateInput{
 		ID:          1,
 		ProfileCode: "dev",

@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { useFieldValidation } from './use-field-validation'
 import { computed } from 'vue'
 import { ElAlert, ElFormItem, ElTag } from 'element-plus'
 import type { FieldDefinition } from '../../types/admin'
 import DynamicField from './DynamicField.vue'
 import type { DynamicFieldErrors, DynamicValues } from './model'
-import { unsupportedFieldTypes } from './model'
+
+const { unsupportedFieldTypes } = useFieldValidation()
 
 const props = withDefaults(
   defineProps<{

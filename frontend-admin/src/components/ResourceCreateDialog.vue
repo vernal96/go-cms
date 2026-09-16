@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useFieldValidation } from './fields/use-field-validation'
 import { computed, reactive, ref, watch } from 'vue'
 import {
   ElAlert,
@@ -27,10 +28,10 @@ import DynamicFieldsForm from './fields/DynamicFieldsForm.vue'
 import {
   createFieldValues,
   fieldErrorMessage,
-  unsupportedFieldTypes,
-  validateFieldValues,
   type DynamicFieldErrors,
 } from './fields/model'
+
+const { unsupportedFieldTypes, validateFieldValues } = useFieldValidation()
 
 const props = defineProps<{ accessToken: string; siteId: number }>()
 const emit = defineEmits<{

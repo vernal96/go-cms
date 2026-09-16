@@ -11,6 +11,7 @@ import (
 	"github.com/vernal96/go-cms/kernel/modules/core/field"
 	"github.com/vernal96/go-cms/kernel/modules/core/template"
 	"github.com/vernal96/go-cms/kernel/outbox"
+	"github.com/vernal96/go-cms/kernel/seeds"
 )
 
 func validateDefinition(definition Definition) error {
@@ -170,6 +171,24 @@ func validateDefinition(definition Definition) error {
 		}
 	}
 
+	for _, database := range definitions {
+		for _, source := range database.Seeds {
+			found := false
+			for _, adapter := range database.Adapters {
+				if adapter.ModuleCode() == source.Module {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("database %q project seed %q references unavailable module %q", database.Connector.Code(), source.Source.ID, source.Module)
+			}
+			if err := seeds.ValidateSource(source.Source); err != nil {
+				return err
+			}
+		}
+	}
+
 	profileCodes := make(map[kernel.ProfileCode]struct{}, len(definition.Profiles))
 	for profileIndex, profile := range definition.Profiles {
 		if profile.Code == "" {
@@ -201,6 +220,7 @@ func cloneDefinition(definition Definition) Definition {
 		[]cache.Factory(nil),
 		definition.Caches...,
 	)
+	definition.MainDatabase.Seeds = cloneModuleSeeds(definition.MainDatabase.Seeds)
 	definition.MainDatabase.Adapters = append(
 		[]ModuleDatabaseFactory(nil),
 		definition.MainDatabase.Adapters...,
@@ -210,6 +230,7 @@ func cloneDefinition(definition Definition) Definition {
 		definition.AdditionalDatabases...,
 	)
 	for index := range definition.AdditionalDatabases {
+		definition.AdditionalDatabases[index].Seeds = cloneModuleSeeds(definition.AdditionalDatabases[index].Seeds)
 		definition.AdditionalDatabases[index].Adapters = append(
 			[]ModuleDatabaseFactory(nil),
 			definition.AdditionalDatabases[index].Adapters...,
@@ -251,4 +272,12 @@ func nilInterface(value any) bool {
 	default:
 		return false
 	}
+}
+
+func cloneModuleSeeds(sources []ModuleSeedSource) []ModuleSeedSource {
+	result := append([]ModuleSeedSource(nil), sources...)
+	for i := range result {
+		result[i].Source.Tags = append([]seeds.Tag(nil), result[i].Source.Tags...)
+	}
+	return result
 }

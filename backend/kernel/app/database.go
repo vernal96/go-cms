@@ -151,5 +151,12 @@ func (a *App) openBinding(
 		}
 	}
 
+	for _, source := range definition.Seeds {
+		plans, err := seedPlans(connector, source.Module, []seeds.Source{source.Source}, seedSourceIDs, seedHistories)
+		if err != nil {
+			return nil, err
+		}
+		a.seedPlan = append(a.seedPlan, plans...)
+	}
 	return binding, nil
 }

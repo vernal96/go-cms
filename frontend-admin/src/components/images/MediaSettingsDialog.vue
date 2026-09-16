@@ -1,10 +1,13 @@
 <script setup lang="ts">
+import { useFieldValidation } from '../fields/use-field-validation'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElAlert, ElButton, ElDialog, ElForm } from 'element-plus'
 import { AdminAPIError, adminRequest } from '../../api/admin-api'
 import type { FieldDefinition } from '../../types/admin'
 import DynamicFieldsForm from '../fields/DynamicFieldsForm.vue'
-import { createFieldValues, fieldErrorMessage, validateFieldValues, type DynamicFieldErrors, type DynamicValues } from '../fields/model'
+import { createFieldValues, fieldErrorMessage,  type DynamicFieldErrors, type DynamicValues } from '../fields/model'
+
+const { validateFieldValues } = useFieldValidation()
 
 interface SettingsState {
   code: string

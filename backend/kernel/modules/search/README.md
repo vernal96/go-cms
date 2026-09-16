@@ -86,7 +86,7 @@ export CMS_TEST_SEARCH_POSTGRES_PORT=5432
 export CMS_TEST_SEARCH_POSTGRES_DB=cms_search_test
 export CMS_TEST_SEARCH_POSTGRES_USER=cms_search_test
 # Supply CMS_TEST_SEARCH_POSTGRES_PASSWORD through your test environment.
-go test ./connectors/pgtrgm ./kernel/modules/search/... ./internal/server/http
+go test ./connectors/pgtrgm ./kernel/modules/search/... ./kernel/transport/httpserver
 ```
 
 The integration tests apply core migrations and create/remove their own sites.

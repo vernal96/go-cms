@@ -13,7 +13,7 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-	"github.com/vernal96/go-cms/connectors/internal/cacheentry"
+	"github.com/vernal96/go-cms/connectors/support/cacheentry"
 	"github.com/vernal96/go-cms/kernel/cache"
 )
 

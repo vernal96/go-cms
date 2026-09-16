@@ -1,0 +1,11 @@
+{
+  "name": "@example/cms-notice",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {".": {"types": "./dist/types/index.d.ts", "import": "./dist/notice.js"}},
+  "files": ["dist"],
+  "peerDependencies": {"@go-cms/admin": "0.1.0", "vue": "^3.5.40"},
+  "devDependencies": {"@vitejs/plugin-vue": "6.0.8", "vite": "8.1.5", "typescript": "7.0.2", "vue-go-tsc": "0.2.1", "@types/node": "26.1.2"},
+  "scripts": {"build": "vite build && vue-go-tsc -p tsconfig.json", "demo": "vite --config demo/vite.config.ts"}
+}

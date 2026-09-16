@@ -11,7 +11,7 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
-	"github.com/vernal96/go-cms/connectors/internal/eventbusutil"
+	"github.com/vernal96/go-cms/connectors/support/eventbusutil"
 	"github.com/vernal96/go-cms/kernel/eventbus"
 )
 

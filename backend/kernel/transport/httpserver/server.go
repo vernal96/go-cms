@@ -5,18 +5,26 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-
-	"github.com/vernal96/go-cms/internal/config"
+	"time"
 )
+
+// Config describes the HTTP listener independently of project configuration.
+type Config struct {
+	Address         string
+	ReadTimeout     time.Duration
+	WriteTimeout    time.Duration
+	IdleTimeout     time.Duration
+	ShutdownTimeout time.Duration
+}
 
 type Server struct {
 	server *http.Server
-	config config.ServerConfig
+	config Config
 	logger *slog.Logger
 }
 
 func NewServer(
-	config config.ServerConfig,
+	config Config,
 	handler http.Handler,
 	logger *slog.Logger,
 ) (*Server, error) {
@@ -28,7 +36,7 @@ func NewServer(
 	}
 	return &Server{
 		server: &http.Server{
-			Addr:         config.Address(),
+			Addr:         config.Address,
 			Handler:      handler,
 			ErrorLog:     slog.NewLogLogger(logger.Handler(), slog.LevelError),
 			ReadTimeout:  config.ReadTimeout,

@@ -14,7 +14,7 @@ import TextField from './TextField.vue'
 import FileField from './FileField.vue'
 import JsonField from './JsonField.vue'
 import RepeaterField from './RepeaterField.vue'
-import { isMultipleField, type DynamicFieldErrors } from './model'
+import { fieldEditorError, isMultipleField, type DynamicFieldErrors } from './model'
 import MultipleField from './MultipleField.vue'
 import ResourcePickerField from './ResourcePickerField.vue'
 import RichTextEditor from '../RichTextEditor.vue'
@@ -30,6 +30,7 @@ const props = defineProps<{
 const injectedToken = inject(adminAccessTokenKey)
 const token = computed(() => props.accessToken || injectedToken?.value || '')
 const registry = inject(adminPluginRegistryKey, undefined)
+const unavailable = computed(() => fieldEditorError(props.field, registry))
 const customEditor = computed(() => props.field.editor ? registry?.fieldEditor(props.field.editor) : undefined)
 const model = defineModel<unknown>()
 const control = computed(() => props.field.editor || props.field.type)
@@ -37,9 +38,9 @@ const resourceIDs = computed<number[]>(() => Array.isArray(model.value) ? model.
 </script>
 
 <template>
-	<multiple-field v-if="isMultipleField(field) && control !== 'select'" v-model="model" :field="field" :errors="errors" :field-path="fieldPath" :site-id="siteId" :access-token="token" :resource-templates="resourceTemplates" />
+	<el-alert v-if="unavailable" type="error" :closable="false" :title="unavailable" />
+	<multiple-field v-else-if="isMultipleField(field) && control !== 'select'" v-model="model" :field="field" :errors="errors" :field-path="fieldPath" :site-id="siteId" :access-token="token" :resource-templates="resourceTemplates" />
 	<component v-else-if="customEditor" :is="customEditor" v-model="model" :field="field" :site-id="siteId" :access-token="token" :resource-templates="resourceTemplates" />
-	<el-alert v-else-if="field.editor?.includes('.')" type="error" :closable="false" :title="`Редактор «${field.editor}» недоступен.`" />
 	<rich-text-editor v-else-if="field.editor === 'html'" :model-value="typeof model === 'string' ? model : ''" @update:model-value="model = $event" />
 	<select-field v-else-if="field.editor === 'resource-template'" v-model="model" :choices="(resourceTemplates ?? []).map((item) => ({ value: item.code, label: item.label }))" :multiple="false" />
 	<resource-picker-field v-else-if="field.editor === 'resource-picker'" :model-value="typeof model === 'number' ? model : undefined" :site-id="siteId ?? 0" :access-token="accessToken ?? ''" @update:model-value="model = $event" />

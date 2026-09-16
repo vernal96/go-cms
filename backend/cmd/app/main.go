@@ -11,9 +11,9 @@ import (
 
 	projectconfig "github.com/vernal96/go-cms/internal/config"
 	jwtsecurity "github.com/vernal96/go-cms/internal/security/jwt"
-	httpserver "github.com/vernal96/go-cms/internal/server/http"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
 	"github.com/vernal96/go-cms/kernel/logging"
+	httpserver "github.com/vernal96/go-cms/kernel/transport/httpserver"
 )
 
 func main() {
@@ -87,7 +87,7 @@ func run(ctx context.Context) (resultErr error) {
 	}
 
 	server, err := httpserver.NewServer(
-		projectConfig.Server,
+		projectConfig.Server.HTTP(),
 		handler,
 		application.Logger(),
 	)

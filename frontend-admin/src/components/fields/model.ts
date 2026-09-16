@@ -1,3 +1,4 @@
+import type { Component } from 'vue'
 import type { FieldDefinition } from '../../types/admin'
 
 export type DynamicValues = Record<string, unknown>
@@ -29,10 +30,25 @@ export function singleValueField(field: FieldDefinition): FieldDefinition {
   return { ...field, required: true, options: { ...field.options, multiple: false, min_items: 0, max_items: 0 } }
 }
 
-export function unsupportedFieldTypes(fields: FieldDefinition[]): string[] {
-  return fields
-    .filter((field) => !supportedTypes.has(field.type) && !field.editor)
-    .map((field) => `${field.key} (${field.type})`)
+export interface FieldEditorResolver {
+  fieldEditor(code: string): Component | undefined
+}
+
+const standardEditors = new Set([...supportedTypes, 'html', 'resource-template', 'resource-picker', 'resource-multi-picker'])
+
+export function fieldEditorError(field: FieldDefinition, resolver?: FieldEditorResolver): string | undefined {
+  const code = field.editor || field.type
+  if (field.editor && resolver?.fieldEditor(field.editor)) return undefined
+  if (field.editor ? standardEditors.has(code) : supportedTypes.has(code)) return undefined
+  return field.editor ? `Редактор «${code}» недоступен.` : `Тип поля «${code}» не поддерживается.`
+}
+
+export function unsupportedFieldTypes(fields: FieldDefinition[], resolver?: FieldEditorResolver): string[] {
+  return fields.flatMap(field => {
+    if (fieldEditorError(field, resolver)) return [`${field.key} (${field.editor || field.type})`]
+    if ((field.editor || field.type) !== 'repeater') return []
+    return unsupportedFieldTypes(field.options?.fields ?? [], resolver).map(message => `${field.key}[].${message}`)
+  })
 }
 
 export function createFieldValues(
@@ -66,14 +82,21 @@ export function createFieldValues(
 export function validateFieldValues(
   fields: FieldDefinition[],
   values: DynamicValues,
+  resolver?: FieldEditorResolver,
 ): DynamicFieldErrors {
   const errors: DynamicFieldErrors = {}
   for (const field of fields) {
-    if (!supportedTypes.has(field.type) && !field.editor) {
-      errors[field.key] = `Тип поля «${field.type}» не поддерживается.`
+    const unavailable = fieldEditorError(field, resolver)
+    if (unavailable) {
+      errors[field.key] = unavailable
       continue
     }
 
+    if ((field.editor || field.type) === 'repeater') {
+      for (const unavailable of unsupportedFieldTypes(field.options?.fields ?? [], resolver)) {
+        errors[`${field.key}[]`] = `Недоступно поле: ${unavailable}.`
+      }
+    }
     const value = values[field.key]
     if (isMultipleField(field)) {
       const minimum = Math.max(field.required ? 1 : 0, field.options?.min_items ?? 0)
@@ -88,7 +111,7 @@ export function validateFieldValues(
       const seen = new Set<unknown>()
       for (const [index, item] of items.entries()) {
         const key = `${field.key}[${index}]`
-        Object.assign(errors, validateFieldValues([{ ...singleValueField(field), key }], { [key]: item }))
+        Object.assign(errors, validateFieldValues([{ ...singleValueField(field), key }], { [key]: item }, resolver))
         if (field.type === 'select' && seen.has(item)) errors[key] = fieldErrorMessage('unique', '')
         seen.add(item)
       }
@@ -100,7 +123,7 @@ export function validateFieldValues(
           errors[`${field.key}[${index}]`] = 'Ожидается запись.'
           continue
         }
-        for (const [key, error] of Object.entries(validateFieldValues(field.options?.fields ?? [], row as DynamicValues))) errors[`${field.key}[${index}].${key}`] = error
+        for (const [key, error] of Object.entries(validateFieldValues(field.options?.fields ?? [], row as DynamicValues, resolver))) errors[`${field.key}[${index}].${key}`] = error
       }
     }
     const empty = isEmpty(value)

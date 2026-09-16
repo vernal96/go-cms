@@ -2,6 +2,7 @@ import type { Component } from 'vue'
 import type { RouteRecordRaw } from 'vue-router'
 
 import type { AdminPlugin, AdminRouteDefinition } from './plugin'
+import { routeShape } from './route-shape'
 
 const semanticCodePattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/
 
@@ -12,9 +13,10 @@ export class AdminPluginRegistry {
   readonly #icons = new Map<string, Component>()
   readonly #plugins: AdminPlugin[]
 
-  constructor(plugins: readonly AdminPlugin[]) {
+  constructor(plugins: readonly AdminPlugin[], reservedRoutes: readonly Pick<AdminRouteDefinition, 'name' | 'path'>[] = []) {
     const pluginCodes = new Set<string>()
-    const routePaths = new Set<string>()
+    const routePaths = new Map<string, string>()
+    for (const route of reservedRoutes) routePaths.set(routeShape(route.path), route.name)
     this.#plugins = [...plugins]
 
     for (const plugin of plugins) {
@@ -33,14 +35,16 @@ export class AdminPluginRegistry {
         if (!route.path.startsWith('/admin/')) {
           throw new Error(`Admin plugin route must use an /admin/ path: ${route.path}`)
         }
-        if (this.#routes.has(route.name)) {
+        if (this.#routes.has(route.name) || reservedRoutes.some(item => item.name === route.name)) {
           throw new Error(`Admin route is registered more than once: ${route.name}`)
         }
-        if (routePaths.has(route.path)) {
-          throw new Error(`Admin route path is registered more than once: ${route.path}`)
+        const shape = routeShape(route.path)
+        const owner = routePaths.get(shape)
+        if (owner) {
+          throw new Error(`Admin route ${route.name} (${route.path}) conflicts with ${owner}`)
         }
         this.#routes.set(route.name, route)
-        routePaths.add(route.path)
+        routePaths.set(shape, route.name)
       }
 
       for (const [code, editor] of Object.entries(plugin.fieldEditors ?? {})) {

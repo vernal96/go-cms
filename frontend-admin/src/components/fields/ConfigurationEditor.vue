@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { useFieldValidation } from './use-field-validation'
 import { computed, inject, ref, watch } from 'vue'
 import { ElAlert } from 'element-plus'
 import { adminPluginRegistryKey } from '../../admin-plugins/context'
 import type { ConfigField, FieldDefinition } from '../../types/admin'
 import DynamicFieldsForm from './DynamicFieldsForm.vue'
-import { validateFieldValues } from './model'
+
+const { validateFieldValues } = useFieldValidation()
 
 const props = defineProps<{ fields: ConfigField[]; editor?: string; siteId?: number; accessToken?: string; context?: Record<string, unknown> }>()
 const model = defineModel<Record<string, unknown>>({ required: true })

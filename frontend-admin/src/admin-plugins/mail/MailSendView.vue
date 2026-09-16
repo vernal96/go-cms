@@ -1,15 +1,18 @@
 <script setup lang="ts">
+import { useFieldValidation } from '../../components/fields/use-field-validation'
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElAlert, ElButton, ElCard, ElDescriptions, ElDescriptionsItem, ElForm, ElFormItem, ElMessage, ElOption, ElSelect, ElTag } from 'element-plus'
 import { AdminAPIError } from '../../api/admin-api'
 import { useRouter } from 'vue-router'
 import AccessDeniedView from '../../components/AccessDeniedView.vue'
 import DynamicFieldsForm from '../../components/fields/DynamicFieldsForm.vue'
-import { createFieldValues, validateFieldValues, type DynamicFieldErrors, type DynamicValues } from '../../components/fields/model'
+import { createFieldValues,  type DynamicFieldErrors, type DynamicValues } from '../../components/fields/model'
 import { useSelectedSite } from '../../composables/use-selected-site'
 import { listSendTemplates, previewMail, queueMail } from './api'
 import MailHtmlPreview from './MailHtmlPreview.vue'
 import type { MailAddress, MailTemplate, RenderedMailMessage } from './types'
+
+const { validateFieldValues } = useFieldValidation()
 
 const props = defineProps<{ accessToken: string; permissions: ReadonlySet<string> }>()
 const emit = defineEmits<{ unauthorized: [] }>()

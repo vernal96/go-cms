@@ -13,9 +13,11 @@ import (
 	publicfiles "github.com/vernal96/go-cms/internal/filesystems/public"
 	"github.com/vernal96/go-cms/internal/profiles/dev"
 	jwtsecurity "github.com/vernal96/go-cms/internal/security/jwt"
+	projectseeds "github.com/vernal96/go-cms/internal/seeds"
 	"github.com/vernal96/go-cms/kernel"
 	appkernel "github.com/vernal96/go-cms/kernel/app"
 	"github.com/vernal96/go-cms/kernel/filesystem"
+	"github.com/vernal96/go-cms/kernel/modules/core"
 	corepostgres "github.com/vernal96/go-cms/kernel/modules/core/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/modules/core/user/adapters/argon2id"
 	formsmodule "github.com/vernal96/go-cms/kernel/modules/forms"
@@ -25,6 +27,7 @@ import (
 	searchpostgres "github.com/vernal96/go-cms/kernel/modules/search/adapters/postgres"
 	seopostgres "github.com/vernal96/go-cms/kernel/modules/seo/adapters/postgres"
 	"github.com/vernal96/go-cms/kernel/outbox"
+	httpserver "github.com/vernal96/go-cms/kernel/transport/httpserver"
 )
 
 type Config struct {
@@ -188,6 +191,10 @@ func (c ServerConfig) Address() string {
 	return net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
 }
 
+func (c ServerConfig) HTTP() httpserver.Config {
+	return httpserver.Config{Address: c.Address(), ReadTimeout: c.ReadTimeout, WriteTimeout: c.WriteTimeout, IdleTimeout: c.IdleTimeout, ShutdownTimeout: c.ShutdownTimeout}
+}
+
 // Application is a declarative description of this application instance.
 func (c Config) Application() appkernel.Definition {
 	return appkernel.Definition{
@@ -195,6 +202,7 @@ func (c Config) Application() appkernel.Definition {
 		EventBus: maineventbus.NewFactory(c.EventBus),
 		MainDatabase: appkernel.DatabaseDefinition{
 			Connector: mainpostgres.Factory(c.Postgres),
+			Seeds:     []appkernel.ModuleSeedSource{{Module: core.ModuleCode, Source: projectseeds.Dev()}},
 			Adapters: []kernel.ModuleDatabaseFactory{
 				corepostgres.DatabaseFactory{},
 				seopostgres.DatabaseFactory{},

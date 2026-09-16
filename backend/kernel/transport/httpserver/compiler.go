@@ -39,6 +39,7 @@ type registration struct {
 	method  string
 	pattern string
 	name    string
+	shape   string
 }
 
 type profileCompiler struct {
@@ -517,7 +518,11 @@ func (r *scopedRegistrar) Route(route httptransport.Route) error {
 		)
 	}
 
-	key := method + "\x00" + pattern
+	shape, err := routeShape(pattern)
+	if err != nil {
+		return r.routeError(method, pattern, err)
+	}
+	key := method + "\x00" + shape
 	if previous, exists := r.compiler.routes[key]; exists {
 		return r.routeError(
 			method,
@@ -530,7 +535,7 @@ func (r *scopedRegistrar) Route(route httptransport.Route) error {
 			),
 		)
 	}
-	if conflict, exists := r.compiler.mountConflict(pattern); exists {
+	if conflict, exists := r.compiler.mountConflict(shape); exists {
 		return r.routeError(
 			method,
 			pattern,
@@ -572,6 +577,7 @@ func (r *scopedRegistrar) Route(route httptransport.Route) error {
 		module:  r.module,
 		method:  method,
 		pattern: pattern,
+		shape:   shape,
 		name:    route.Name,
 	}
 	return nil
@@ -582,6 +588,10 @@ func (r *scopedRegistrar) Mount(mount httptransport.Mount) error {
 	if err != nil {
 		return r.routeError("MOUNT", mount.Pattern, err)
 	}
+	shape, err := routeShape(pattern)
+	if err != nil {
+		return r.routeError("MOUNT", pattern, err)
+	}
 	if isNilHTTPValue(mount.Handler) {
 		return r.routeError(
 			"MOUNT",
@@ -589,7 +599,7 @@ func (r *scopedRegistrar) Mount(mount httptransport.Mount) error {
 			errors.New("handler/controller is nil"),
 		)
 	}
-	if conflict, exists := r.compiler.anyMountConflict(pattern); exists {
+	if conflict, exists := r.compiler.anyMountConflict(shape); exists {
 		return r.routeError(
 			"MOUNT",
 			pattern,
@@ -629,10 +639,11 @@ func (r *scopedRegistrar) Mount(mount httptransport.Mount) error {
 	}); err != nil {
 		return r.routeError("MOUNT", pattern, err)
 	}
-	r.compiler.mounts[pattern] = registration{
+	r.compiler.mounts[shape] = registration{
 		module:  r.module,
 		method:  "MOUNT",
 		pattern: pattern,
+		shape:   shape,
 		name:    mount.Name,
 	}
 	return nil
@@ -771,7 +782,7 @@ func (c *profileCompiler) anyMountConflict(
 		}
 	}
 	for _, route := range c.routes {
-		if pathWithinMount(route.pattern, pattern) {
+		if pathWithinMount(route.shape, pattern) {
 			return route, true
 		}
 	}

@@ -146,3 +146,17 @@ describe('dynamic field model', () => {
     expect(fieldErrorMessage('required', '')).toBe('Поле обязательно.')
   })
 })
+
+it('validates actual editor availability, including empty nested lists', () => {
+  const custom: FieldDefinition = {key:'custom',type:'example.custom',editor:'example.editor',label:'Custom',required:false,rules:[]}
+  const resolver = {fieldEditor: (code:string) => code === 'example.editor' ? {} : undefined}
+  expect(unsupportedFieldTypes([custom])).toEqual(['custom (example.editor)'])
+  expect(validateFieldValues([custom],{custom:'kept'})).toEqual({custom:'Редактор «example.editor» недоступен.'})
+  expect(validateFieldValues([custom],{custom:'kept'},resolver)).toEqual({})
+  const nested: FieldDefinition = {key:'rows',type:'repeater',label:'Rows',required:false,rules:[],options:{fields:[custom]}}
+  expect(unsupportedFieldTypes([nested])).toEqual(['rows[].custom (example.editor)'])
+  expect(validateFieldValues([nested],{rows:[]})).toHaveProperty('rows[]')
+  expect(validateFieldValues([nested],{rows:[{custom:'kept'}]},resolver)).toEqual({})
+  expect(validateFieldValues([{...custom,type:'string',options:{multiple:true}}],{custom:['kept']})).toHaveProperty('custom')
+  expect(validateFieldValues([{...custom,editor:'html'}],{custom:'value'})).toEqual({})
+})

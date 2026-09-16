@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useFieldValidation } from './fields/use-field-validation'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   ElAlert,
@@ -18,8 +19,6 @@ import TabbedDynamicFieldsForm from './fields/TabbedDynamicFieldsForm.vue'
 import {
   createFieldValues,
   fieldErrorMessage,
-  unsupportedFieldTypes,
-  validateFieldValues,
   type DynamicFieldErrors,
 } from './fields/model'
 import type {
@@ -28,6 +27,8 @@ import type {
   SiteProfilesResponse,
 } from '../types/admin'
 import type { FieldValidationError } from '../types/auth'
+
+const { unsupportedFieldTypes, validateFieldValues } = useFieldValidation()
 
 const props = defineProps<{
   accessToken: string

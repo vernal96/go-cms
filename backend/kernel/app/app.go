@@ -41,9 +41,16 @@ var requiredModuleCodes = [...]kernel.ModuleCode{
 type ConnectorFactory = kernel.ConnectorFactory
 type ModuleDatabaseFactory = kernel.ModuleDatabaseFactory
 
+// ModuleSeedSource attaches project data to a module on a database binding.
+type ModuleSeedSource struct {
+	Module kernel.ModuleCode
+	Source seeds.Source
+}
+
 type DatabaseDefinition struct {
 	Connector ConnectorFactory
 	Adapters  []ModuleDatabaseFactory
+	Seeds     []ModuleSeedSource
 }
 
 type Definition struct {

@@ -194,3 +194,34 @@ References are checked when configured; values and target constraints are checke
 when rendered. An invalid current value fails only that widget. Lists, JSON and
 repeaters are passed whole. References never copy a value into persisted params,
 and strings containing `{{ ... }}` remain literal text.
+
+## Публичные пакетные границы
+
+Общий HTTP-сервер и компилятор доступны в `kernel/transport/httpserver`.
+`httpserver.Config` не зависит от проектного env-конфига; проект передаёт адрес
+и таймауты, затем вызывает `NewHandler` и `NewServer`. Старого пути в `internal`
+нет. Проверка маршрутов отклоняет одинаковые URL с разными именами параметров
+до публикации runtime. Ограничения regexp учитываются без анализа пересечения
+произвольных выражений.
+
+Общая инфраструктура коннекторов находится в `connectors/support`: её можно
+импортировать из независимо размещённого коннектора. Эти пакеты не знают
+CMS-сущностей.
+
+Проектные сиды подключаются через `app.DatabaseDefinition.Seeds`:
+
+```go
+Seeds: []app.ModuleSeedSource{
+    {Module: core.ModuleCode, Source: projectseeds.Dev()},
+},
+```
+
+В `Source` передаётся обычный `seeds.Source` с `embed.FS`. Модуль должен иметь
+адаптер на этом подключении. Источники адаптеров собираются первыми, затем
+проектные в порядке объявления; дубликаты и конфликты истории проверяются
+совместно. Core поставляет только системные сиды. `internal/seeds` содержит
+данные текущего dev-профиля.
+
+Frontend SDK: `@go-cms/admin/sdk`; контракт описан в `frontend-admin/SDK.md`.
+Независимые backend/frontend примеры и команды проверки находятся в корневом
+`examples/README.md`.

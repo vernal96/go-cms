@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useFieldValidation } from '../components/fields/use-field-validation'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   ElAlert,
@@ -33,8 +34,6 @@ import ResourceHistoryTab from '../components/ResourceHistoryTab.vue'
 import {
   createFieldValues,
   fieldErrorMessage,
-  unsupportedFieldTypes,
-  validateFieldValues,
   type DynamicFieldErrors,
 } from '../components/fields/model'
 import { generateResourceCode } from '../resource-code'
@@ -50,6 +49,8 @@ import type {
   SiteDetailsResponse,
 } from '../types/admin'
 import type { FieldValidationError } from '../types/auth'
+
+const { unsupportedFieldTypes, validateFieldValues } = useFieldValidation()
 
 const props = defineProps<{ accessToken: string; permissions: ReadonlySet<string> }>()
 const emit = defineEmits<{ unauthorized: [] }>()

@@ -12,7 +12,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
-	"github.com/vernal96/go-cms/connectors/internal/eventbusutil"
+	"github.com/vernal96/go-cms/connectors/support/eventbusutil"
 	"github.com/vernal96/go-cms/kernel/eventbus"
 )
 

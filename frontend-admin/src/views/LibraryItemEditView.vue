@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useFieldValidation } from '../components/fields/use-field-validation'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElAlert, ElButton, ElDatePicker, ElForm, ElFormItem, ElInput, ElMessage, ElOption, ElSelect, ElSkeleton, ElSwitch, ElTabPane, ElTabs } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
@@ -10,9 +11,11 @@ import RichTextEditor from '../components/RichTextEditor.vue'
 import ResourceExtensionEditor from '../components/resource-extensions/ResourceExtensionEditor.vue'
 import ResourceWidgetsEditor from '../components/resource-widgets/ResourceWidgetsEditor.vue'
 import ResourceHistoryTab from '../components/ResourceHistoryTab.vue'
-import { createFieldValues, unsupportedFieldTypes, validateFieldValues, type DynamicFieldErrors } from '../components/fields/model'
+import { createFieldValues,   type DynamicFieldErrors } from '../components/fields/model'
 import { generateResourceCode } from '../resource-code'
 import type { LibraryItemDetailsResponse, LibraryItemPayload, ResourceDetailsResponse, ResourceMetadata, ResourceOptionsResponse, ResourceWidget } from '../types/admin'
+
+const { unsupportedFieldTypes, validateFieldValues } = useFieldValidation()
 
 const props = defineProps<{ accessToken: string }>()
 const route = useRoute()

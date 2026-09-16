@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useFieldValidation } from '../fields/use-field-validation'
 import { computed, reactive, ref, watch } from 'vue'
 import {
   ElAlert,
@@ -16,9 +17,11 @@ import {
   ElTabs,
 } from 'element-plus'
 import WidgetParamFields from './WidgetParamFields.vue'
-import { createFieldValues, unsupportedFieldTypes, validateFieldValues, type DynamicFieldErrors } from '../fields/model'
+import { createFieldValues,   type DynamicFieldErrors } from '../fields/model'
 import type { ResourceWidget, WidgetDefinition, WidgetValueSource } from '../../types/admin'
 import type { WidgetSettingsValue } from './model'
+
+const { unsupportedFieldTypes, validateFieldValues } = useFieldValidation()
 
 const props = defineProps<{
   modelValue: boolean
