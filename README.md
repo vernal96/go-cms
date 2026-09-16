@@ -93,3 +93,5 @@ npm --prefix frontend-admin test
 npm --prefix frontend-admin run build
 docker compose --env-file .env.example config --quiet
 ```
+
+Admin project name: set `VITE_PROJECT_NAME="My Project"` in the root `.env` for Docker Compose, then recreate the admin container (`docker compose up -d --force-recreate admin`). For local Vite development/builds, set it in `frontend-admin/.env.local` or the process environment and restart/rebuild the frontend. Empty values default to `Go CMS`.

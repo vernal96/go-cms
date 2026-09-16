@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { projectName } from '../project'
 import { reactive, ref } from 'vue'
 import {
   ElAlert,
@@ -68,7 +69,7 @@ async function submit(): Promise<void> {
           </el-icon>
         </span>
         <div>
-          <h1>Вход в Go CMS</h1>
+          <h1>Вход в {{ projectName }}</h1>
           <p>Используйте учётную запись администратора</p>
         </div>
       </div>

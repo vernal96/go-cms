@@ -66,3 +66,43 @@ func TestCompileRejectsMalformedAndDuplicateNavigation(t *testing.T) {
 		})
 	}
 }
+
+func TestMergeAttachesContributionsAcrossScopes(t *testing.T) {
+	global := []adminui.NavigationItem{
+		{Code: "sites", Route: "core.sites", Order: 100},
+		{Code: "tools", Order: 400, Children: []adminui.NavigationItem{
+			{Code: "administration", Route: "core.administration", Order: 900},
+		}},
+	}
+	site := []adminui.NavigationItem{
+		{Code: "forms", Parent: "tools", Route: "forms.list", Order: 60},
+		{Code: "mail", Parent: "tools", Route: "mail.templates", Order: 50},
+	}
+	items, err := adminui.Merge(global, site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || len(items[1].Children) != 3 {
+		t.Fatalf("unexpected merged menu: %#v", items)
+	}
+	for i, code := range []string{"mail", "forms", "administration"} {
+		if items[1].Children[i].Code != code || items[1].Children[i].Parent != "" {
+			t.Fatalf("unexpected child: %#v", items[1].Children[i])
+		}
+	}
+	if len(global[1].Children) != 1 || site[0].Parent != "tools" {
+		t.Fatal("merge mutated declarations")
+	}
+}
+
+func TestMergeRejectsInvalidParent(t *testing.T) {
+	for _, parent := range []string{"missing", "leaf", "child"} {
+		_, err := adminui.Merge([]adminui.NavigationItem{
+			{Code: "leaf", Route: "core.sites"},
+			{Code: "child", Parent: parent, Route: "forms.list"},
+		})
+		if err == nil {
+			t.Fatalf("accepted parent %q", parent)
+		}
+	}
+}

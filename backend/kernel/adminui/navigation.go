@@ -26,7 +26,9 @@ var semanticCodePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*
 // NavigationItem is a declarative admin navigation definition. Route and Icon
 // are semantic identifiers resolved by the compiled frontend application.
 type NavigationItem struct {
-	Code       string
+	Code string
+	// Parent attaches a top-level contribution to an existing root group at merge time.
+	Parent     string
 	Label      string
 	Route      string
 	Icon       string
@@ -116,6 +118,9 @@ func compileItem(
 	}
 	used[item.Code] = source
 
+	if item.Parent != "" && !semanticCodePattern.MatchString(item.Parent) {
+		return NavigationItem{}, fmt.Errorf("item %q has invalid parent %q", item.Code, item.Parent)
+	}
 	item.Label = strings.TrimSpace(item.Label)
 	if item.Label == "" {
 		return NavigationItem{}, errors.New("label is empty")
@@ -182,6 +187,9 @@ func compileItem(
 
 	children := make([]NavigationItem, 0, len(item.Children))
 	for index, child := range item.Children {
+		if child.Parent != "" {
+			return NavigationItem{}, fmt.Errorf("nested item %q must not declare a parent", child.Code)
+		}
 		compiled, err := compileItem(
 			child,
 			scope,
@@ -239,8 +247,32 @@ func Merge(collections ...[]NavigationItem) ([]NavigationItem, error) {
 		}
 		result = append(result, cloned...)
 	}
-	sortItems(result)
-	return result, nil
+	roots := make(map[string]int)
+	for index, item := range result {
+		if item.Parent == "" {
+			roots[item.Code] = index
+		}
+	}
+	for _, item := range result {
+		if item.Parent == "" {
+			continue
+		}
+		index, exists := roots[item.Parent]
+		if !exists || result[index].Route != "" {
+			return nil, fmt.Errorf("navigation item %q parent %q is not a root group", item.Code, item.Parent)
+		}
+		item.Parent = ""
+		result[index].Children = append(result[index].Children, item)
+		sortItems(result[index].Children)
+	}
+	grouped := make([]NavigationItem, 0, len(roots))
+	for _, item := range result {
+		if item.Parent == "" {
+			grouped = append(grouped, item)
+		}
+	}
+	sortItems(grouped)
+	return grouped, nil
 }
 
 func collectCodes(item NavigationItem, used map[string]struct{}) error {

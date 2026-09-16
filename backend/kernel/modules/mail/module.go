@@ -259,11 +259,11 @@ func (r *Runtime) runRetention(ctx context.Context) error {
 
 func (r *Runtime) AdminNavigation() []adminui.NavigationItem {
 	return []adminui.NavigationItem{{
-		Code: "mail", Label: "Почта", Icon: "mail", Order: 50, Scope: adminui.NavigationSite,
+		Code: "mail", Parent: "tools", Label: "Почта", Icon: "mail", Order: 50, Scope: adminui.NavigationSite,
 		Children: []adminui.NavigationItem{
-			{Code: "mail.templates", Label: "Шаблоны", Route: "mail.templates", Order: 10, Permission: TemplateReadPermission, Scope: adminui.NavigationSite},
-			{Code: "mail.send", Label: "Отправить", Route: "mail.send", Order: 20, Permission: MessageCreatePermission, Scope: adminui.NavigationSite},
-			{Code: "mail.history", Label: "История", Route: "mail.history", Order: 30, Permission: MessageReadPermission, Scope: adminui.NavigationSite},
+			{Code: "mail.templates", Icon: "mail.templates", Label: "Шаблоны", Route: "mail.templates", Order: 10, Permission: TemplateReadPermission, Scope: adminui.NavigationSite},
+			{Code: "mail.send", Icon: "mail.send", Label: "Отправить", Route: "mail.send", Order: 20, Permission: MessageCreatePermission, Scope: adminui.NavigationSite},
+			{Code: "mail.history", Icon: "mail.history", Label: "История", Route: "mail.history", Order: 30, Permission: MessageReadPermission, Scope: adminui.NavigationSite},
 		},
 	}}
 }

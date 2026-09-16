@@ -1,4 +1,4 @@
-import { Message } from '@element-plus/icons-vue'
+import { Message, Document, Promotion, Clock } from '@element-plus/icons-vue'
 import type { AdminPlugin } from './plugin'
 import MailHistoryView from './mail/MailHistoryView.vue'
 import MailMessageDetailView from './mail/MailMessageDetailView.vue'
@@ -8,7 +8,7 @@ import MailTemplatesView from './mail/MailTemplatesView.vue'
 
 export const mailAdminPlugin: AdminPlugin = {
   code: 'mail',
-  icons: { mail: Message },
+  icons: { mail: Message, 'mail.templates': Document, 'mail.send': Promotion, 'mail.history': Clock },
   routes: [
     { name: 'mail.templates', path: '/admin/mail/templates', component: MailTemplatesView },
     { name: 'mail.templates.create', path: '/admin/mail/templates/new', component: MailTemplateFormView },

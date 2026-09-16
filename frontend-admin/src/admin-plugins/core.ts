@@ -1,6 +1,6 @@
 import ChoicesField from '../components/fields/ChoicesField.vue'
 import StringListField from '../components/fields/StringListField.vue'
-import { FolderOpened, OfficeBuilding, Tools, UserFilled } from '@element-plus/icons-vue'
+import { FolderOpened, OfficeBuilding, Tools, UserFilled, User, Setting } from '@element-plus/icons-vue'
 
 import FilesystemView from '../views/FilesystemView.vue'
 import GroupFormView from '../views/GroupFormView.vue'
@@ -21,8 +21,10 @@ export const coreAdminPlugin: AdminPlugin = {
   icons: {
     sites: OfficeBuilding,
     files: FolderOpened,
-		users: UserFilled,
-		administration: Tools,
+		users: User,
+		administration: Setting,
+    tools: Tools,
+    groups: UserFilled,
   },
   routes: [
     { name: 'core.files', path: '/admin/files', component: FilesystemView },

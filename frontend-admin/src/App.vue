@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { projectName } from './project'
 import { onBeforeUnmount, onMounted, watch } from 'vue'
 import { ElCard, ElIcon } from 'element-plus'
 import { Loading, Platform } from '@element-plus/icons-vue'
@@ -55,7 +56,7 @@ onBeforeUnmount(() => {
             <Platform />
           </el-icon>
         </span>
-        <span>Go CMS</span>
+        <span>{{ projectName }}</span>
       </div>
       <el-icon class="status-spinner is-loading" :size="30">
         <Loading />

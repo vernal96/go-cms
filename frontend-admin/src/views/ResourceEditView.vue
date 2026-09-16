@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { projectName } from '../project'
 import { useFieldValidation } from '../components/fields/use-field-validation'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
@@ -212,7 +213,7 @@ async function load(): Promise<void> {
 			},
 		),
     })
-    document.title = `${item.title} — Админка`
+    document.title = `${item.title} — ${projectName}`
   } catch (error) {
     handleError(error, 'Не удалось загрузить ресурс.')
   } finally {
@@ -373,7 +374,7 @@ async function submit(): Promise<void> {
 		resourceVersion.value = response.resource.version
     form.position = response.resource.sort + 1
     form.fields = createFieldValues(fields, response.resource.fields)
-    document.title = `${response.resource.title} — Админка`
+    document.title = `${response.resource.title} — ${projectName}`
     notifyTreeChanged()
     ElMessage.success('Ресурс сохранён')
   } catch (error) {

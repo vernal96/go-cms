@@ -215,6 +215,15 @@ input {
   background: var(--admin-control-background);
 }
 
+.project-name {
+  max-width: min(18vw, 220px);
+  margin-left: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
 .topbar-main {
   display: flex;
   flex: 1;

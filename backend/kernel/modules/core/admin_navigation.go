@@ -26,9 +26,12 @@ func (Module) AdminNavigation() []adminui.NavigationItem {
 			Scope:      adminui.NavigationGlobal,
 		},
 		{
-			Code: "administration", Label: "Администрирование", Route: "core.administration",
-			Icon: "administration", Order: 900, Scope: adminui.NavigationGlobal,
-			Visibility: adminui.NavigationAdministrator,
+			Code: "tools", Label: "Инструменты", Icon: "tools", Order: 400, Scope: adminui.NavigationGlobal,
+			Children: []adminui.NavigationItem{{
+				Code: "administration", Label: "Администрирование", Route: "core.administration",
+				Icon: "administration", Order: 900, Scope: adminui.NavigationGlobal,
+				Visibility: adminui.NavigationAdministrator,
+			}},
 		},
 		{
 			Code:  "identity",
@@ -39,6 +42,7 @@ func (Module) AdminNavigation() []adminui.NavigationItem {
 			Children: []adminui.NavigationItem{
 				{
 					Code:       "users",
+					Icon:       "users",
 					Label:      "Пользователи",
 					Route:      "core.users",
 					Order:      100,
@@ -47,6 +51,7 @@ func (Module) AdminNavigation() []adminui.NavigationItem {
 				},
 				{
 					Code:       "groups",
+					Icon:       "groups",
 					Label:      "Группы",
 					Route:      "core.groups",
 					Order:      200,

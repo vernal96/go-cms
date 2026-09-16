@@ -69,6 +69,7 @@ services:
       - "${ADMIN_PORT:-5173}:5173"
     environment:
       ADMIN_API_TARGET: http://server:8080
+      VITE_PROJECT_NAME: ${VITE_PROJECT_NAME:-Go CMS}
     depends_on:
       server:
         condition: service_healthy

@@ -241,9 +241,9 @@ func (r *Runtime) runSpoolCleanup(ctx context.Context) (resultErr error) {
 }
 
 func (r *Runtime) AdminNavigation() []adminui.NavigationItem {
-	return []adminui.NavigationItem{{Code: "forms", Label: "Формы", Icon: "forms", Order: 60, Scope: adminui.NavigationSite, Children: []adminui.NavigationItem{
-		{Code: "forms.list", Label: "Формы", Route: "forms.list", Order: 10, Permission: FormReadPermission, Scope: adminui.NavigationSite},
-		{Code: "forms.results", Label: "Результаты", Route: "forms.results", Order: 20, Permission: ResultReadPermission, Scope: adminui.NavigationSite},
+	return []adminui.NavigationItem{{Code: "forms", Parent: "tools", Label: "Формы", Icon: "forms", Order: 60, Scope: adminui.NavigationSite, Children: []adminui.NavigationItem{
+		{Code: "forms.list", Icon: "forms.list", Label: "Формы", Route: "forms.list", Order: 10, Permission: FormReadPermission, Scope: adminui.NavigationSite},
+		{Code: "forms.results", Icon: "forms.results", Label: "Результаты", Route: "forms.results", Order: 20, Permission: ResultReadPermission, Scope: adminui.NavigationSite},
 	}}}
 }
 

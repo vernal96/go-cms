@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { projectName } from '../project'
 import { computed, onBeforeUnmount, onMounted, provide, ref, toRef, watch } from 'vue'
 import {
   ElAside,
@@ -260,6 +261,7 @@ async function persistPreferences(colorScheme: ColorScheme, accentColor: AccentC
         <el-icon :size="24"><Platform /></el-icon>
       </router-link>
 
+      <span class="project-name" :title="projectName">{{ projectName }}</span>
       <div class="topbar-main">
         <admin-navigation :items="navigation.items.value" />
         <el-dropdown placement="bottom-end" trigger="click" @command="handleUserCommand">
