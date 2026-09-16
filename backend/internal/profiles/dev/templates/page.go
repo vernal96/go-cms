@@ -23,10 +23,10 @@ func Page() template.Definition {
 			},
 		},
 		Fields: []field.Definition{
-			{Key: "gallery", Type: field.TypeMedia, Label: "Галерея", Options: field.MediaOptions{Multiple: true, MaxItems: 10}},
+			{Key: "gallery", Type: field.TypeMedia, Label: "Галерея", Options: field.MediaOptions{SettingsCode: "image", Multiple: true, MaxItems: 10}},
 			{Key: "tags", Type: field.TypeString, Label: "Теги", Rules: []string{"max=80"}, Options: field.StringOptions{Multiple: true, MaxItems: 10}},
 			{Key: "scores", Type: field.TypeInteger, Label: "Числовые значения", Rules: []string{"min=0", "max=100"}, Options: field.IntegerOptions{Multiple: true, MaxItems: 10}},
-			{Key: "page_media", Type: field.TypeMedia, Label: "Медиа"},
+			{Key: "page_media", Type: field.TypeMedia, Label: "Медиа", Options: field.MediaOptions{SettingsCode: "image"}},
 			{
 				Key:      "page_title",
 				Type:     field.TypeString,

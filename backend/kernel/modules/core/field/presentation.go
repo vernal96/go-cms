@@ -107,7 +107,11 @@ func Describe(definition Definition, resolver TypeResolver) (Descriptor, error) 
 	}
 	definition = CloneDefinitions([]Definition{definition})[0]
 	presentationOptions := definition.Options
-	if presenter, ok := valueType.(OptionsPresenter); ok {
+	presentationType := valueType
+	if list, ok := valueType.(listValue); ok {
+		presentationType = list.item
+	}
+	if presenter, ok := presentationType.(OptionsPresenter); ok {
 		presentationOptions, err = presenter.DescribeOptions()
 		if err != nil {
 			return Descriptor{}, fmt.Errorf("field %q options: %w", definition.Key, err)

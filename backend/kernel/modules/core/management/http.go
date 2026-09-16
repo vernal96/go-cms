@@ -33,11 +33,13 @@ type contentHTTP struct {
 // mandatory Core site-management API. Optional module contributions must not
 // claim any of these prefixes.
 func SiteManagementRoutePrefixes() []string {
-	return []string{"resources", "library-items", "menu"}
+	return []string{"resources", "library-items", "menu", "media"}
 }
 
 func registerContentRoutes(router chi.Router, sites *Sites, resources *Resources) {
 	handler := &contentHTTP{sites: sites, resources: resources}
+	router.Get("/sites/{siteID}/media/{mediaID}/settings", handler.getMediaSettings)
+	router.Put("/sites/{siteID}/media/{mediaID}/settings", handler.saveMediaSettings)
 	router.Get("/administration/resource-revisions", handler.administrationRevisionCount)
 	router.Delete("/administration/resource-revisions", handler.administrationPurgeRevisions)
 	router.Get("/sites/options", handler.listSiteOptions)
@@ -1089,6 +1091,10 @@ func writeManagementError(response http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, image.ErrInvalidTransform), errors.Is(err, image.ErrUnsupportedFormat), errors.Is(err, image.ErrLimit):
 		writeValidation(response, err.Error())
+	case errors.Is(err, media.ErrSettings):
+		writeValidation(response, err.Error())
+	case errors.Is(err, media.ErrSettingsConflict):
+		httptransport.WriteJSONError(response, http.StatusConflict, "media_conflict", "media changed; reload settings")
 	case errors.Is(err, media.ErrImageConflict):
 		httptransport.WriteJSONError(response, http.StatusConflict, "image_conflict", "image changed; reload editor")
 	case errors.Is(err, media.ErrNotFound):

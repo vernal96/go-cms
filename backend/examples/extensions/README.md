@@ -138,3 +138,44 @@ Multipart принимает JSON-массив либо повторяющиес
 «Вниз»; селект использует обычный мультивыбор. Каждая строка сохраняет собственный
 редактор, включая HTML и редакторы расширений. Повтор одного Media разрешён внутри
 ресурса-владельца; использование другим владельцем по-прежнему отклоняется.
+
+## Настройки медиа
+
+Именованные наборы объявляются в `core.Config.MediaSettings` и используют
+обычные типы полей и правила:
+
+```go
+optional := false
+config := core.Config{
+    MediaSettings: []media.SettingsDefinition{
+        {Code: "image", Fields: []field.Definition{
+            {Key: "alt", Type: field.TypeString, Label: "Альтернативный текст", Required: &optional},
+            {Key: "title", Type: field.TypeString, Label: "Заголовок", Required: &optional},
+        }},
+    },
+}
+imageField := field.Definition{
+    Key: "image", Type: field.TypeMedia, Label: "Изображение",
+    Options: field.MediaOptions{SettingsCode: "image"},
+}
+```
+
+Передайте `config` в декларацию Core профиля, а `imageField` — в шаблон или
+другую схему полей этого профиля. `Multiple: true` и использование внутри
+`RepeaterOptions.Fields` работают с тем же набором. Неизвестные коды наборов,
+дубли и некорректные схемы отклоняются при построении профиля/runtime.
+
+Кнопка «Настройки» сохраняет значения сразу, независимо от сохранения
+основной формы. Значение самого поля остаётся ID Media, а настройки доступны
+через `Media.Params["settings"]`. `title` внутри настроек не связан с
+`Media.Title`; служебные преобразования в `Params["image"]` сохраняются.
+Новая Media для того же файла получает собственные пустые настройки.
+Ревизии ресурса не содержат снимок этих настроек.
+
+GET `/api/sites/{siteID}/media/{mediaID}/settings?code=image` возвращает
+`code`, `fields`, `values`, `expected_updated_at`. PUT на тот же путь принимает
+`code`, `values`, `expected_updated_at`. Схема берётся из runtime сайта;
+конфликт версии возвращает 409. Проверяются доступ к сайту и права Media.
+Поддерживаются ссылки `file` с проверкой доступности, диска и MIME;
+вложенные `media` и неизвестные схемы ссылок запрещены, поскольку требуют
+отдельного учёта владения и удаления.

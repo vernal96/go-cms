@@ -222,6 +222,15 @@ type ModuleRegistry struct {
 	PermissionEntities []permission.Entity
 }
 
+// ModuleConfigCloner protects mutable config declarations in profile snapshots.
+type ModuleConfigCloner interface{ CloneModuleConfig() any }
+
+// ConfiguredRegistryProvider declares profile-specific types before schemas compile.
+// Implementations must return immutable declarations detached from config.
+type ConfiguredRegistryProvider interface {
+	RegistryForConfig(any) (ModuleRegistry, error)
+}
+
 type RegistryProvider interface {
 	Registry() ModuleRegistry
 }
@@ -886,11 +895,18 @@ func (f *ProfileRuntimeFactory) Compile(
 	registry := newRuntimeRegistry()
 
 	for _, profileModule := range profile.Modules {
-		provider, ok := profileModule.Module.(RegistryProvider)
-		if !ok {
+		var moduleRegistry ModuleRegistry
+		if provider, ok := profileModule.Module.(ConfiguredRegistryProvider); ok {
+			var err error
+			moduleRegistry, err = provider.RegistryForConfig(profileModule.Config)
+			if err != nil {
+				return nil, fmt.Errorf("module %q registry: %w", profileModule.Module.Code(), err)
+			}
+		} else if provider, ok := profileModule.Module.(RegistryProvider); ok {
+			moduleRegistry = provider.Registry()
+		} else {
 			continue
 		}
-		moduleRegistry := provider.Registry()
 
 		for index, fieldType := range moduleRegistry.FieldTypes {
 			if err := registry.addFieldType(fieldType); err != nil {
@@ -1234,6 +1250,9 @@ func cloneProfile(profile Profile) Profile {
 		profile.Modules...,
 	)
 	for index := range profile.Modules {
+		if cloner, ok := profile.Modules[index].Config.(ModuleConfigCloner); ok {
+			profile.Modules[index].Config = cloner.CloneModuleConfig()
+		}
 		profile.Modules[index].Caches = append(
 			[]cache.Binding(nil),
 			profile.Modules[index].Caches...,

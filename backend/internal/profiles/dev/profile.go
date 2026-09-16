@@ -11,6 +11,8 @@ import (
 	"github.com/vernal96/go-cms/kernel/filesystem"
 	"github.com/vernal96/go-cms/kernel/modules/admin"
 	"github.com/vernal96/go-cms/kernel/modules/core"
+	"github.com/vernal96/go-cms/kernel/modules/core/field"
+	"github.com/vernal96/go-cms/kernel/modules/core/media"
 	"github.com/vernal96/go-cms/kernel/modules/core/widget"
 	"github.com/vernal96/go-cms/kernel/modules/forms"
 	"github.com/vernal96/go-cms/kernel/modules/mail"
@@ -25,11 +27,17 @@ func Profile(
 	formsConfig forms.Config,
 	spoolStorage filesystem.Code,
 ) kernel.Profile {
+	optional := false
 	return kernel.Profile{
 		Code: ProfileCode, Name: "Разработка", Params: Params(), EditorTabs: ParamEditorTabs(),
 		Templates: devtemplates.All(), WidgetViews: []widget.View{widgetviews.ContentCompact, widgetviews.ContentArticle},
 		Modules: []kernel.ProfileModule{
-			{Module: core.Module{}, Config: core.Config{RepositoryCacheTTL: 5 * time.Minute}, Caches: []cache.Binding{
+			{Module: core.Module{}, Config: core.Config{RepositoryCacheTTL: 5 * time.Minute, MediaSettings: []media.SettingsDefinition{
+				{Code: "image", Fields: []field.Definition{
+					{Key: "alt", Type: field.TypeString, Label: "Альтернативный текст", Required: &optional},
+					{Key: "title", Type: field.TypeString, Label: "Заголовок", Required: &optional},
+				}},
+			}}, Caches: []cache.Binding{
 				{Alias: core.DurableCacheAlias, Code: projectcache.FilesystemCode},
 				{Alias: core.HotCacheAlias, Code: projectcache.RedisCode},
 				{Alias: core.ThumbnailCacheAlias, Code: projectcache.FilesystemCode},

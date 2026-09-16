@@ -35,6 +35,7 @@ const (
 const defaultRepositoryCacheTTL = 5 * time.Minute
 
 type Config struct {
+	MediaSettings      []media.SettingsDefinition
 	Images             *image.Limits
 	RepositoryCacheTTL time.Duration
 	MenuCacheTTL       time.Duration
@@ -212,10 +213,21 @@ func (m Module) Build(
 	if err := buildWidgets(runtime, durableStore, ctx.Registry().ResourceTypes(), ctx.Profile().Templates); err != nil {
 		return nil, fmt.Errorf("build core widgets: %w", err)
 	}
+	catalog, err := media.CompileSettings(config.MediaSettings, ctx.Registry())
+	if err != nil {
+		return nil, err
+	}
+	if len(config.MediaSettings) > 0 {
+		runtime.mediaSettings, err = media.NewSettingsService(catalog, database.Media(), m.services.Files, m.services.Authorization)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return runtime, nil
 }
 
 type Runtime struct {
+	mediaSettings   *media.SettingsService
 	menuStore       cache.Store
 	menuTTL         time.Duration
 	database        Database
@@ -283,4 +295,45 @@ var _ kernel.ModuleRuntime = (*Runtime)(nil)
 
 func (Module) EntityHookEventNames() []string {
 	return []string{resource.EventCreated, resource.EventUpdated, resource.EventDeleted, "user.created", "user.updated"}
+}
+
+func (r *Runtime) MediaSettings() *media.SettingsService { return r.mediaSettings }
+
+func (m Module) RegistryForConfig(value any) (kernel.ModuleRegistry, error) {
+	config := Config{}
+	if value != nil {
+		var ok bool
+		config, ok = value.(Config)
+		if !ok {
+			return kernel.ModuleRegistry{}, fmt.Errorf("invalid core config %T", value)
+		}
+	}
+	settings, err := media.SettingsFields(config.MediaSettings)
+	if err != nil {
+		return kernel.ModuleRegistry{}, err
+	}
+	registry := m.Registry()
+	for i, t := range registry.FieldTypes {
+		if t.Code() == field.TypeMedia {
+			registry.FieldTypes[i] = field.MediaType(settings)
+		}
+	}
+	return registry, nil
+}
+
+// CloneModuleConfig detaches mutable declarations from the caller and runtime readers.
+func (c Config) CloneModuleConfig() any {
+	c.MediaSettings = append([]media.SettingsDefinition(nil), c.MediaSettings...)
+	for i := range c.MediaSettings {
+		c.MediaSettings[i].Fields = field.CloneDefinitions(c.MediaSettings[i].Fields)
+	}
+	if c.Images != nil {
+		v := *c.Images
+		c.Images = &v
+	}
+	if c.ResourceRevisions != nil {
+		v := *c.ResourceRevisions
+		c.ResourceRevisions = &v
+	}
+	return c
 }

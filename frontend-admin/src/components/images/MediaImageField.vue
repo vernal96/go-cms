@@ -6,11 +6,14 @@ import { adminBlob, adminRequest } from '../../api/admin-api'
 import type { FilesystemItem } from '../../types/admin'
 import FilePickerDialog from '../files/FilePickerDialog.vue'
 import ImageEditor from './ImageEditor.vue'
+import MediaSettingsDialog from './MediaSettingsDialog.vue'
 import { imageState, type ImageState } from './image-api'
-const props = defineProps<{ accessToken: string; disabled?: boolean }>()
+const props = defineProps<{ accessToken: string; disabled?: boolean; siteId?: number; settingsCode?: string; resourceTemplates?: Array<{ code: string; label: string }> }>()
 const model = defineModel<number | null>({ required: true })
 const permissions = inject(adminPermissionsKey)
-const picker = ref(false), editor = ref(false), preview = ref('')
+const picker = ref(false), editor = ref(false), settings = ref(false), preview = ref('')
+const canConfigure = computed(() => permissions?.value.has('core.media.read') && permissions?.value.has('core.media.update'))
+watch(() => [model.value, props.siteId, props.settingsCode], () => { settings.value = false })
 const canChoose = computed(() => permissions?.value.has('core.media.create') && permissions?.value.has('core.file.read'))
 const canEdit = computed(() => permissions?.value.has('core.media.update') && permissions?.value.has('core.file.create'))
 const editable = ref(false)
@@ -37,8 +40,10 @@ async function choose(item: FilesystemItem) {
     <img v-if="preview" :src="preview" alt="Изображение" width="96" height="96" style="object-fit:contain" />
     <el-button :disabled="disabled || !canChoose" @click="picker = true">Выбрать изображение</el-button>
     <el-button v-if="model && editable" :disabled="disabled || !canEdit" @click="editor = true">Редактировать</el-button>
+    <el-button v-if="model && settingsCode" :disabled="disabled || !siteId || !canConfigure" @click="settings = true">Настройки</el-button>
     <el-button v-if="model" :disabled="disabled" @click="model = null">Очистить</el-button>
     <file-picker-dialog v-model="picker" :access-token="accessToken" :permissions="permissions ?? new Set()" :mime-types="['image/jpeg','image/png']" @select="choose" />
+    <media-settings-dialog v-if="settings && model && siteId && settingsCode" v-model="settings" :media-id="model" :site-id="siteId" :settings-code="settingsCode" :access-token="accessToken" :resource-templates="resourceTemplates" />
     <image-editor v-if="model" v-model="editor" :access-token="accessToken" :base-url="`/api/media/${model}/image`" @saved="load" />
   </div>
 </template>

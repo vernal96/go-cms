@@ -81,7 +81,12 @@ type ListOptions struct {
 }
 
 type StringOptions = ListOptions
-type MediaOptions = ListOptions
+type MediaOptions struct {
+	Multiple     bool   `json:"multiple,omitempty"`
+	MinItems     int    `json:"min_items,omitempty"`
+	MaxItems     int    `json:"max_items,omitempty"`
+	SettingsCode string `json:"settings_code,omitempty"`
+}
 
 type IntegerOptions struct {
 	Multiple bool `json:"multiple,omitempty"`
@@ -294,6 +299,12 @@ func cloneEditorValue(value any) any {
 
 func cloneOptions(options any) any {
 	switch typed := options.(type) {
+	case *MediaOptions:
+		if typed == nil {
+			return (*MediaOptions)(nil)
+		}
+		result := *typed
+		return &result
 	case *ListOptions:
 		if typed == nil {
 			return (*ListOptions)(nil)

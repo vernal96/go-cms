@@ -91,6 +91,8 @@ export interface FieldChoice {
 }
 
 export interface FieldOptions {
+  settings_code?: string
+  settings_fields?: FieldDefinition[]
   fields?: FieldDefinition[]
   min_items?: number
   max_items?: number

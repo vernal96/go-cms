@@ -20,7 +20,7 @@ func Landing() template.Definition {
 				Fields: []field.Definition{
 					{Key: "title", Type: field.TypeString, Label: "Заголовок", Required: &required, Rules: []string{"max=120"}},
 					{Key: "text", Type: field.TypeTextarea, Label: "Текст"},
-					{Key: "image", Type: field.TypeMedia, Label: "Изображение"},
+					{Key: "image", Type: field.TypeMedia, Label: "Изображение", Options: field.MediaOptions{SettingsCode: "image"}},
 					{Key: "link", Type: field.TypeString, Label: "Ссылка"},
 					{Key: "active", Type: field.TypeCheckbox, Label: "Активен"},
 					{Key: "attachment", Type: field.TypeFile, Label: "Файл"},
@@ -98,7 +98,7 @@ func Landing() template.Definition {
 			{Key: "contact_email", Type: field.TypeEmail, Label: "Email для связи", Options: field.StringOptions{Multiple: true, MaxItems: 3}},
 			{Key: "contact_phone", Type: field.TypePhone, Label: "Телефоны для связи", Options: field.PhoneOptions{Multiple: true, MaxItems: 3}},
 			{Key: "downloads", Type: field.TypeFile, Label: "Файлы для скачивания", Options: field.FileOptions{Multiple: true, MaxItems: 4}},
-			{Key: "showcase_media", Type: field.TypeMedia, Label: "Медиа витрины", Options: field.MediaOptions{Multiple: true, MaxItems: 8}},
+			{Key: "showcase_media", Type: field.TypeMedia, Label: "Медиа витрины", Options: field.MediaOptions{SettingsCode: "image", Multiple: true, MaxItems: 8}},
 		},
 		EditorTabs: []field.EditorTab{
 			{Code: "slides", Label: "Слайды", Fields: []string{"slides"}},
