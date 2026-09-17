@@ -1,99 +1,96 @@
-# Go CMS
+# Go CMS Start
 
-The repository is a monorepo with two independent applications:
+Минимальный backend-проект на Go, подключающий публичный
+`github.com/vernal96/go-cms-kernel`.
 
-```text
-cms/
-├── backend/        # Go API and backend infrastructure
-├── frontend-admin/ # Vue administration interface
-└── compose.yaml    # Shared development orchestration
-```
+В состав входят Core, Admin, PostgreSQL, миграции, seed-данные, JWT и локальные
+public/private filesystem-диски. Frontend admin развивается отдельно в
+[`github.com/vernal96/go-cms-admin`](https://github.com/vernal96/go-cms-admin).
 
-The frontend communicates with the backend only over HTTP. Browser requests use relative `/api` paths; the Vite development server proxies them to `ADMIN_API_TARGET`.
+## Запуск
 
-## Requirements
+Требуются Docker и Docker Compose v2.
 
-- GNU Make
-- Docker with a recent Docker Compose version that supports `--wait`
-
-Go as declared in `backend/go.mod` and Node.js 24 or newer are only required
-when running backend or frontend checks directly on the host.
-
-## Development
-
-Build, initialize, and start the complete development environment:
-
-```bash
+```sh
 make up
 ```
 
-Running `make` without a target does the same thing. The command:
+Или вручную:
 
-- creates `.env` from `.env.example` when it is missing and never overwrites an
-  existing file;
-- builds the backend and administration images;
-- starts and waits for PostgreSQL, Kafka, RabbitMQ, Loki, and Grafana;
-- applies all database migrations and the development seeds;
-- starts the backend and administration frontend and waits for their
-  healthchecks.
+```sh
+make env
+docker compose --env-file .env up -d --build --wait
+```
 
-After startup, the services are available at these default addresses:
+После запуска API доступен по адресу `http://localhost:8080`.
 
-- administration interface: `http://localhost:5173`;
-- backend API: `http://localhost:8080`;
-- Grafana: `http://localhost:3000`.
+Dev-пользователь:
 
-Sign in to the administration interface with the development seed account:
-
-```bash
-login: admin
+```text
+login:    admin
 password: admin-dev-only-2026
 ```
 
-`make up` is idempotent and can be used again after pulling new changes. It
-reapplies pending migrations and seeds without deleting persistent data.
+Пароль и значения `JWT_SIGNING_KEY`, `FILES_PRIVATE_SIGNING_KEY` в `.env` —
+только для разработки. Перед deployment замените их и настройте production
+storage, logger, event bus и PostgreSQL.
 
-Useful development commands:
+## Архитектура
 
-```bash
-make ps    # show the status of every service
-make logs  # follow logs from every service
-make build # rebuild application images
-make down  # stop containers without deleting persistent volumes
-make help  # show all Make targets
+`backend/cmd/server/main.go` собирает `app.Definition` из публичных kernel
+контрактов:
+
+- Core и Admin — обязательные модули профиля;
+- Core PostgreSQL adapter — persistence;
+- localstorage — public/private disks;
+- project seed — сайт `localhost` и admin group membership;
+- JWT — `/api/auth/login` и защищённые Admin API;
+- `/healthz` — контейнерный healthcheck.
+
+Backend не импортирует frontend source и не знает npm-пакеты. Админка подключается
+по HTTP API. Инструкции по установке admin package и host находятся в отдельном
+репозитории `go-cms-admin`.
+
+Для локального запуска админки рядом с backend:
+
+```sh
+cd ../go-cms-admin
+cp .env.example .env
+# ADMIN_API_TARGET=http://localhost:8080 задан в .env
+npm ci
+npm run dev -- --host 0.0.0.0
 ```
 
-## Public demo website
+Откройте `http://localhost:5173`. В Docker-варианте admin host запускается
+командой `ADMIN_API_TARGET=http://host.docker.internal:8080 docker compose up
+--build` из admin-репозитория.
 
-Run `make demo` to start CMS and create the populated public website, or
-`make demo-start` when CMS is already running. Open
-[the demo](http://localhost:4173) and select **demo.localhost** in the admin UI.
-See [the Russian launch and editing instructions](frontend-demo/README.md).
+## Добавление модулей
 
-## Filesystem configuration
+Добавьте модуль в `kernel.Profile.Modules` после Core и объявите зависимости.
+Его database adapter подключите в `app.DatabaseDefinition.Adapters`, а
+проектные migrations/seeds — через соответствующие публичные kernel providers.
+Не используйте импорты из удалённого `internal` текущего проекта.
 
-Physical disks are individual Go declarations under `backend/internal/filesystems`.
-See [filesystem declarations](backend/internal/filesystems/README.md) for registration,
-code-only configuration, and mixing Go values with individual environment settings.
+## Команды
 
-## Developer extensions
+```sh
+make ps       # статус контейнеров
+make logs     # логи
+make check    # Go checks и compose config
+make down     # остановить, сохранив volumes
+docker compose down -v  # удалить БД и файлы
+```
 
-See [site resource search](https://github.com/vernal96/go-cms-kernel/tree/v0.1.0/modules/search)
-for the public `GET /search` API, engine contract and PostgreSQL validation
-procedure. The reusable backend is versioned separately as
-[`github.com/vernal96/go-cms-kernel`](https://github.com/vernal96/go-cms-kernel).
+## Проверка независимости
 
-See [creating profiles, modules, fields, widgets and Forms extensions](backend/examples/extensions/README.md)
-for the declaration contracts and a compilable module example.
-
-## Checks
-
-```bash
-go -C backend test ./...
-npm --prefix frontend-admin ci
-npm --prefix frontend-admin test
-npm --prefix frontend-admin run build
+```sh
+GOWORK=off go -C backend test ./...
+GOWORK=off go -C backend vet ./...
+GOWORK=off go -C backend build ./...
 docker compose --env-file .env.example config --quiet
 ```
 
-Admin project name: set `VITE_PROJECT_NAME="My Project"` in the root `.env` for Docker Compose, then recreate the admin container (`docker compose up -d --force-recreate admin`). For local Vite development/builds, set it in `frontend-admin/.env.local` or the process environment and restart/rebuild the frontend. Empty values default to `Go CMS`.
+В итоговых manifests нет `replace` и зависимостей от прежнего module path.
+Проверка kernel release требует доступного
+remote и опубликованного тега `v0.1.0`.

@@ -1,72 +1,37 @@
 SHELL := /bin/sh
 
 .DEFAULT_GOAL := up
-.NOTPARALLEL:
 
 DOCKER_COMPOSE ?= docker compose
 COMPOSE := $(DOCKER_COMPOSE) --env-file .env
 WAIT_TIMEOUT ?= 180
-INFRA_SERVICES := postgres kafka rabbitmq redis loki grafana
 
-.PHONY: up restart env doctor config build down logs ps help demo demo-start
-
-# Full first-time setup; demo-start adds demo to an already running CMS.
-demo: up demo-start
-
-demo-start: config
-	$(COMPOSE) --profile demo build demo
-	$(COMPOSE) exec -T server /usr/local/bin/console permissions guest-grant -permission=core.site.read
-	$(COMPOSE) exec -T server /usr/local/bin/console permissions guest-grant -permission=core.resource.read
-	$(COMPOSE) --profile demo run --rm --no-deps demo node scripts/seed.mjs
-	$(COMPOSE) --profile demo up --detach --wait --wait-timeout $(WAIT_TIMEOUT) demo
+.PHONY: up env doctor config build down logs ps test vet check smoke help
 
 up: build
-	@printf '\nRemoving application containers before database initialization...\n'
-	$(COMPOSE) rm --stop --force admin server
-	@printf '\nInstalling admin dependencies...\n'
-	$(COMPOSE) run --rm --no-deps admin npm ci
-	@printf '\nStarting infrastructure services...\n'
-	$(COMPOSE) up --detach --wait --wait-timeout $(WAIT_TIMEOUT) $(INFRA_SERVICES)
-	@printf '\nApplying database migrations...\n'
-	$(COMPOSE) run --rm --no-deps server /usr/local/bin/console migrations up
-	@printf '\nApplying development seeds...\n'
-	$(COMPOSE) run --rm --no-deps server /usr/local/bin/console seeds up -tags=dev
-	@printf '\nStarting application services...\n'
 	$(COMPOSE) up --detach --wait --wait-timeout $(WAIT_TIMEOUT)
-	@server_port=$$(awk -F= '$$1 == "SERVER_PORT" { print $$2 }' .env | tail -n 1); \
-	admin_port=$$(awk -F= '$$1 == "ADMIN_PORT" { print $$2 }' .env | tail -n 1); \
+	@server_port=$$(sed -n 's/^SERVER_PORT=//p' .env | tail -n 1); \
 	server_port=$${server_port:-8080}; \
-	admin_port=$${admin_port:-5173}; \
-	printf '\nGo CMS is ready.\n'; \
-	printf '  Admin:   http://localhost:%s\n' "$$admin_port"; \
-	printf '  API:     http://localhost:%s\n' "$$server_port"; \
-	printf '  Grafana: http://localhost:3000\n'; \
-	printf '  Login:   admin\n'; \
-		printf '  Password: admin-dev-only-2026\n\n'
-
-restart: config
-	$(COMPOSE) up --detach --build --force-recreate --wait --wait-timeout $(WAIT_TIMEOUT) server admin
-	@printf '\nBackend and admin frontend restarted.\n'
+	printf '\nGo CMS Start is ready.\n  API: http://localhost:%s\n' "$$server_port"
 
 env:
 	@if [ -f .env ]; then \
 		printf 'Using existing .env\n'; \
 	else \
-		cp .env.example .env; \
-		chmod 600 .env; \
+		cp .env.example .env; chmod 600 .env; \
 		printf 'Created .env from .env.example\n'; \
 	fi
 
 doctor:
 	@command -v docker >/dev/null 2>&1 || { printf 'Docker is required but was not found.\n' >&2; exit 1; }
-	@docker info >/dev/null 2>&1 || { printf 'Docker daemon is not available.\n' >&2; exit 1; }
-	@docker compose version >/dev/null 2>&1 || { printf 'Docker Compose is required but was not found.\n' >&2; exit 1; }
+	@docker info >/dev/null 2>&1 || { printf 'Docker daemon is unavailable.\n' >&2; exit 1; }
+	@docker compose version >/dev/null 2>&1 || { printf 'Docker Compose v2 is required.\n' >&2; exit 1; }
 
 config: env doctor
 	$(COMPOSE) config --quiet
 
 build: config
-	$(COMPOSE) build server admin
+	$(COMPOSE) build server
 
 down: config
 	$(COMPOSE) down --remove-orphans
@@ -77,15 +42,26 @@ logs: config
 ps: config
 	$(COMPOSE) ps --all
 
+test:
+	GOWORK=off go -C backend test ./...
+
+vet:
+	GOWORK=off go -C backend vet ./...
+
+check: test vet
+	GOWORK=off go -C backend build ./...
+	$(DOCKER_COMPOSE) --env-file .env.example config --quiet
+
+smoke:
+	./scripts/smoke.sh
+
 help:
-	@printf 'Go CMS development commands:\n'
-	@printf '  make, make up  Build, initialize, and start the complete project\n'
-	@printf '  make restart   Rebuild and restart backend and admin frontend\n'
-	@printf '  make demo      Start CMS and create the public demo website\n'
-	@printf '  make demo-start  Add/update demo when CMS is already running\n'
-	@printf '  make env       Create .env from .env.example when it is missing\n'
-	@printf '  make build     Build the server and admin images\n'
-	@printf '  make down      Stop containers without deleting persistent volumes\n'
-	@printf '  make logs      Follow logs from all services\n'
+	@printf 'Go CMS Start commands:\n'
+	@printf '  make, make up  Build and start PostgreSQL and backend\n'
+	@printf '  make env       Create .env if it is missing\n'
+	@printf '  make build     Build the backend image\n'
+	@printf '  make check     Run Go and Compose checks\n'
+	@printf '  make smoke     Check a running API with dev credentials\n'
+	@printf '  make down      Stop containers and preserve volumes\n'
+	@printf '  make logs      Follow backend and database logs\n'
 	@printf '  make ps        Show service status\n'
-	@printf '  make help      Show this help\n'
