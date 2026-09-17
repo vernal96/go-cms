@@ -9,10 +9,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	appkernel "github.com/vernal96/go-cms-kernel/app"
+	"github.com/vernal96/go-cms-kernel/console"
+	"github.com/vernal96/go-cms-kernel/logging"
 	projectconfig "github.com/vernal96/go-cms/internal/config"
-	appkernel "github.com/vernal96/go-cms/kernel/app"
-	"github.com/vernal96/go-cms/kernel/console"
-	"github.com/vernal96/go-cms/kernel/logging"
 )
 
 func main() {

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/vernal96/go-cms/kernel"
-	"github.com/vernal96/go-cms/kernel/entityhooks"
+	"github.com/vernal96/go-cms-kernel"
+	"github.com/vernal96/go-cms-kernel/entityhooks"
 )
 
 // Product and its extension point belong to this example module. No kernel

@@ -4,17 +4,17 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/vernal96/go-cms-kernel/modules/admin"
+	"github.com/vernal96/go-cms-kernel/modules/core"
+	"github.com/vernal96/go-cms-kernel/modules/core/field"
+	"github.com/vernal96/go-cms-kernel/modules/core/template"
+	corewidgets "github.com/vernal96/go-cms-kernel/modules/core/widgets"
+	"github.com/vernal96/go-cms-kernel/modules/forms"
+	"github.com/vernal96/go-cms-kernel/modules/mail"
+	"github.com/vernal96/go-cms-kernel/modules/search"
+	"github.com/vernal96/go-cms-kernel/modules/seo"
 	"github.com/vernal96/go-cms/internal/profiles/dev"
 	"github.com/vernal96/go-cms/internal/profiles/dev/widgetviews"
-	"github.com/vernal96/go-cms/kernel/modules/admin"
-	"github.com/vernal96/go-cms/kernel/modules/core"
-	"github.com/vernal96/go-cms/kernel/modules/core/field"
-	"github.com/vernal96/go-cms/kernel/modules/core/template"
-	corewidgets "github.com/vernal96/go-cms/kernel/modules/core/widgets"
-	"github.com/vernal96/go-cms/kernel/modules/forms"
-	"github.com/vernal96/go-cms/kernel/modules/mail"
-	"github.com/vernal96/go-cms/kernel/modules/search"
-	"github.com/vernal96/go-cms/kernel/modules/seo"
 )
 
 var profile = dev.Profile(mail.Config{}, forms.Config{}, "private")

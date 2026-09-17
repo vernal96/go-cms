@@ -1,8 +1,8 @@
 package public
 
 import (
+	"github.com/vernal96/go-cms-kernel/filesystem"
 	"github.com/vernal96/go-cms/internal/connectors/corefiles"
-	"github.com/vernal96/go-cms/kernel/filesystem"
 )
 
 const Code filesystem.Code = "public"

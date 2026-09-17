@@ -1,8 +1,8 @@
 package templates
 
 import (
-	"github.com/vernal96/go-cms/kernel/modules/core/field"
-	"github.com/vernal96/go-cms/kernel/modules/core/template"
+	"github.com/vernal96/go-cms-kernel/modules/core/field"
+	"github.com/vernal96/go-cms-kernel/modules/core/template"
 )
 
 func Landing() template.Definition {

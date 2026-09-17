@@ -3,7 +3,7 @@ package seeds
 
 import (
 	"embed"
-	"github.com/vernal96/go-cms/kernel/seeds"
+	"github.com/vernal96/go-cms-kernel/seeds"
 )
 
 //go:embed dev/*.sql

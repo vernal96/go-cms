@@ -2,9 +2,9 @@ package extensions
 
 import (
 	"context"
-	"github.com/vernal96/go-cms/kernel/modules/core/field"
-	"github.com/vernal96/go-cms/kernel/modules/core/template"
-	"github.com/vernal96/go-cms/kernel/modules/core/widget"
+	"github.com/vernal96/go-cms-kernel/modules/core/field"
+	"github.com/vernal96/go-cms-kernel/modules/core/template"
+	"github.com/vernal96/go-cms-kernel/modules/core/widget"
 	"testing"
 )
 

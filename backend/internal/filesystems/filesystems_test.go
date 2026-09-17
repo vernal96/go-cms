@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	configloader "github.com/vernal96/go-cms-kernel/config"
+	"github.com/vernal96/go-cms-kernel/filesystem"
 	"github.com/vernal96/go-cms/internal/connectors/corefiles"
 	privatefiles "github.com/vernal96/go-cms/internal/filesystems/private"
 	publicfiles "github.com/vernal96/go-cms/internal/filesystems/public"
-	configloader "github.com/vernal96/go-cms/kernel/config"
-	"github.com/vernal96/go-cms/kernel/filesystem"
 )
 
 func TestDeclarationsMixCodeAndEnvironmentAndKeepObjectsIsolated(t *testing.T) {

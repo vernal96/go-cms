@@ -1,9 +1,9 @@
 package templates
 
 import (
-	"github.com/vernal96/go-cms/kernel/modules/core/field"
-	"github.com/vernal96/go-cms/kernel/modules/core/template"
-	corewidgets "github.com/vernal96/go-cms/kernel/modules/core/widgets"
+	"github.com/vernal96/go-cms-kernel/modules/core/field"
+	"github.com/vernal96/go-cms-kernel/modules/core/template"
+	corewidgets "github.com/vernal96/go-cms-kernel/modules/core/widgets"
 )
 
 func Page() template.Definition {

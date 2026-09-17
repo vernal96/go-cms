@@ -3,7 +3,7 @@ package corefiles
 import (
 	"testing"
 
-	"github.com/vernal96/go-cms/kernel/filesystem"
+	"github.com/vernal96/go-cms-kernel/filesystem"
 )
 
 func TestArbitraryNamedDiskFactories(t *testing.T) {

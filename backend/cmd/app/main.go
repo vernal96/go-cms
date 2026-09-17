@@ -9,11 +9,11 @@ import (
 	"os/signal"
 	"syscall"
 
+	appkernel "github.com/vernal96/go-cms-kernel/app"
+	"github.com/vernal96/go-cms-kernel/logging"
+	jwtsecurity "github.com/vernal96/go-cms-kernel/security/jwt"
+	httpserver "github.com/vernal96/go-cms-kernel/transport/httpserver"
 	projectconfig "github.com/vernal96/go-cms/internal/config"
-	jwtsecurity "github.com/vernal96/go-cms/internal/security/jwt"
-	appkernel "github.com/vernal96/go-cms/kernel/app"
-	"github.com/vernal96/go-cms/kernel/logging"
-	httpserver "github.com/vernal96/go-cms/kernel/transport/httpserver"
 )
 
 func main() {

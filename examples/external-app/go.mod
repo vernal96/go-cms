@@ -2,7 +2,7 @@ module example.org/cms-consumer
 
 go 1.26.1
 
-require github.com/vernal96/go-cms v0.0.0
+require github.com/vernal96/go-cms-kernel v0.1.0
 
 require (
 	github.com/disintegration/imaging v1.6.2 // indirect
@@ -25,5 +25,3 @@ require (
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 )
-
-replace github.com/vernal96/go-cms => ../../backend

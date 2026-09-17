@@ -3,8 +3,8 @@ package mainpostgres
 import (
 	"time"
 
-	connectorpostgres "github.com/vernal96/go-cms/connectors/postgres"
-	"github.com/vernal96/go-cms/kernel"
+	"github.com/vernal96/go-cms-kernel"
+	connectorpostgres "github.com/vernal96/go-cms-kernel/connectors/postgres"
 )
 
 const ConnectionCode kernel.ConnectionCode = "main"

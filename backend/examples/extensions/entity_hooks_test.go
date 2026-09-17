@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/vernal96/go-cms/kernel"
-	"github.com/vernal96/go-cms/kernel/eventbus"
+	"github.com/vernal96/go-cms-kernel"
+	"github.com/vernal96/go-cms-kernel/eventbus"
 )
 
 type exampleResolver struct{ kernel.DatabaseResolver }

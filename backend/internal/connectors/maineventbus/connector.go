@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/vernal96/go-cms/connectors/kafkaeventbus"
-	"github.com/vernal96/go-cms/connectors/rabbiteventbus"
-	"github.com/vernal96/go-cms/kernel/eventbus"
+	"github.com/vernal96/go-cms-kernel/connectors/kafkaeventbus"
+	"github.com/vernal96/go-cms-kernel/connectors/rabbiteventbus"
+	"github.com/vernal96/go-cms-kernel/eventbus"
 )
 
 type Config struct {

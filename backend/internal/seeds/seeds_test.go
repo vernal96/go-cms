@@ -1,8 +1,8 @@
 package seeds_test
 
 import (
+	"github.com/vernal96/go-cms-kernel/seeds"
 	projectseeds "github.com/vernal96/go-cms/internal/seeds"
-	"github.com/vernal96/go-cms/kernel/seeds"
 	"io/fs"
 	"testing"
 )

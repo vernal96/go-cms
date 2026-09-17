@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/vernal96/go-cms/connectors/localstorage"
-	connectors3 "github.com/vernal96/go-cms/connectors/s3"
-	"github.com/vernal96/go-cms/kernel/filesystem"
+	"github.com/vernal96/go-cms-kernel/connectors/localstorage"
+	connectors3 "github.com/vernal96/go-cms-kernel/connectors/s3"
+	"github.com/vernal96/go-cms-kernel/filesystem"
 )
 
 type Config struct {

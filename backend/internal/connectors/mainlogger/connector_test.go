@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vernal96/go-cms/connectors/filelogger"
-	"github.com/vernal96/go-cms/connectors/lokilogger"
+	"github.com/vernal96/go-cms-kernel/connectors/filelogger"
+	"github.com/vernal96/go-cms-kernel/connectors/lokilogger"
 )
 
 func validConfig() Config {

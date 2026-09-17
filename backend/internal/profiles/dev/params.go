@@ -1,6 +1,6 @@
 package dev
 
-import "github.com/vernal96/go-cms/kernel/modules/core/field"
+import "github.com/vernal96/go-cms-kernel/modules/core/field"
 
 func Params() []field.Definition {
 	required := true

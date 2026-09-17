@@ -256,7 +256,8 @@ Extend these mechanisms rather than creating a parallel `ManagedCache`/`TaggedCa
 
 For cache changes:
 
-1. inspect `backend/kernel/cache/` contracts/managers first;
+1. inspect `github.com/vernal96/go-cms-kernel/cache` contracts/managers in the
+   kernel checkout first;
 2. inspect the affected physical connector(s) only if store semantics change;
 3. inspect module bindings/runtime assembly;
 4. inspect one actual cached read and every mutation path that can stale it;

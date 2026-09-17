@@ -267,7 +267,8 @@ A configured reference to a missing disk should fail early during boot/runtime a
 
 For filesystem changes:
 
-1. inspect `backend/kernel/filesystem/` contracts/manager;
+1. inspect `github.com/vernal96/go-cms-kernel/filesystem` contracts/manager in
+   the kernel checkout;
 2. inspect project disk declaration/factories;
 3. inspect only the affected driver if driver behavior changes;
 4. inspect core file service/repository if CMS file semantics change;

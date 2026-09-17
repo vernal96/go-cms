@@ -5,7 +5,8 @@
 ## Выполнено успешно
 
 - `go test ./...`, `go vet ./...`, `go build ./...` из `backend`.
-- `go test -race ./kernel/modules/core ./kernel/modules/core/resource`:
+- `go test -race ./modules/core ./modules/core/resource` из checkout
+  `go-cms-kernel`:
   дерево, ссылки, сроки публикации, параметры, проверки доступа перед кешем,
   попадание без повторной загрузки, изоляция сайтов, ошибки/повреждение кеша,
   дедлайн, запрет кеширования ошибок, параллельное наполнение и изменение,

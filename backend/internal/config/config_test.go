@@ -4,16 +4,16 @@ import (
 	"testing"
 	"time"
 
+	configloader "github.com/vernal96/go-cms-kernel/config"
+	"github.com/vernal96/go-cms-kernel/filesystem"
+	"github.com/vernal96/go-cms-kernel/modules/admin"
+	"github.com/vernal96/go-cms-kernel/modules/core"
+	"github.com/vernal96/go-cms-kernel/modules/forms"
+	"github.com/vernal96/go-cms-kernel/modules/mail"
+	"github.com/vernal96/go-cms-kernel/modules/search"
 	projectconfig "github.com/vernal96/go-cms/internal/config"
 	"github.com/vernal96/go-cms/internal/connectors/mainpostgres"
 	"github.com/vernal96/go-cms/internal/connectors/projectcache"
-	configloader "github.com/vernal96/go-cms/kernel/config"
-	"github.com/vernal96/go-cms/kernel/filesystem"
-	"github.com/vernal96/go-cms/kernel/modules/admin"
-	"github.com/vernal96/go-cms/kernel/modules/core"
-	"github.com/vernal96/go-cms/kernel/modules/forms"
-	"github.com/vernal96/go-cms/kernel/modules/mail"
-	"github.com/vernal96/go-cms/kernel/modules/search"
 )
 
 func TestProjectConfigLoadsNestedPrefixesAndBuildsDefinition(t *testing.T) {

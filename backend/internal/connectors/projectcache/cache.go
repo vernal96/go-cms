@@ -3,10 +3,10 @@ package projectcache
 import (
 	"time"
 
-	"github.com/vernal96/go-cms/connectors/filesystemcache"
-	redisconnector "github.com/vernal96/go-cms/connectors/redis"
-	"github.com/vernal96/go-cms/kernel/cache"
-	"github.com/vernal96/go-cms/kernel/filesystem"
+	"github.com/vernal96/go-cms-kernel/cache"
+	"github.com/vernal96/go-cms-kernel/connectors/filesystemcache"
+	redisconnector "github.com/vernal96/go-cms-kernel/connectors/redis"
+	"github.com/vernal96/go-cms-kernel/filesystem"
 )
 
 const (

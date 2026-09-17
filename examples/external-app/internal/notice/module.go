@@ -3,11 +3,11 @@ package notice
 import (
 	"context"
 
-	"github.com/vernal96/go-cms/kernel"
-	"github.com/vernal96/go-cms/kernel/adminui"
-	"github.com/vernal96/go-cms/kernel/modules/core/field"
-	"github.com/vernal96/go-cms/kernel/modules/forms"
-	"github.com/vernal96/go-cms/kernel/permission"
+	"github.com/vernal96/go-cms-kernel"
+	"github.com/vernal96/go-cms-kernel/adminui"
+	"github.com/vernal96/go-cms-kernel/modules/core/field"
+	"github.com/vernal96/go-cms-kernel/modules/forms"
+	"github.com/vernal96/go-cms-kernel/permission"
 )
 
 type Module struct{}
