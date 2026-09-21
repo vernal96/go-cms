@@ -1,7 +1,6 @@
 services:
   postgres:
     image: postgres:18
-    container_name: go-cms-start-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -9,7 +8,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 3s
       timeout: 5s
       retries: 20
@@ -17,8 +16,6 @@ services:
   server:
     build:
       context: ./backend
-    image: go-cms-start-server:dev
-    container_name: go-cms-start-server
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
@@ -37,8 +34,8 @@ services:
       FILES_PRIVATE_ROOT: ${FILES_PRIVATE_ROOT:-var/files/private}
       FILES_PRIVATE_SIGNING_KEY: ${FILES_PRIVATE_SIGNING_KEY}
       LOGGER_FILE_PATH: ${LOGGER_FILE_PATH:-var/log/cms.log}
-      FILES_PUBLIC_BASE_URL: http://localhost:${SERVER_PORT:-8080}
-      FILES_PRIVATE_BASE_URL: http://localhost:${SERVER_PORT:-8080}
+      FILES_PUBLIC_BASE_URL: ${FILES_PUBLIC_BASE_URL:-http://localhost:${SERVER_PORT:-8080}}
+      FILES_PRIVATE_BASE_URL: ${FILES_PRIVATE_BASE_URL:-http://localhost:${SERVER_PORT:-8080}}
     ports:
       - "${SERVER_PORT:-8080}:8080"
     volumes:

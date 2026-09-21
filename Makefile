@@ -6,11 +6,11 @@ DOCKER_COMPOSE ?= docker compose
 COMPOSE := $(DOCKER_COMPOSE) --env-file .env
 WAIT_TIMEOUT ?= 180
 
-.PHONY: up env doctor config build down logs ps test vet check smoke help
+.PHONY: up env doctor config build down logs app-logs ps test vet check smoke test-deployment help
 
 up: build
 	$(COMPOSE) up --detach --wait --wait-timeout $(WAIT_TIMEOUT)
-	@server_port=$$(sed -n 's/^SERVER_PORT=//p' .env | tail -n 1); \
+	@server_port=$${SERVER_PORT:-$$(sed -n 's/^SERVER_PORT=//p' .env | tail -n 1)}; \
 	server_port=$${server_port:-8080}; \
 	printf '\nGo CMS Start is ready.\n  API: http://localhost:%s\n' "$$server_port"
 
@@ -39,6 +39,9 @@ down: config
 logs: config
 	$(COMPOSE) logs --follow --tail=100
 
+app-logs: config
+	$(COMPOSE) exec server sh -c 'tail -n 100 -f "$$LOGGER_FILE_PATH"'
+
 ps: config
 	$(COMPOSE) ps --all
 
@@ -55,6 +58,9 @@ check: test vet
 smoke:
 	./scripts/smoke.sh
 
+test-deployment:
+	./scripts/test-deployment.sh
+
 help:
 	@printf 'Go CMS Start commands:\n'
 	@printf '  make, make up  Build and start PostgreSQL and backend\n'
@@ -62,6 +68,8 @@ help:
 	@printf '  make build     Build the backend image\n'
 	@printf '  make check     Run Go and Compose checks\n'
 	@printf '  make smoke     Check a running API with dev credentials\n'
+	@printf '  make test-deployment  Test fresh volumes and persistence (port 18080)\n'
 	@printf '  make down      Stop containers and preserve volumes\n'
 	@printf '  make logs      Follow backend and database logs\n'
+	@printf '  make app-logs  Follow the application JSON log\n'
 	@printf '  make ps        Show service status\n'

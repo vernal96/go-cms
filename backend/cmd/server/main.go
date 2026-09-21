@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,7 +20,6 @@ import (
 	"github.com/vernal96/go-cms-kernel/connectors/localstorage"
 	connectorpostgres "github.com/vernal96/go-cms-kernel/connectors/postgres"
 	"github.com/vernal96/go-cms-kernel/filesystem"
-	"github.com/vernal96/go-cms-kernel/logging"
 	"github.com/vernal96/go-cms-kernel/migrations"
 	"github.com/vernal96/go-cms-kernel/modules/admin"
 	"github.com/vernal96/go-cms-kernel/modules/core"
@@ -28,7 +28,7 @@ import (
 	"github.com/vernal96/go-cms-kernel/security/jwt"
 	"github.com/vernal96/go-cms-kernel/seeds"
 	"github.com/vernal96/go-cms-kernel/transport/httpserver"
-	"github.com/vernal96/go-cms-start/internal/platform"
+	"github.com/vernal96/go-cms/internal/platform"
 )
 
 //go:embed seeds/*.sql
@@ -38,9 +38,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx); err != nil {
-		if !logging.IsReported(err) {
-			_, _ = fmt.Fprintln(os.Stderr, err)
-		}
+		// The project logger writes to a file; startup failures must also reach
+		// the container log, including errors already reported by the kernel.
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
@@ -50,7 +50,7 @@ func run(ctx context.Context) (resultErr error) {
 		Logger:   platform.LoggerFactory{Path: env("LOGGER_FILE_PATH", "var/log/cms.log")},
 		EventBus: platform.DiscardBusFactory{}, PasswordHasher: argon2id.Factory{},
 		MainDatabase: appkernel.DatabaseDefinition{
-			Connector: connectorpostgres.Factory{Config: connectorpostgres.Config{Code: "main", Host: env("POSTGRES_HOST", "localhost"), Port: envInt("POSTGRES_PORT", 5432), Database: env("POSTGRES_DB", "cms"), User: env("POSTGRES_USER", "cms"), Password: os.Getenv("POSTGRES_PASSWORD"), SSLMode: env("POSTGRES_SSL_MODE", "disable"), MaxConns: 10, ConnectTimeout: 5 * time.Second}},
+			Connector: connectorpostgres.Factory{Config: connectorpostgres.Config{Code: "main", Host: env("POSTGRES_HOST", "localhost"), Port: envInt("POSTGRES_PORT", 5432), Database: env("POSTGRES_DB", "cms"), User: env("POSTGRES_USER", "cms"), Password: os.Getenv("POSTGRES_PASSWORD"), SSLMode: env("POSTGRES_SSL_MODE", "disable"), MaxConns: 10, ConnMaxLifetime: time.Hour, ConnectTimeout: 5 * time.Second}},
 			Adapters:  []kernel.ModuleDatabaseFactory{corepostgres.DatabaseFactory{}},
 			Seeds:     []appkernel.ModuleSeedSource{{Module: core.ModuleCode, Source: seeds.Source{ID: "starter", Schema: "core", Tags: []seeds.Tag{"dev"}, FS: seedFiles, Path: "seeds"}}},
 		},
@@ -86,7 +86,7 @@ func run(ctx context.Context) (resultErr error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.Handle("/", handler)
-	server, err := httpserver.NewServer(httpserver.Config{Address: ":" + strconv.Itoa(envInt("SERVER_PORT", 8080)), ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second, ShutdownTimeout: 5 * time.Second}, mux, application.Logger())
+	server, err := httpserver.NewServer(httpserver.Config{Address: net.JoinHostPort(env("SERVER_HOST", "0.0.0.0"), strconv.Itoa(envInt("SERVER_PORT", 8080))), ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second, ShutdownTimeout: 5 * time.Second}, mux, application.Logger())
 	if err != nil {
 		return err
 	}
