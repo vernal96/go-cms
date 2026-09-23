@@ -15,12 +15,7 @@ up: build
 	printf '\nGo CMS Start is ready.\n  API: http://localhost:%s\n' "$$server_port"
 
 env:
-	@if [ -f .env ]; then \
-		printf 'Using existing .env\n'; \
-	else \
-		cp .env.example .env; chmod 600 .env; \
-		printf 'Created .env from .env.example\n'; \
-	fi
+	python3 scripts/init-env.py
 
 doctor:
 	@command -v docker >/dev/null 2>&1 || { printf 'Docker is required but was not found.\n' >&2; exit 1; }
@@ -63,7 +58,7 @@ test-deployment:
 
 help:
 	@printf 'Go CMS Start commands:\n'
-	@printf '  make, make up  Build and start PostgreSQL and backend\n'
+	@printf '  make, make up  Build and start PostgreSQL, Redis, Kafka and backend\n'
 	@printf '  make env       Create .env if it is missing\n'
 	@printf '  make build     Build the backend image\n'
 	@printf '  make check     Run Go and Compose checks\n'

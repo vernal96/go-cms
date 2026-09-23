@@ -6,6 +6,7 @@ source_dir=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 test_dir=$(mktemp -d "${TMPDIR:-/tmp}/cms-deployment-XXXXXX")
 export COMPOSE_PROJECT_NAME="cms-test-$(date +%s)-$$"
 export SERVER_PORT="${DEPLOYMENT_TEST_PORT:-18080}"
+export CMS_DEV_SEED=true
 export BASE_URL="http://localhost:$SERVER_PORT"
 cleanup() {
   result=$?

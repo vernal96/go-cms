@@ -1,14 +1,14 @@
 # Go CMS Start
 
 Минимальный backend на Go с отдельной зависимостью
-[`go-cms-kernel v0.1.0`](https://github.com/vernal96/go-cms-kernel).
-Включает Core, Admin, PostgreSQL, миграции, dev seed, JWT и public/private диски.
+[`go-cms-kernel v0.2.0`](https://github.com/vernal96/go-cms-kernel).
+Включает Core, Admin, PostgreSQL, Redis, Kafka, миграции, опциональный dev seed, JWT и public/private диски.
 [Админка](https://github.com/vernal96/go-cms-admin) — отдельное приложение,
 подключаемое по HTTP.
 
 ## Запуск backend с нуля
 
-Нужны Git, GNU Make, Docker и Docker Compose v2 с поддержкой `--wait`.
+Нужны Git, Python 3, GNU Make, Docker и Docker Compose v2 с поддержкой `--wait`.
 Локальные Go и Node для Docker-сценария не требуются.
 
 ```sh
@@ -17,14 +17,16 @@ cd go-cms
 make up
 ```
 
-`make up` создаёт `.env` из `.env.example`, собирает backend, запускает PostgreSQL
+`make up` создаёт `.env` из `.env.example`, генерирует уникальные секреты, собирает backend, запускает PostgreSQL, Redis и Kafka
 и дожидается healthcheck. На новой базе автоматически применяются миграции и seed.
 Ядро скачивается по версии из `backend/go.mod`; соседняя папка с ядром,
 `replace` и `go.work` не нужны.
 
 - API: `http://localhost:8080`.
 - Проверка запуска: `http://localhost:8080/healthz` → HTTP 200.
-- Dev-пользователь: `admin` / `admin-dev-only-2026`.
+- Dev-пользователь `admin` / `admin-dev-only-2026` создаётся только при явном `CMS_DEV_SEED=true`.
+- Для обычного запуска dev-seed выключен. `make env` создаёт уникальные секреты.
+- Первого администратора создайте командой `docker compose --env-file .env run --rm -e CMS_ADMIN_PASSWORD server bootstrap-admin`, предварительно задав `CMS_ADMIN_PASSWORD` в окружении. Логин и email можно задать через `-e CMS_ADMIN_LOGIN -e CMS_ADMIN_EMAIL`. Существующие аккаунты команда не перезаписывает.
 
 Backend отдаёт API, а не HTML админки или готовую главную страницу сайта.
 Ответ 404 на `/` не означает сбой запуска: starter не создаёт главную страницу.
@@ -47,7 +49,7 @@ cd go-cms-admin
 ADMIN_API_TARGET=http://host.docker.internal:8080 docker compose up -d --build --wait
 ```
 
-Откройте `http://localhost:5173` и войдите dev-пользователем. Команда явно передаёт
+Откройте `http://localhost:5173` и войдите созданным администратором. Команда явно передаёт
 адрес backend, доступный из контейнера, даже если ранее был создан локальный `.env`.
 
 Для запуска админки без Docker нужен **Node.js >=24** и npm:
@@ -90,7 +92,7 @@ ADMIN_PORT=15173 ADMIN_API_TARGET=http://host.docker.internal:18080 docker compo
 
 ## Публичный сайт и dev-данные
 
-Seed создаёт сайт `localhost` и пользователя в защищённой группе `admin`.
+При `CMS_DEV_SEED=true` seed создаёт сайт `localhost` и пользователя в защищённой группе `admin`.
 Пароль пользователя задан в seed, **не в `.env`**. Изменить его можно в админке
 в разделе «Пользователи». Обычный повторный запуск не применяет seed заново
 и не сбрасывает изменённый пароль.
@@ -111,17 +113,27 @@ ON CONFLICT DO NOTHING;
 seed на dev-стенде нужно пересоздать его базу; команда `docker compose down -v`
 удаляет данные и файлы **этого Compose project**.
 
-Dev-пароль, ключи JWT/файлов в `.env.example`, discard event bus и локальное
-хранилище предназначены для разработки. Перед production-развёртыванием
-замените ключи/пароль и настройте инфраструктуру. Docker-админка запускает Vite
+Значения секретов в `.env.example` предназначены только для примеров; `make env`
+генерирует уникальные значения. Kafka в Compose работает с одним брокером;
+для отказоустойчивого развёртывания настройте репликацию инфраструктуры. Docker-админка запускает Vite
 для разработки; production frontend собирается отдельно через `npm run build`.
 
 ## Проверки
+
+Кэш подключён через модульные aliases `core.durable` и `core.hot` к одному Redis.
+Compose использует внутренний адрес `redis:6379`; Redis не публикуется на хосте.
+При запуске backend через Go задайте `REDIS_ADDR` и при необходимости
+`REDIS_PASSWORD`. Данные Redis являются расходным кэшем; для них не создаётся
+постоянный volume.
+
+Версия ядра фиксируется в `backend/go.mod`. Ядро v0.2.0 включает раздельные
+кэши URL, ресурсов, конфигурации виджетов и опциональных результатов виджетов.
 
 Для smoke-проверок нужны Python 3; для `make check` — Go версии из `backend/go.mod`
 (1.26.1 или новее) либо рабочая автоматическая загрузка Go toolchain.
 
 ```sh
+CMS_DEV_SEED=true make up # изолированное локальное демо для smoke
 make smoke             # health, вход, API, отрицательные проверки доступа
 make check             # Go test/vet/build и Compose config
 make test-deployment   # чистая копия, новая БД/диски, запуск и проверка сохранности
@@ -138,7 +150,7 @@ DEPLOYMENT_TEST_PORT=28080 make test-deployment
 ```
 
 В CI выполняются `make check` и `make test-deployment`. Это проверяет реальную
-зависимость v0.1.0 без локальных подмен.
+зависимость v0.2.0 без локальных подмен.
 
 ## Логи и остановка
 
@@ -156,7 +168,7 @@ make down      # остановить, сохранив БД и файлы
 docker compose cp server:/app/var/log/cms.log ./cms.log
 ```
 
-Если сборка не может получить `go-cms-kernel@v0.1.0`, проверьте доступ к GitHub,
+Если сборка не может получить `go-cms-kernel@v0.2.0`, проверьте доступ к GitHub,
 `proxy.golang.org` и `sum.golang.org`. Ошибки `Repository not found` / HTTP 404
 означают, что исходники или тег недоступны; наличие локального ядра не заменяет
 проверку опубликованной зависимости.
@@ -172,3 +184,28 @@ Frontend не встраивается в Go binary и взаимодейств�
 Database adapters подключаются в `app.DatabaseDefinition.Adapters`, проектные
 migrations/seeds — через публичные kernel providers. Не импортируйте `internal`
 другого репозитория.
+
+## Версия 0.2.0
+
+[Исправления аудита и результаты проверок](docs/audit-fixes-0.2.0.md).
+
+Этот выпуск меняет схему dev-БД и контракт авторизации. Для старого dev-стенда
+пересоздайте данные; сохранение старых схем в pre-production не поддерживается.
+Обновляйте backend и admin вместе. Ранее выданные JWT больше не являются сессиями.
+
+- `CMS_DEV_SEED=false` по умолчанию; для локального демо: `CMS_DEV_SEED=true make up`.
+- Kafka 4.3.1 входит в Compose и хранит данные в `kafka_data`; брокер доступен
+  только во внутренней сети. Один брокер предназначен для разработки; для HA
+  задайте внешний кластер через конфигурацию проекта.
+- JWT живёт 30 минут по умолчанию. `POST /api/auth/logout` отзывает текущую сессию;
+  смена пароля отзывает все. Сессии хранятся в PostgreSQL.
+- Каждая реплика сверяет версию сайта перед использованием runtime. Пока локальная
+  версия устарела, запрос получает 503; фоновая синхронизация запускается раз в секунду.
+- Redis ограничен 256 MiB с eviction. Исчезновение поколения инвалидирует запись,
+  а число ключей поколений ограничено 65 536 на физическое хранилище.
+- Вход ограничен двумя параллельными проверками, 30 попытками на IP в минуту и
+  10 попытками на пару IP/логин. Используется RemoteAddr; не подставляйте
+  недоверенные forwarded-заголовки. При reverse proxy учитывайте лимиты на его адрес.
+- Обработка изображений ограничена двумя параллельными операциями на приложение.
+
+`make test-deployment` явно включает dev-seed только на изолированном тестовом стенде.
