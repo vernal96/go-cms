@@ -75,17 +75,25 @@
 
 ### Как добавить поля в профиль
 
-Добавьте определения в `Params` конкретного `kernel.Profile`. Необходимо импортировать пакет полей kernel как `field`. Например, в существующем файле профиля:
+Добавьте определения в `Params` конкретного `kernel.Profile`. Для группировки используйте `EditorTabs`: как и у шаблонов ресурсов, это список `field.EditorTab` со ссылками на ключи полей. Ниже полный вариант профиля `Editorial` из раздела «Создание профиля» с тремя полями и двумя табами. Замените им предыдущую декларацию в `backend/internal/profile/editorial.go`, не создавая вторую переменную `Editorial`:
 
 ```go
-import "github.com/vernal96/go-cms-kernel/modules/core/field"
+package profile
 
-var required = true
+import (
+	kernel "github.com/vernal96/go-cms-kernel"
+	"github.com/vernal96/go-cms-kernel/cache"
+	"github.com/vernal96/go-cms-kernel/modules/admin"
+	"github.com/vernal96/go-cms-kernel/modules/core"
+	"github.com/vernal96/go-cms-kernel/modules/core/field"
+)
+
+var editorialRequired = true
 
 var editorialParams = []field.Definition{
 	{
 		Key: "organization_name", Type: field.TypeString,
-		Label: "Название организации", Required: &required,
+		Label: "Название организации", Required: &editorialRequired,
 	},
 	{
 		Key: "contact_email", Type: field.TypeEmail,
@@ -97,9 +105,32 @@ var editorialParams = []field.Definition{
 		Options: field.PhoneOptions{Pattern: `^\+7`},
 	},
 }
+
+var Editorial = kernel.Profile{
+	Code: "editorial",
+	Name: "Editorial",
+	Modules: []kernel.ProfileModule{
+		{Module: core.Module{}, Caches: []cache.Binding{
+			{Alias: core.DurableCacheAlias, Code: "shared"},
+			{Alias: core.HotCacheAlias, Code: "shared"},
+		}},
+		{Module: admin.Module{}},
+	},
+	Params: editorialParams,
+	EditorTabs: []field.EditorTab{
+		{
+			Code: "main", Label: "Основное",
+			Fields: []string{"organization_name"},
+		},
+		{
+			Code: "contacts", Label: "Контакты",
+			Fields: []string{"contact_email", "office_phone"},
+		},
+	},
+}
 ```
 
-В декларации профиля укажите `Params: editorialParams` рядом с `Code`, `Name` и `Modules`.
+Этот пример использует хранилище кэша `shared`, объявленное в инфраструктуре starter. Подключите `profile.Editorial` к списку `Profiles`, как показано выше, и пересоберите и перезапустите backend (`make up` при запуске через Compose). В админке выберите этот профиль для сайта: таб «Основное» содержит название организации, а «Контакты» — email и телефон.
 
 При добавлении определений:
 
@@ -109,7 +140,26 @@ var editorialParams = []field.Definition{
 4. Добавьте профиль в `Profiles` конфигурации приложения по инструкции выше. Отдельная миграция БД для добавления определения не нужна: значения профиля хранятся в настройках сайта.
 5. Если поле удаляется или переименовывается, согласуйте это с чтением его ключа в коде и с используемыми настройками сайтов: смена `Key` означает новый параметр.
 
-`EditorTabs`, если они заданы у профиля, группируют поля редактора; каждый ключ в группировке должен ссылаться на объявленный параметр. Для обычного добавления параметров достаточно `Params`.
+### Правила и отображение табов
+
+- `Code` таба должен быть уникальным в пределах профиля. `Code` и `Label` должны быть непустыми, без пробелов по краям.
+- `Fields` содержит ключи `Key` из `Params`, а не подписи полей. Неизвестные ключи недопустимы.
+- Если `EditorTabs` непустой, каждое поле из `Params` должно входить ровно в один таб. Повтор ключа внутри одного таба или в разных табах и пропуск поля приводят к ошибке при компиляции профиля. При добавлении нового параметра добавьте его ключ и в нужный таб.
+- Табы отображаются в порядке `EditorTabs`. Поля внутри каждого таба следуют порядку `Params`; перестановка ключей в `EditorTab.Fields` не меняет их порядок отображения.
+
+В текущей админке табы параметров показываются слева при **редактировании сайта**. При создании сайта поля выводятся обычным списком, даже если `EditorTabs` объявлены. Если `EditorTabs` отсутствует или пуст, обычный список используется и при редактировании. Домен, профиль, локаль и публичность сайта остаются отдельными элементами формы вне этих табов.
+
+Табы задают только группировку редактора. Значения по-прежнему сохраняются по ключам полей в `core.sites.settings`, без вложенных объектов `main` или `contacts`. Например, объект `settings` для приведённого профиля:
+
+```json
+{
+  "organization_name": "Редакция",
+  "contact_email": "info@example.com",
+  "office_phone": "+74951234567"
+}
+```
+
+Перенос поля между табами не меняет его значение, правила валидации или публичность. В примере только `contact_email` имеет `Public: true`; размещение в табе «Контакты» само по себе не делает телефон публичным. Для добавления или перестановки табов миграция БД не нужна.
 
 ## Изменение профиля
 
