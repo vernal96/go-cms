@@ -63,7 +63,7 @@ func run(ctx context.Context) (resultErr error) {
 	definition := settings.Config{
 		LoggerPath:     env("LOGGER_FILE_PATH", "var/log/cms.log"),
 		Infrastructure: infra.Definition(),
-		Profile:        profile.Starter(),
+		Profile:        profile.Starter,
 		DevSeed:        devSeed,
 		SeedFiles:      seedFiles,
 	}.Definition()

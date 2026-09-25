@@ -1,5 +1,9 @@
 # Go CMS Start
 
+Документация проекта: [развертывание с нуля](docs/deployment.md),
+[удаление пресетных элементов](docs/removing-presets.md),
+[работа с профилями](docs/profiles.md). Полный список — в [навигации по документации](docs/README.md).
+
 Минимальный backend на Go с отдельной зависимостью
 [`go-cms-kernel v0.2.0`](https://github.com/vernal96/go-cms-kernel).
 Включает Core, Admin, PostgreSQL, Redis, Kafka, миграции, опциональный dev seed, JWT и public/private диски.
