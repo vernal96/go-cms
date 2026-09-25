@@ -15,23 +15,14 @@ import (
 	"syscall"
 	"time"
 
-	kernel "github.com/vernal96/go-cms-kernel"
 	appkernel "github.com/vernal96/go-cms-kernel/app"
-	"github.com/vernal96/go-cms-kernel/cache"
-	"github.com/vernal96/go-cms-kernel/connectors/kafkaeventbus"
-	"github.com/vernal96/go-cms-kernel/connectors/localstorage"
-	connectorpostgres "github.com/vernal96/go-cms-kernel/connectors/postgres"
-	connectorredis "github.com/vernal96/go-cms-kernel/connectors/redis"
-	"github.com/vernal96/go-cms-kernel/filesystem"
 	"github.com/vernal96/go-cms-kernel/migrations"
-	"github.com/vernal96/go-cms-kernel/modules/admin"
-	"github.com/vernal96/go-cms-kernel/modules/core"
-	corepostgres "github.com/vernal96/go-cms-kernel/modules/core/adapters/postgres"
-	"github.com/vernal96/go-cms-kernel/modules/core/user/adapters/argon2id"
 	"github.com/vernal96/go-cms-kernel/security/jwt"
 	"github.com/vernal96/go-cms-kernel/seeds"
 	"github.com/vernal96/go-cms-kernel/transport/httpserver"
-	"github.com/vernal96/go-cms/internal/platform"
+	"github.com/vernal96/go-cms/internal/infrastructure"
+	"github.com/vernal96/go-cms/internal/profile"
+	"github.com/vernal96/go-cms/internal/settings"
 )
 
 //go:embed seeds/*.sql
@@ -53,32 +44,30 @@ func run(ctx context.Context) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("CMS_DEV_SEED: %w", err)
 	}
-	var projectSeeds []appkernel.ModuleSeedSource
-	if devSeed {
-		projectSeeds = []appkernel.ModuleSeedSource{{Module: core.ModuleCode, Source: seeds.Source{ID: "starter", Schema: "core", Tags: []seeds.Tag{"dev"}, FS: seedFiles, Path: "seeds"}}}
+	infra := infrastructure.Config{
+		KafkaBrokers:        strings.Split(env("KAFKA_BROKERS", "localhost:9092"), ","),
+		PostgresHost:        env("POSTGRES_HOST", "localhost"),
+		PostgresPort:        envInt("POSTGRES_PORT", 5432),
+		PostgresDatabase:    env("POSTGRES_DB", "cms"),
+		PostgresUser:        env("POSTGRES_USER", "cms"),
+		PostgresPassword:    os.Getenv("POSTGRES_PASSWORD"),
+		PostgresSSLMode:     env("POSTGRES_SSL_MODE", "disable"),
+		PublicFilesRoot:     env("FILES_PUBLIC_ROOT", "var/files/public"),
+		PublicFilesBaseURL:  env("FILES_PUBLIC_BASE_URL", "http://localhost:8080"),
+		PrivateFilesRoot:    env("FILES_PRIVATE_ROOT", "var/files/private"),
+		PrivateFilesBaseURL: env("FILES_PRIVATE_BASE_URL", "http://localhost:8080"),
+		PrivateFilesSignKey: os.Getenv("FILES_PRIVATE_SIGNING_KEY"),
+		RedisAddress:        env("REDIS_ADDR", "localhost:6379"),
+		RedisPassword:       os.Getenv("REDIS_PASSWORD"),
 	}
-	application, err := appkernel.New(ctx, appkernel.Definition{
-		Logger:   platform.LoggerFactory{Path: env("LOGGER_FILE_PATH", "var/log/cms.log")},
-		EventBus: kafkaeventbus.Factory{Config: kafkaeventbus.Config{Brokers: strings.Split(env("KAFKA_BROKERS", "localhost:9092"), ","), ClientID: "go-cms", DialTimeout: 5 * time.Second, ConsumerRetryDelay: time.Second, ShutdownTimeout: 5 * time.Second}}, PasswordHasher: argon2id.Factory{},
-		MainDatabase: appkernel.DatabaseDefinition{
-			Connector: connectorpostgres.Factory{Config: connectorpostgres.Config{Code: "main", Host: env("POSTGRES_HOST", "localhost"), Port: envInt("POSTGRES_PORT", 5432), Database: env("POSTGRES_DB", "cms"), User: env("POSTGRES_USER", "cms"), Password: os.Getenv("POSTGRES_PASSWORD"), SSLMode: env("POSTGRES_SSL_MODE", "disable"), MaxConns: 10, ConnMaxLifetime: time.Hour, ConnectTimeout: 5 * time.Second}},
-			Adapters:  []kernel.ModuleDatabaseFactory{corepostgres.DatabaseFactory{}},
-			Seeds:     projectSeeds,
-		},
-		Filesystems: []filesystem.Factory{
-			localstorage.Factory{Config: localstorage.Config{Code: "public", Visibility: filesystem.VisibilityPublic, Root: env("FILES_PUBLIC_ROOT", "var/files/public"), BaseURL: env("FILES_PUBLIC_BASE_URL", "http://localhost:8080")}},
-			localstorage.Factory{Config: localstorage.Config{Code: "private", Visibility: filesystem.VisibilityPrivate, Root: env("FILES_PRIVATE_ROOT", "var/files/private"), BaseURL: env("FILES_PRIVATE_BASE_URL", "http://localhost:8080"), SigningKey: os.Getenv("FILES_PRIVATE_SIGNING_KEY")}},
-		},
-		Caches: []cache.Factory{connectorredis.Factory{Config: connectorredis.Config{
-			Code: "shared", Addrs: []string{env("REDIS_ADDR", "localhost:6379")}, Password: os.Getenv("REDIS_PASSWORD"),
-			DialTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second,
-		}}},
-		Profiles: []kernel.Profile{{Code: "starter", Name: "Starter", Modules: []kernel.ProfileModule{
-			{Module: core.Module{}, Caches: []cache.Binding{{Alias: core.DurableCacheAlias, Code: "shared"}, {Alias: core.HotCacheAlias, Code: "shared"}}},
-			{Module: admin.Module{}},
-		}}},
-		AvatarStorage: "private", MaxUploadSize: 100 << 20, UploadTimeout: 10 * time.Minute, AvatarMaxSize: 5 << 20,
-	})
+	definition := settings.Config{
+		LoggerPath:     env("LOGGER_FILE_PATH", "var/log/cms.log"),
+		Infrastructure: infra.Definition(),
+		Profile:        profile.Starter(),
+		DevSeed:        devSeed,
+		SeedFiles:      seedFiles,
+	}.Definition()
+	application, err := appkernel.New(ctx, definition)
 	if err != nil {
 		return err
 	}
