@@ -16,7 +16,7 @@ import (
 type Config struct {
 	LoggerPath     string
 	Infrastructure appkernel.Definition
-	Profile        kernel.Profile
+	Profiles       []kernel.Profile
 	DevSeed        bool
 	SeedFiles      fs.FS
 }
@@ -25,7 +25,7 @@ type Config struct {
 func (c Config) Definition() appkernel.Definition {
 	definition := c.Infrastructure
 	definition.Logger = platform.LoggerFactory{Path: c.LoggerPath}
-	definition.Profiles = []kernel.Profile{c.Profile}
+	definition.Profiles = c.Profiles
 	definition.AvatarStorage = "private"
 	definition.MaxUploadSize = 100 << 20
 	definition.UploadTimeout = 10 * time.Minute

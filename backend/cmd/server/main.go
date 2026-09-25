@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	kernel "github.com/vernal96/go-cms-kernel"
 	appkernel "github.com/vernal96/go-cms-kernel/app"
 	"github.com/vernal96/go-cms-kernel/migrations"
 	"github.com/vernal96/go-cms-kernel/security/jwt"
@@ -63,7 +64,7 @@ func run(ctx context.Context) (resultErr error) {
 	definition := settings.Config{
 		LoggerPath:     env("LOGGER_FILE_PATH", "var/log/cms.log"),
 		Infrastructure: infra.Definition(),
-		Profile:        profile.Starter,
+		Profiles:       []kernel.Profile{profile.Starter},
 		DevSeed:        devSeed,
 		SeedFiles:      seedFiles,
 	}.Definition()
