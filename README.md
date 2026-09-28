@@ -5,7 +5,7 @@
 [работа с профилями](docs/profiles.md). Полный список — в [навигации по документации](docs/README.md).
 
 Минимальный backend на Go с отдельной зависимостью
-[`go-cms-kernel v0.2.0`](https://github.com/vernal96/go-cms-kernel).
+[`go-cms-kernel v0.3.0`](https://github.com/vernal96/go-cms-kernel).
 Включает Core, Admin, PostgreSQL, Redis, Kafka, миграции, опциональный dev seed, JWT и public/private диски.
 [Админка](https://github.com/vernal96/go-cms-admin) — отдельное приложение,
 подключаемое по HTTP.
@@ -130,7 +130,7 @@ Compose использует внутренний адрес `redis:6379`; Redis
 `REDIS_PASSWORD`. Данные Redis являются расходным кэшем; для них не создаётся
 постоянный volume.
 
-Версия ядра фиксируется в `backend/go.mod`. Ядро v0.2.0 включает раздельные
+Версия ядра фиксируется в `backend/go.mod`. Ядро v0.3.0 включает раздельные
 кэши URL, ресурсов, конфигурации виджетов и опциональных результатов виджетов.
 
 Для smoke-проверок нужны Python 3; для `make check` — Go версии из `backend/go.mod`
@@ -154,7 +154,7 @@ DEPLOYMENT_TEST_PORT=28080 make test-deployment
 ```
 
 В CI выполняются `make check` и `make test-deployment`. Это проверяет реальную
-зависимость v0.2.0 без локальных подмен.
+зависимость v0.3.0 без локальных подмен.
 
 ## Логи и остановка
 
@@ -172,7 +172,7 @@ make down      # остановить, сохранив БД и файлы
 docker compose cp server:/app/var/log/cms.log ./cms.log
 ```
 
-Если сборка не может получить `go-cms-kernel@v0.2.0`, проверьте доступ к GitHub,
+Если сборка не может получить `go-cms-kernel@v0.3.0`, проверьте доступ к GitHub,
 `proxy.golang.org` и `sum.golang.org`. Ошибки `Repository not found` / HTTP 404
 означают, что исходники или тег недоступны; наличие локального ядра не заменяет
 проверку опубликованной зависимости.
@@ -189,7 +189,20 @@ Database adapters подключаются в `app.DatabaseDefinition.Adapters`,
 migrations/seeds — через публичные kernel providers. Не импортируйте `internal`
 другого репозитория.
 
-## Версия 0.2.0
+## Версия 0.3.0
+
+[Оптимизация запросов и результаты проверок](docs/read-optimizations-0.3.0.md).
+
+Ядро выполняет пакетную проверку разрешений одним SQL-запросом, получает версии
+LibraryItem вместе со страницей и параллельно загружает независимые разделы
+dashboard. Формат HTTP-ответов и правила доступа не изменились.
+
+Собственные реализации `security.Authorizer` должны поддерживать `Allowed`;
+access-репозитории — `Authorization` вместо `GroupAllowed`/`GuestAllowed`.
+Статистические репозитории должны поддерживать конкурентные вызовы и отмену
+контекста. Схема БД в этом выпуске не менялась.
+
+## Предыдущий выпуск 0.2.0
 
 [Исправления аудита и результаты проверок](docs/audit-fixes-0.2.0.md).
 
