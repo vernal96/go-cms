@@ -22,15 +22,24 @@ make up
 ```
 
 `make up` создаёт `.env` из `.env.example`, генерирует уникальные секреты, собирает backend, запускает PostgreSQL, Redis и Kafka
-и дожидается healthcheck. На новой базе автоматически применяются миграции и seed.
+и дожидается healthcheck. На новой базе автоматически применяются миграции и системные seeds с тегом `prod`; пользователи и демо-сайт не создаются.
 Ядро скачивается по версии из `backend/go.mod`; соседняя папка с ядром,
 `replace` и `go.work` не нужны.
 
 - API: `http://localhost:8080`.
 - Проверка запуска: `http://localhost:8080/healthz` → HTTP 200.
-- Dev-пользователь `admin` / `admin-dev-only-2026` создаётся только при явном `CMS_DEV_SEED=true`.
-- Для обычного запуска dev-seed выключен. `make env` создаёт уникальные секреты.
-- Первого администратора создайте командой `docker compose --env-file .env run --rm -e CMS_ADMIN_PASSWORD server bootstrap-admin`, предварительно задав `CMS_ADMIN_PASSWORD` в окружении. Логин и email можно задать через `-e CMS_ADMIN_LOGIN -e CMS_ADMIN_EMAIL`. Существующие аккаунты команда не перезаписывает.
+- Dev-пользователь `admin` / `admin-dev-only-2026` создаётся только при ручном запуске `console seeds up --tags=dev`.
+- `make env` создаёт уникальные секреты инфраструктуры и HTTP.
+- Первого администратора создайте вручную через команду Core:
+
+```sh
+docker compose --env-file .env run --rm --no-deps server console users create \
+  --login admin --email admin@example.test --name Administrator \
+  --group admin --generate-password
+```
+
+Сохраните сгенерированный пароль из JSON-результата. Вместо `--generate-password`
+можно передать пароль одной строкой через stdin. Команда не перезаписывает существующие аккаунты.
 
 Backend отдаёт API, а не HTML админки или готовую главную страницу сайта.
 Ответ 404 на `/` не означает сбой запуска: starter не создаёт главную страницу.
@@ -96,7 +105,13 @@ ADMIN_PORT=15173 ADMIN_API_TARGET=http://host.docker.internal:18080 docker compo
 
 ## Публичный сайт и dev-данные
 
-При `CMS_DEV_SEED=true` seed создаёт сайт `localhost` и пользователя в защищённой группе `admin`.
+Для локального демо вручную выполните:
+
+```sh
+docker compose --env-file .env run --rm --no-deps server console seeds up --tags=dev
+```
+
+Dev seed создаёт сайт `localhost` и пользователя в защищённой группе `admin`.
 Пароль пользователя задан в seed, **не в `.env`**. Изменить его можно в админке
 в разделе «Пользователи». Обычный повторный запуск не применяет seed заново
 и не сбрасывает изменённый пароль.
@@ -137,7 +152,8 @@ Compose использует внутренний адрес `redis:6379`; Redis
 (1.26.1 или новее) либо рабочая автоматическая загрузка Go toolchain.
 
 ```sh
-CMS_DEV_SEED=true make up # изолированное локальное демо для smoke
+make up
+docker compose --env-file .env run --rm --no-deps server console seeds up --tags=dev
 make smoke             # health, вход, API, отрицательные проверки доступа
 make check             # Go test/vet/build и Compose config
 make test-deployment   # чистая копия, новая БД/диски, запуск и проверка сохранности
@@ -145,7 +161,8 @@ make test-deployment   # чистая копия, новая БД/диски, з
 
 `make test-deployment` копирует текущие tracked и неигнорируемые новые файлы в
 временную директорию, использует отдельный Compose project и порт 18080,
-создаёт ресурс и файлы на обоих дисках, пересоздаёт контейнеры с сохранением
+проверяет отсутствие автоматических пользователей, ручное создание администратора
+и запуск dev seeds через консоль без JWT. Затем создаёт ресурс и файлы на обоих дисках, пересоздаёт контейнеры с сохранением
 volumes и проверяет записанные данные. После проверки удаляет только свой
 временный project, volumes и директорию. Порт можно изменить:
 
@@ -179,9 +196,12 @@ docker compose cp server:/app/var/log/cms.log ./cms.log
 
 ## Архитектура и расширение
 
-`backend/cmd/server/main.go` собирает `app.Definition` через публичные контракты
-ядра: Core/Admin, PostgreSQL adapter, localstorage, JWT и проектные seeds.
-`backend/internal` содержит только проектную конфигурацию/адаптеры.
+`backend/cmd/server/main.go` управляет процессом: сигналы, загрузка конфигурации,
+bootstrap, выбор HTTP или консоли и закрытие приложения. `internal/config` читает
+ENV, `internal/bootstrap` собирает приложение через `infrastructure`, `settings`
+и `profile`, а `internal/server` конфигурирует JWT и HTTP. Консоль использует
+команды kernel, включая Core `users create`. Подробности и defaults ENV —
+в [архитектуре запуска](docs/startup.md).
 Frontend не встраивается в Go binary и взаимодействует с backend через HTTP.
 
 Добавляйте модули в `kernel.Profile.Modules` после Core, явно указывая зависимости.
@@ -210,7 +230,7 @@ access-репозитории — `Authorization` вместо `GroupAllowed`/`G
 пересоздайте данные; сохранение старых схем в pre-production не поддерживается.
 Обновляйте backend и admin вместе. Ранее выданные JWT больше не являются сессиями.
 
-- `CMS_DEV_SEED=false` по умолчанию; для локального демо: `CMS_DEV_SEED=true make up`.
+- Dev seeds запускаются вручную через `server console seeds up --tags=dev`.
 - Kafka 4.3.1 входит в Compose и хранит данные в `kafka_data`; брокер доступен
   только во внутренней сети. Один брокер предназначен для разработки; для HA
   задайте внешний кластер через конфигурацию проекта.
@@ -225,4 +245,4 @@ access-репозитории — `Authorization` вместо `GroupAllowed`/`G
   недоверенные forwarded-заголовки. При reverse proxy учитывайте лимиты на его адрес.
 - Обработка изображений ограничена двумя параллельными операциями на приложение.
 
-`make test-deployment` явно включает dev-seed только на изолированном тестовом стенде.
+`make test-deployment` вручную применяет dev seeds только на изолированном тестовом стенде.

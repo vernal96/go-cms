@@ -10,9 +10,9 @@
 
 ## Dev seed
 
-Файлы [`backend/cmd/server/seeds/000001_starter.up.sql`](../backend/cmd/server/seeds/000001_starter.up.sql) и `000001_starter.down.sql` задают локальный сайт `localhost` и демо-пользователя `admin` с членством в защищённой группе `admin`. Seed включается только при `CMS_DEV_SEED=true`.
+Файлы [`backend/cmd/server/seeds/000001_starter.up.sql`](../backend/cmd/server/seeds/000001_starter.up.sql) и `000001_starter.down.sql` задают локальный сайт `localhost` и демо-пользователя `admin` с членством в защищённой группе `admin`. Seed всегда зарегистрирован с тегом `dev`, но применяется только вручную через `server console seeds up --tags=dev`.
 
-Если демо-данные не нужны, можно удалить эти SQL файлы или убрать ненужные записи из них. При этом проверьте `//go:embed seeds/*.sql` и передачу `SeedFiles` из `backend/cmd/server/main.go`, а также `SeedPlans` в `backend/internal/settings/settings.go`: проектный seed регистрируется только в режиме dev seed. Если удаляется весь seed, удалите связанную регистрацию/передачу файлов и описание dev-seed из README и deployment-документации. После изменения уже применённого seed на локальной базе пересоздайте dev-базу; этот seed не является механизмом обновления существующих данных.
+Если демо-данные не нужны, можно удалить эти SQL файлы или убрать ненужные записи из них. При этом проверьте `//go:embed seeds/*.sql` и передачу файлов из `backend/cmd/server/main.go` в bootstrap, а также `MainDatabase.Seeds` в `backend/internal/settings/settings.go`. Если удаляется весь seed, удалите связанную регистрацию/передачу файлов, ручной запуск в deployment-тесте и описание dev-seed из README и deployment-документации. После изменения уже применённого seed на локальной базе пересоздайте dev-базу; этот seed не является механизмом обновления существующих данных.
 
 ## Инфраструктура starter
 
@@ -24,5 +24,4 @@
 - **PostgreSQL/Core adapter** — не удалять из текущего starter: это основная база и хранилище обязательного Core.
 - **Argon2id** — не удалять, пока Core отвечает за учётные записи с паролями.
 
-Для каждого удалённого connector проверьте конфигурацию `backend/internal/settings`, переменные `.env.example`, сервисы и healthchecks в `compose.yaml`, Makefile, deployment docs и CI. Не оставляйте неиспользуемые переменные окружения и сервисы Compose.
-
+Для каждого удалённого connector проверьте значения в `backend/internal/config`, декларации `backend/internal/settings`, переменные `.env.example`, сервисы и healthchecks в `compose.yaml`, Makefile, deployment docs и CI. Не оставляйте неиспользуемые переменные окружения и сервисы Compose.

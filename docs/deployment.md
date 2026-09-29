@@ -10,25 +10,35 @@ cd go-cms
 make up
 ```
 
-`make up` создаёт `.env` из `.env.example`, генерирует уникальные секреты, собирает backend и запускает PostgreSQL, Redis и Kafka. Команда ждёт готовности сервисов. На новой базе применяются миграции. Dev seed по умолчанию выключен.
+`make up` создаёт `.env` из `.env.example`, генерирует уникальные секреты, собирает backend и запускает PostgreSQL, Redis и Kafka. Команда ждёт готовности сервисов. На новой базе применяются миграции и seeds с тегом `prod` (системные группы Core). Пользователи автоматически не создаются. Конфигурация и порядок запуска описаны в [архитектуре запуска](startup.md).
 
 Проверьте `http://localhost:8080/healthz` — ожидается HTTP 200. Backend предоставляет API; главная страница сайта не создаётся, поэтому ответ 404 на `/` сам по себе не означает ошибку.
 
-Создайте первого администратора, передав пароль через окружение:
+Создайте первого администратора вручную через команду Core:
 
 ```sh
-CMS_ADMIN_PASSWORD='замените-на-сильный-пароль' docker compose --env-file .env run --rm -e CMS_ADMIN_PASSWORD server bootstrap-admin
+docker compose --env-file .env run --rm --no-deps server console users create \
+  --login admin --email admin@example.test --name Administrator \
+  --group admin --generate-password
 ```
 
-При необходимости задайте `CMS_ADMIN_LOGIN` и `CMS_ADMIN_EMAIL` тем же способом. Команда не перезаписывает существующую учётную запись.
-
-Для изолированного локального демо можно включить dev seed:
+Сохраните пароль из поля `generated_password` JSON-результата. Логин, email и имя задаются флагами. Команда использует обычный доменный сервис и не перезаписывает существующую учётную запись. Чтобы использовать свой пароль, уберите `--generate-password` и передайте его одной строкой через stdin:
 
 ```sh
-CMS_DEV_SEED=true make up
+printf '%s\n' "$ADMIN_PASSWORD" | docker compose --env-file .env run --rm --no-deps -T \
+  server console users create --login admin --email admin@example.test \
+  --name Administrator --group admin
 ```
 
-Seed создаёт пользователя `admin` с паролем, зафиксированным в SQL seed. Используйте его только для локального демо; пароль можно изменить в админке в разделе пользователей. Обычный запуск seed не включает.
+`ADMIN_PASSWORD` здесь — переменная вашей оболочки для передачи stdin, а не настройка приложения.
+
+Для изолированного локального демо примените dev seeds вручную:
+
+```sh
+docker compose --env-file .env run --rm --no-deps server console seeds up --tags=dev
+```
+
+Seed создаёт сайт `localhost` и пользователя `admin` с паролем, зафиксированным в SQL seed. Используйте его только для локального демо; пароль можно изменить в админке в разделе пользователей. Обычный запуск не применяет dev-only seeds. Для пустого демо-стенда достаточно dev seeds; отдельно создавать первого администратора на нём не нужно.
 
 ## Админка
 
@@ -61,4 +71,3 @@ make up     # запустить снова
 ```
 
 Не используйте `docker compose down -v`, если нужно сохранить данные: эта команда удаляет volumes текущего Compose project. Параметры портов и независимых копий проекта описаны в разделе «Порты и независимые копии» файла [README](../README.md#порты-и-независимые-копии).
-

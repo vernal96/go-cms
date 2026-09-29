@@ -17,7 +17,6 @@ type Config struct {
 	LoggerPath     string
 	Infrastructure appkernel.Definition
 	Profiles       []kernel.Profile
-	DevSeed        bool
 	SeedFiles      fs.FS
 }
 
@@ -30,11 +29,9 @@ func (c Config) Definition() appkernel.Definition {
 	definition.MaxUploadSize = 100 << 20
 	definition.UploadTimeout = 10 * time.Minute
 	definition.AvatarMaxSize = 5 << 20
-	if c.DevSeed {
-		definition.MainDatabase.Seeds = []appkernel.ModuleSeedSource{{
-			Module: core.ModuleCode,
-			Source: seeds.Source{ID: "starter", Schema: "core", Tags: []seeds.Tag{"dev"}, FS: c.SeedFiles, Path: "seeds"},
-		}}
-	}
+	definition.MainDatabase.Seeds = []appkernel.ModuleSeedSource{{
+		Module: core.ModuleCode,
+		Source: seeds.Source{ID: "starter", Schema: "core", Tags: []seeds.Tag{"dev"}, FS: c.SeedFiles, Path: "seeds"},
+	}}
 	return definition
 }

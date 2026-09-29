@@ -20,4 +20,4 @@ else:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'w') as output:
         output.write(text)
-    print('Created .env with unique credentials; development seed is disabled')
+    print('Created .env with unique credentials; run development seeds manually through the console')
