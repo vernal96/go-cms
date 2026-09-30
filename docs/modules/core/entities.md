@@ -17,7 +17,7 @@
 Пример создания HTML-страницы (management-маршрут Core):
 
 ```http
-POST /sites/12/resources
+POST /api/sites/12/resources
 Content-Type: application/json
 
 {"type":"page","title":"О проекте","slug":"about","content_type":"html","content":"<p>Описание проекта</p>","fields":{},"type_settings":{}}

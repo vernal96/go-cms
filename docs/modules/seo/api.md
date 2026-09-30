@@ -4,11 +4,11 @@
 
 | Метод и путь | Назначение |
 | --- | --- |
-| `GET /sites/{siteID}/resources/{resourceID}/extensions/seo` | Чтение метаданных для редактора |
-| `PATCH /sites/{siteID}/resources/{resourceID}/extensions/seo` | Сохранение настроек |
-| `POST /sites/{siteID}/resources/{resourceID}/extensions/seo/preview` | Preview вычисленных метаданных и warnings |
+| `GET /api/sites/{siteID}/resources/{resourceID}/extensions/seo` | Чтение метаданных для редактора |
+| `PATCH /api/sites/{siteID}/resources/{resourceID}/extensions/seo` | Сохранение настроек |
+| `POST /api/sites/{siteID}/resources/{resourceID}/extensions/seo/preview` | Preview вычисленных метаданных и warnings |
 
-Path-параметры `siteID` и `resourceID` — положительные ID; код расширения фиксирован как `seo`, дополнительных query-параметров маршруты не принимают. `PATCH` и `POST .../preview` принимают JSON с полями:
+Path-параметры `siteID` и `resourceID` — положительные ID; код расширения фиксирован как `seo`, дополнительных query-параметров маршруты не принимают. `PATCH` и `POST /api/sites/{siteID}/resources/{resourceID}/extensions/seo/preview` принимают JSON с полями:
 
 | Поле | Назначение |
 | --- | --- |

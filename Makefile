@@ -12,7 +12,7 @@ up: build
 	$(COMPOSE) up --detach --wait --wait-timeout $(WAIT_TIMEOUT)
 	@server_port=$${SERVER_PORT:-$$(sed -n 's/^SERVER_PORT=//p' .env | tail -n 1)}; \
 	server_port=$${server_port:-8080}; \
-	printf '\nGo CMS Start is ready.\n  API: http://localhost:%s\n' "$$server_port"
+	printf '\nGo CMS Start is ready.\n  API: http://localhost:%s/api\n' "$$server_port"
 
 env:
 	python3 scripts/init-env.py

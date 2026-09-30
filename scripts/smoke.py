@@ -60,8 +60,12 @@ def main():
         request(path, token=token)
     request("/api/admin/session", expected=401)
     request("/api/files/disks", expected=401)
+    for path in ["/api/site", "/api/menu", "/api/_cms/runtime"]:
+        request(path, token=token)
+    for path in ["/site", "/menu", "/search", "/forms/feedback", "/_cms/runtime", "/api/api/site"]:
+        request(path, expected=404)
     if not (args.exercise or args.verify):
-        print("PASS CMS smoke: health, login, admin session, navigation, sites and disks")
+        print("PASS CMS smoke: health, login, admin, public API prefix and removed routes")
         return
     if args.exercise:
         sites = request("/api/sites", token=token)["items"]
@@ -87,9 +91,10 @@ def main():
     resource = request(f'/api/sites/{state["site_id"]}/resources/{state["resource_id"]}', token=token)["resource"]
     if resource["title"] != state["name"]:
         raise RuntimeError("resource did not survive restart")
-    request("/" + state["name"], token=token)
+    request("/api/" + state["name"], token=token)
     # The starter deliberately requires explicit guest grants for public content.
-    request("/" + state["name"], expected=403)
+    request("/api/" + state["name"], expected=403)
+    request("/" + state["name"], expected=404)
     for item in state["files"]:
         path = f'/api/files/{item["id"]}/download'
         if request(path, token=token) != item["content"].encode():

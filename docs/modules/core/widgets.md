@@ -11,7 +11,7 @@ Core регистрирует три базовых контентных вид�
 Создание привязки выполняется через management API:
 
 ```http
-POST /sites/12/resources/34/widgets
+POST /api/sites/12/resources/34/widgets
 Content-Type: application/json
 
 {"code":"resource_list","area":"main","view":"default","columns":12,"params":{"parent_mode":"root","limit":10,"fields":["resource.title","resource.path"]}}

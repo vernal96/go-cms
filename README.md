@@ -26,8 +26,9 @@ make up
 Ядро скачивается по версии из `backend/go.mod`; соседняя папка с ядром,
 `replace` и `go.work` не нужны.
 
-- API: `http://localhost:8080`.
+- API: `http://localhost:8080/api`.
 - Проверка запуска: `http://localhost:8080/healthz` → HTTP 200.
+- [Адреса HTTP API](docs/http-api.md): публичные и административные маршруты, пути ресурсов и исключения.
 - Dev-пользователь `admin` / `admin-dev-only-2026` создаётся только при ручном запуске `console seeds up --tags=dev`.
 - `make env` создаёт уникальные секреты инфраструктуры и HTTP.
 - Первого администратора создайте вручную через команду Core:
