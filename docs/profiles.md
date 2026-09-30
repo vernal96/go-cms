@@ -50,27 +50,27 @@
 
 `Profile.Params` задаёт поля настроек сайта для всех сайтов, использующих профиль. Это именно параметры сайта, сохраняемые в `core.sites.settings`; это не поля контентных ресурсов (они объявляются в шаблонах ресурсов).
 
-Тип поля указывается через `field.Definition`. В `backend/go.mod` закреплена версия kernel `v0.3.0`; стандартные типы регистрирует модуль `core`:
+Тип поля указывается через `field.Definition`; стандартные типы регистрирует модуль `core`. Примеры `Validators` ниже относятся к текущему исходному коду kernel после `v0.3.0`. В `backend/go.mod` пока закреплена опубликованная `v0.3.0`; до выпуска новой версии проверяйте совместимость исходников через временный Go workspace с соседним kernel. Для обычного развёртывания требуется публикация согласованной версии kernel:
 
 | Код типа | Назначение | Опции |
 | --- | --- | --- |
-| `field.TypeString` (`string`) | Однострочный текст | `field.StringOptions`: `Multiple`, `MinItems`, `MaxItems` |
-| `field.TypeTextarea` (`textarea`) | Многострочный текст | `field.StringOptions`: `Multiple`, `MinItems`, `MaxItems` |
-| `field.TypeInteger` (`int`) | Целое число | `field.IntegerOptions`: `Step`, `Multiple`, `MinItems`, `MaxItems` |
-| `field.TypeFloat` (`float`) | Дробное число | `field.FloatOptions`: `Step`, `Multiple`, `MinItems`, `MaxItems` |
+| `field.TypeString` (`string`) | Однострочный текст | `field.StringOptions`: `Multiple` |
+| `field.TypeTextarea` (`textarea`) | Многострочный текст | `field.StringOptions`: `Multiple` |
+| `field.TypeInteger` (`int`) | Целое число | `field.IntegerOptions`: `Step`, `Multiple` |
+| `field.TypeFloat` (`float`) | Дробное число | `field.FloatOptions`: `Step`, `Multiple` |
 | `field.TypeCheckbox` (`checkbox`) | Логический флаг | Нет |
 | `field.TypeRadio` (`radio`) | Выбор одного значения из вариантов | `field.RadioOptions{Choices: []field.Choice{...}}` |
-| `field.TypeSelect` (`select`) | Выбор из списка; может быть множественным | `field.SelectOptions`: `Choices`, `Multiple`, `MinItems`, `MaxItems` |
-| `field.TypeEmail` (`email`) | Строка с проверкой формата email | `field.StringOptions`: `Multiple`, `MinItems`, `MaxItems` |
-| `field.TypePhone` (`phone`) | Телефон | `field.PhoneOptions`: `Pattern`, `Multiple`, `MinItems`, `MaxItems` |
-| `field.TypeFile` (`file`) | Ссылка на файл | `field.FileOptions`: `Storages`, `MIMETypes`, `Multiple`, `MinItems`, `MaxItems` |
-| `field.TypeMedia` (`media`) | Медиа, в текущей реализации — изображение | `field.MediaOptions`: `Multiple`, `MinItems`, `MaxItems`, `SettingsCode` |
+| `field.TypeSelect` (`select`) | Выбор из списка; может быть множественным | `field.SelectOptions`: `Choices`, `Multiple` |
+| `field.TypeEmail` (`email`) | Строка с проверкой формата email | `field.StringOptions`: `Multiple` |
+| `field.TypePhone` (`phone`) | Телефон | `field.PhoneOptions`: `Multiple` |
+| `field.TypeFile` (`file`) | Ссылка на файл | `field.FileOptions`: `Storages`, `MIMETypes`, `Multiple` |
+| `field.TypeMedia` (`media`) | Медиа, в текущей реализации — изображение | `field.MediaOptions`: `Multiple`, `SettingsCode` |
 | `field.TypeJSON` (`json`) | Структурированный JSON-объект или массив | Нет |
 | `field.TypeRepeater` (`repeater`) | Упорядоченный список групп вложенных полей | `field.RepeaterOptions{Fields: []field.Definition{...}}` |
 
-`Multiple` включает список значений там, где тип его поддерживает; `MinItems` и `MaxItems` ограничивают его размер, причём `MaxItems: 0` означает отсутствие верхнего ограничения. `Choices` задаёт пары стабильных значений `Value` и отображаемых подписей `Label`. Для файла можно ограничить допустимые коды хранилищ и MIME-типы, например `image/*`. Для телефона `Pattern` задаёт дополнительный шаблон. `Step` задаёт шаг числового редактора.
+`Multiple` включает список значений там, где тип его поддерживает; число элементов ограничивают валидаторы `validation.MinItems` и `validation.MaxItems`. `Choices` задаёт пары стабильных значений `Value` и отображаемых подписей `Label`. Для файла можно ограничить допустимые коды хранилищ и MIME-типы, например `image/*`. Для телефона формат E.164 проверяется самим типом; дополнительный шаблон задают `validation.Regex`. `Step` задаёт шаг числового редактора.
 
-У определения также есть общие свойства: `Key` — уникальный ключ параметра, `Label` — подпись, `Required` — указатель на bool для явного включения или выключения обязательности, `Rules` — дополнительные правила валидатора, `Public` — разрешение включить значение в публичные данные сайта, `Editor` — код редактора, а `VisibleWhen` — простое условие показа относительно другого поля. `Editor` меняет представление в админке, но не тип и правила хранения значения.
+У определения также есть общие свойства: `Key` — уникальный ключ параметра, `Label` — подпись, `Required` — указатель на bool для явного включения или выключения обязательности, `Validators` — список типизированных дополнительных проверок, `Public` — разрешение включить значение в публичные данные сайта, `Editor` — код редактора, а `VisibleWhen` — простое условие показа относительно другого поля. `Editor` меняет представление в админке, но не тип и правила хранения значения.
 
 ### Как добавить поля в профиль
 
@@ -85,6 +85,7 @@ import (
 	"github.com/vernal96/go-cms-kernel/modules/admin"
 	"github.com/vernal96/go-cms-kernel/modules/core"
 	"github.com/vernal96/go-cms-kernel/modules/core/field"
+	"github.com/vernal96/go-cms-kernel/modules/core/field/validation"
 )
 
 var editorialRequired = true
@@ -101,7 +102,7 @@ var editorialParams = []field.Definition{
 	{
 		Key: "office_phone", Type: field.TypePhone,
 		Label: "Телефон приёмной",
-		Options: field.PhoneOptions{Pattern: `^\+7`},
+		Validators: []field.ValidatorDefinition{validation.Regex(`^\+7`)},
 	},
 }
 

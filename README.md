@@ -2,7 +2,8 @@
 
 Документация проекта: [развертывание с нуля](docs/deployment.md),
 [удаление пресетных элементов](docs/removing-presets.md),
-[работа с профилями](docs/profiles.md). Полный список — в [навигации по документации](docs/README.md).
+[работа с профилями](docs/profiles.md),
+[проверки полей](docs/modules/core/fields.md). Полный список — в [навигации по документации](docs/README.md).
 
 Минимальный backend на Go с отдельной зависимостью
 [`go-cms-kernel v0.3.0`](https://github.com/vernal96/go-cms-kernel).

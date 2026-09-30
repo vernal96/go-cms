@@ -19,7 +19,7 @@ Content-Type: application/json
 {"values":{"name":"Анна","message":"Здравствуйте"}}
 ```
 
-Для загрузки используйте `multipart/form-data`: обычные поля передаются как значения с ключами-кодами полей, файлы — как части запроса с именем поля формы. Валидируются типы значений, обязательность, правила, согласие, CAPTCHA и ограничения публичной конфигурации. CAPTCHAs и uploads не возвращаются как обычные публичные колонки результатов.
+Для загрузки используйте `multipart/form-data`: обычные поля передаются как значения с ключами-кодами полей, файлы — как части запроса с именем поля формы. Валидируются типы значений, обязательность, валидаторы, согласие, CAPTCHA и ограничения публичной конфигурации. CAPTCHAs и uploads не возвращаются как обычные публичные колонки результатов.
 
 `GET /api/forms/{code}/results` принимает query-параметры `page` (по умолчанию `1`) и `per_page` (по умолчанию `20`, не более `100`). Оба значения должны быть положительными целыми числами; повторяющийся одноимённый параметр отклоняется.
 
@@ -38,10 +38,12 @@ Contribution монтируется на `/api/sites/{siteID}/forms`, а handler
 - `form_id`, `status_id` — необязательные положительные ID-фильтры.
 - `date_from`, `date_to` — необязательные даты RFC3339, например `2026-09-01T00:00:00Z`.
 
+Ответ редактора `GET /api/sites/{siteID}/forms/forms/{formID}/editor` содержит `available_validator_types`: каталог валидаторов текущего профиля сайта. Каждая запись содержит код, подпись, описание опций и применимость. Значение `validators` — упорядоченный массив объектов `{"type":"max_length","options":{"value":100}}`. Публичный ответ при нарушении конфигурируемого валидатора включает путь поля и объекты `{key, code, params}` в `fields`; специальные ошибки Forms сохраняют собственные коды.
+
 ### Тела запросов
 
 - Создание/изменение формы: `code`, `name`, `description`, `enabled`.
-- Создание/изменение поля: `code`, `type`, `label`, `required`, `rules`, `options`, `editor`, `visible_when`, `result_label`, `show_on_site`, `show_in_results`, `result_position`. При создании также указываются `parent_id` (ID layout-контейнера или `null` для корня) и `position` (позиция среди соседей).
+- Создание/изменение поля: `code`, `type`, `label`, `required`, `validators`, `options`, `editor`, `visible_when`, `result_label`, `show_on_site`, `show_in_results`, `result_position`. При создании также указываются `parent_id` (ID layout-контейнера или `null` для корня) и `position` (позиция среди соседей).
 - Создание/изменение элемента: `code`, `type`, `config`; при создании — также `parent_id` и `position` для размещения.
 - Создание контейнера: `parent_id`, `container_type` (`group` или `slide`), `position`, `config`. Замена layout: `nodes` — полный массив новых layout nodes.
 - Создание/изменение статуса: `code`, `name`, `color`, `position`, `is_default`.

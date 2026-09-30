@@ -34,7 +34,7 @@ Do not mix Library configuration such as URL patterns/default templates into `Fi
 
 ## Reuse current field validation
 
-Keep the current field `Definition`, `Type`, `ValueType`, schema compilation and validation model unless a concrete deficiency requires change.
+Use `Definition.Validators` for configurable constraints; resolve module-contributed types from the site runtime and compile them with the field schema. Keep intrinsic type normalization and validation in `ValueType`, and `Required` in the schema. Do not reintroduce string `Rules` or pure validation constraints in structural options.
 
 The normal write flow remains conceptually:
 
