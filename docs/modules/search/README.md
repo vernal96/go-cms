@@ -1,0 +1,5 @@
+# Search
+
+`search` добавляет публичный endpoint поиска по ресурсам сайта. Зависит от `core`, в Starter не включён.
+
+См. [модель и правила поиска](entities.md), [HTTP API](api.md), [виджеты](widgets.md). Нужен зарегистрированный `search.Engine`; kernel включает PostgreSQL-адаптер.
