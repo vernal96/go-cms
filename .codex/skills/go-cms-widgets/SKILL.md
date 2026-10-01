@@ -1,6 +1,6 @@
 ---
 name: go-cms-widgets
-description: Use for GO CMS widget definitions/references, module widget providers, template/resource widget composition, body/sidebar layout, widget views/presentation, widget persistence/admin editing, or public widget rendering.
+description: Use for GO CMS widget definitions/references, module widget providers, template/resource widget composition, dynamic area layout, widget views/presentation, widget persistence/admin editing, or public widget rendering.
 ---
 
 # GO CMS Widgets
@@ -38,11 +38,11 @@ A reusable widget reference is not the site-scoped runtime implementation. Modul
 
 ## Layout composition
 
-MVP areas are exactly `body` and `sidebar`; area is placement, not widget type.
+Areas are an ordered `template.Layout` of `template.Area` declarations with Code, Label and AdminSpan. Area is placement, not widget type. `default` is reserved for the implicit/recovery container.
 
-Templates may contain static typed widgets and an explicit resource-widget slot. Replace the slot in place so ordering is preserved; do not append resource widgets blindly. For MVP allow at most one resource-widget slot per area.
+Templates may contain static typed widgets and an explicit resource-widget slot. Replace the slot in place so ordering is preserved; do not append resource widgets blindly. Allow at most one resource-widget slot per area; nil Items implies a slot, explicitly empty Items does not.
 
-Show resource widget editing only when the chosen template contains a resource-widget slot, and expose supported areas through backend metadata rather than frontend template-name hard-coding.
+Expose declared areas and their editability through backend metadata. Without declarations, provide default. Recover bindings from missing/non-editable areas in default without rewriting their stored codes; restoring the area restores untouched bindings.
 
 ## Views, params and presentation
 
@@ -76,7 +76,7 @@ Reuse resource-update authorization unless a separate permission model is explic
 
 Backend metadata should let the editor work without hard-coded module/widget knowledge: widget/module labels, fields, editor/summary metadata, available views and supported areas.
 
-The editor may provide body/sidebar lists, add/edit/delete/reorder/move, module grouping/search, dynamic fields and common presentation controls. Use the frontend UI stack already present in the repository; do not add another framework for widget controls without an explicit request.
+The editor provides dynamic area lists, add/edit/delete/reorder/move, module grouping/search, dynamic fields and common presentation controls. Use the frontend UI stack already present in the repository; do not add another framework for widget controls without an explicit request.
 
 ## Public rendering
 
@@ -86,14 +86,14 @@ Keep the pipeline conceptually:
 resolve prebuilt SiteRuntime
  -> resource/template
  -> compose template items + resource bindings
- -> body/sidebar placements
+ -> dynamic area placements
  -> resolve widget runtime
  -> normalize/validate params + presentation
  -> Render(ctx, site/resource snapshots)
- -> public body/sidebar output
+ -> public area-code-to-widget-array output
 ```
 
-Return body/sidebar separately. Include stable frontend-useful widget identity/presentation metadata; do not leak raw params unless the widget deliberately renders them as data. Disabled resource widgets remain persisted/editable but are omitted from public rendering.
+Return an object keyed by dynamic area codes, without container labels or admin widths. Include stable frontend-useful widget identity/presentation metadata; do not leak raw params unless the widget deliberately renders them as data. Disabled resource widgets remain persisted/editable but are omitted from public rendering.
 
 Preserve per-widget failure isolation when already supported so one broken widget does not unnecessarily fail the whole page.
 
