@@ -1,13 +1,13 @@
 # Работа с профилями
 
-Профиль описывает набор модулей приложения и их bindings. В этом проекте профиль `starter` объявлен переменной `profile.Starter` в [`backend/internal/profile/starter.go`](../backend/internal/profile/starter.go), а `backend/internal/settings/settings.go` передаёт его в декларацию приложения. Сайты ссылаются на профиль по `profile_code`; текущий seed создаёт сайт с кодом `starter`.
+Профиль описывает набор модулей приложения и их bindings. Каждый профиль находится в отдельном пакете `backend/internal/profiles/<name>`: профиль `starter` объявлен как `starter.Profile` в [`backend/internal/profiles/starter/profile.go`](../backend/internal/profiles/starter/profile.go). Bootstrap передаёт подключённые профили в декларацию приложения. Сайты ссылаются на профиль по `profile_code`; текущий seed создаёт сайт с кодом `starter`.
 
 ## Создание профиля
 
-1. Добавьте декларацию в `backend/internal/profile`, например `editorial.go`:
+1. Создайте пакет `backend/internal/profiles/editorial` и объявите профиль в `profile.go`:
 
    ```go
-   package profile
+   package editorial
 
    import (
        kernel "github.com/vernal96/go-cms-kernel"
@@ -16,7 +16,7 @@
        "github.com/vernal96/go-cms-kernel/modules/core"
    )
 
-   var Editorial = kernel.Profile{
+   var Profile = kernel.Profile{
        Code: "editorial",
        Name: "Editorial",
        Modules: []kernel.ProfileModule{
@@ -31,16 +31,16 @@
 
    `Code` должен быть уникальным и стабильным: по нему сайты выбирают профиль.
 2. Добавьте модули в нужном порядке. `core` обязателен и должен быть первым; `admin` также обязателен. Для остальных модулей явно задавайте зависимости и используйте их bindings (например, cache aliases).
-3. Передайте профиль в `Profiles` при создании `settings.Config` в `backend/internal/bootstrap/bootstrap.go`. Поле уже принимает список `[]kernel.Profile`; например, чтобы подключить новый `profile.Editorial`, добавьте его к существующим профилям:
+3. Передайте профиль в `Profiles` в `backend/internal/bootstrap/bootstrap.go`. Например, импортируйте пакет и добавьте `editorial.Profile` к существующим профилям:
 
    ```go
    Profiles: []kernel.Profile{
-       profile.Starter,
-       profile.Editorial,
+       starter.Profile,
+       editorial.Profile,
    },
    ```
 
-   `settings.Config.Definition()` передаёт этот список в `appkernel.Definition.Profiles`. При добавлении следующего профиля менять `settings.go` не нужно.
+   `settings.Config.Definition()` передаёт этот список в `app.Definition.Profiles`.
 4. Убедитесь, что каждый модуль имеет требуемые database adapters, инфраструктурные bindings, migrations и seeds в проектных декларациях `backend/internal/infrastructure` и `backend/internal/settings`. Bootstrap объединяет их; профиль только перечисляет модули и не создаёт эти зависимости автоматически.
 5. Для нового сайта укажите `profile_code`, совпадающий с `Profile.Code`. Если сайт создаётся проектным seed, обновите seed отдельно.
 
@@ -74,10 +74,10 @@
 
 ### Как добавить поля в профиль
 
-Добавьте определения в `Params` конкретного `kernel.Profile`. Для группировки используйте `EditorTabs`: как и у шаблонов ресурсов, это список `field.EditorTab` со ссылками на ключи полей. Ниже полный вариант профиля `Editorial` из раздела «Создание профиля» с тремя полями и двумя табами. Замените им предыдущую декларацию в `backend/internal/profile/editorial.go`, не создавая вторую переменную `Editorial`:
+Добавьте определения в `Params` конкретного `kernel.Profile`. Для группировки используйте `EditorTabs`: это список `field.EditorTab` со ссылками на ключи полей. Ниже полный вариант профиля `Editorial` из раздела «Создание профиля» с тремя полями и двумя табами; поместите его в `backend/internal/profiles/editorial/profile.go`:
 
 ```go
-package profile
+package editorial
 
 import (
 	kernel "github.com/vernal96/go-cms-kernel"
@@ -106,7 +106,7 @@ var editorialParams = []field.Definition{
 	},
 }
 
-var Editorial = kernel.Profile{
+var Profile = kernel.Profile{
 	Code: "editorial",
 	Name: "Editorial",
 	Modules: []kernel.ProfileModule{
@@ -130,7 +130,7 @@ var Editorial = kernel.Profile{
 }
 ```
 
-Этот пример использует хранилище кэша `shared`, объявленное в инфраструктуре starter. Подключите `profile.Editorial` к списку `Profiles`, как показано выше, и пересоберите и перезапустите backend (`make up` при запуске через Compose). В админке выберите этот профиль для сайта: таб «Основное» содержит название организации, а «Контакты» — email и телефон.
+Этот пример использует хранилище кэша `shared`, объявленное в инфраструктуре приложения. Подключите `editorial.Profile` к списку `Profiles`, как показано выше, и пересоберите и перезапустите backend (`make up` при запуске через Compose). В админке выберите этот профиль для сайта: таб «Основное» содержит название организации, а «Контакты» — email и телефон.
 
 При добавлении определений:
 
@@ -163,7 +163,7 @@ var Editorial = kernel.Profile{
 
 ## Изменение профиля
 
-Изменяйте декларацию профиля в `backend/internal/profile`, сохраняя уникальный код и обязательные модули. Добавляя модуль, проверьте порядок зависимостей и добавьте нужные адаптеры/миграции в композицию проекта. Изменение набора модулей может менять доступные API и поведение сайтов с этим профилем.
+Изменяйте декларацию профиля в его пакете `backend/internal/profiles/<name>`, сохраняя уникальный код и обязательные модули. Добавляя модуль, проверьте порядок зависимостей и добавьте нужные адаптеры/миграции в композицию проекта. Изменение набора модулей может менять доступные API и поведение сайтов с этим профилем.
 
 `Profile.Code` — идентификатор, на который ссылаются сайты (`core.sites.profile_code`). Переименование кода — это изменение данных и конфигурации: согласованно обновите декларацию, seed-данные и ссылки сайтов. В pre-production базе проекта допустимо пересоздать данные; не оставляйте сайты со старым неизвестным кодом.
 

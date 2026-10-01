@@ -14,7 +14,7 @@ import (
 	"github.com/vernal96/go-cms-kernel/migrations"
 	"github.com/vernal96/go-cms-kernel/seeds"
 	"github.com/vernal96/go-cms/internal/config"
-	"github.com/vernal96/go-cms/internal/profile"
+	"github.com/vernal96/go-cms/internal/profiles/starter"
 	"github.com/vernal96/go-cms/internal/settings"
 )
 
@@ -35,7 +35,7 @@ func New(ctx context.Context, cfg config.Config, seedFiles fs.FS, mode Mode) (*a
 	definition := settings.Config{
 		LoggerPath:     cfg.LoggerPath,
 		Infrastructure: cfg.Infrastructure.Definition(),
-		Profiles:       []kernel.Profile{profile.Starter},
+		Profiles:       []kernel.Profile{starter.Profile},
 		SeedFiles:      seedFiles,
 	}.Definition()
 	application, err := app.New(ctx, definition)

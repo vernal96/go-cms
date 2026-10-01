@@ -18,8 +18,8 @@ cmd/server → config → bootstrap → kernel App
   public/private localstorage, Argon2id и database adapters модулей.
 - `internal/settings`: проектные настройки `app.Definition`, logger factory,
   параметры загрузок и аватаров, регистрация проектного seed.
-- `internal/profile`: декларации профилей и bindings модулей. Список подключённых
-  профилей передаётся в `settings.Config` из bootstrap.
+- `internal/profiles/<name>`: декларации профилей и bindings модулей. Bootstrap
+  передаёт выбранный список профилей в `settings.Config`.
 - `internal/platform`: проектная logger factory с созданием каталога для файла.
 - `internal/bootstrap`: объединение деклараций и `app.New`, установка default
   `slog`, инициализация для выбранного режима и cleanup при ошибке.

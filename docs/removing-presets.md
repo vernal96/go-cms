@@ -4,7 +4,7 @@
 
 ## Модули профиля
 
-Сейчас профиль `starter` объявлен в [`backend/internal/profile/starter.go`](../backend/internal/profile/starter.go): он включает `core` и `admin`, а также привязывает кэш aliases Core (`core.durable` и `core.hot`) к хранилищу `shared`.
+Сейчас профиль `starter` объявлен в [`backend/internal/profiles/starter/profile.go`](../backend/internal/profiles/starter/profile.go): он включает `core` и `admin`, а также привязывает кэш aliases Core (`core.durable` и `core.hot`) к хранилищу `shared`.
 
 Удалять из состава профиля можно только дополнительные, необязательные модули, которые проект добавит позже. При удалении также уберите их зависимости, адаптеры, миграции/seeds и frontend/API ожидания. Core должен оставаться первым, Admin обязателен. Не удаляйте используемые Core cache bindings, пока не проверили, что Core может работать без них.
 
