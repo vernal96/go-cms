@@ -1,9 +1,9 @@
 # Go CMS Start
 
-Документация проекта: [развертывание с нуля](docs/deployment.md),
-[удаление пресетных элементов](docs/removing-presets.md),
-[работа с профилями](docs/profiles.md),
-[проверки полей](docs/modules/core/fields.md). Полный список — в [навигации по документации](docs/README.md).
+Документация проекта: [развертывание с нуля](https://github.com/vernal96/go-cms-kernel/blob/main/docs/deployment.md),
+[удаление пресетных элементов](https://github.com/vernal96/go-cms-kernel/blob/main/docs/removing-presets.md),
+[работа с профилями](https://github.com/vernal96/go-cms-kernel/blob/main/docs/profiles.md),
+[проверки полей](https://github.com/vernal96/go-cms-kernel/blob/main/docs/modules/core/fields.md). Полный список — в [навигации по документации](https://github.com/vernal96/go-cms-kernel/blob/main/docs/README.md).
 
 Минимальный backend на Go с отдельной зависимостью
 [`go-cms-kernel v0.4.0`](https://github.com/vernal96/go-cms-kernel).
@@ -29,7 +29,7 @@ make up
 
 - API: `http://localhost:8080/api`.
 - Проверка запуска: `http://localhost:8080/healthz` → HTTP 200.
-- [Адреса HTTP API](docs/http-api.md): публичные и административные маршруты, пути ресурсов и исключения.
+- [Адреса HTTP API](https://github.com/vernal96/go-cms-kernel/blob/main/docs/http-api.md): публичные и административные маршруты, пути ресурсов и исключения.
 - Dev-пользователь `admin` / `admin-dev-only-2026` создаётся только при ручном запуске `console seeds up --tags=dev`.
 - `make env` создаёт уникальные секреты инфраструктуры и HTTP.
 - Первого администратора создайте вручную через команду Core:
@@ -205,7 +205,7 @@ bootstrap, выбор HTTP или консоли и закрытие прило�
 ENV, `internal/bootstrap` собирает приложение через `infrastructure`, `settings`
 и `profile`, а `internal/server` конфигурирует JWT и HTTP. Консоль использует
 команды kernel, включая Core `users create`. Подробности и defaults ENV —
-в [архитектуре запуска](docs/startup.md).
+в [архитектуре запуска](https://github.com/vernal96/go-cms-kernel/blob/main/docs/startup.md).
 Frontend не встраивается в Go binary и взаимодействует с backend через HTTP.
 
 Добавляйте модули в `kernel.Profile.Modules` после Core, явно указывая зависимости.
@@ -214,8 +214,6 @@ migrations/seeds — через публичные kernel providers. Не имп
 другого репозитория.
 
 ## Версия 0.3.0
-
-[Оптимизация запросов и результаты проверок](docs/read-optimizations-0.3.0.md).
 
 Ядро выполняет пакетную проверку разрешений одним SQL-запросом, получает версии
 LibraryItem вместе со страницей и параллельно загружает независимые разделы
@@ -227,8 +225,6 @@ access-репозитории — `Authorization` вместо `GroupAllowed`/`G
 контекста. Схема БД в этом выпуске не менялась.
 
 ## Предыдущий выпуск 0.2.0
-
-[Исправления аудита и результаты проверок](docs/audit-fixes-0.2.0.md).
 
 Этот выпуск меняет схему dev-БД и контракт авторизации. Для старого dev-стенда
 пересоздайте данные; сохранение старых схем в pre-production не поддерживается.
