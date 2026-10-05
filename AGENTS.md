@@ -38,7 +38,7 @@ For a non-trivial new feature, architecture change, cross-cutting refactor, or m
 1. Inspect the relevant current implementation first.
 2. Resolve everything that can be answered from the repository without asking the user.
 3. Identify only decisions that materially affect behavior, architecture, public APIs, persistence, authorization, lifecycle, compatibility, performance, or UX.
-4. If material ambiguity remains, load `go-cms-requirements` and ask focused clarification questions before editing code.
+4. If material ambiguity remains, ask focused clarification questions before editing code. When the task spans `go-cms-kernel`, use the canonical `go-cms-requirements` skill from that repository.
 5. Recommend a default when there is a clear preferred option and briefly explain the trade-off.
 6. After the answers, restate the resolved goal, important constraints, chosen approach, and any explicit assumptions.
 7. Implement only when no material product/architecture decision remains unresolved.
@@ -88,29 +88,10 @@ Validate narrowly while iterating and broadly only when justified.
 
 ## Skill routing
 
-Use the smallest set of skills that covers the actual task. A workflow skill such as `go-cms-requirements` may be combined with the relevant domain skill. A second domain/cross-cutting skill is justified only when both sets of invariants are materially involved.
-
-- `go-cms-requirements`: requirement discovery/clarification before non-trivial or ambiguous feature/architecture work.
-- `go-cms-development`: cross-package backend architecture or reusable extension/composition work.
-- `go-cms-runtime-integrity`: SiteRuntime/ProfileBlueprint/reload/publication/runtime cache-coherence work.
-- `go-cms-cache`: cache contracts, stores, module cache aliases, cache keys/tags, TTL, invalidation/coherence, Remember/result caching, cache connectors or cache maintenance.
-- `go-cms-filesystem`: filesystem disks/drivers, disk code/label/visibility, project disk declarations, module filesystem aliases/bindings, CMS files/folders, local/S3 connectors, FileExplorer/file picker and storage-selection behavior.
-- `go-cms-images`: image/media processing, image editor transforms, persistent edited derivatives, restore-to-original behavior, thumbnails, thumbnail cache/delivery, FileExplorer image previews and deletion semantics for derivative image trees.
-- `go-cms-events-jobs`: domain events, transactional outbox, EventBus publishing/consumption, application background workers/jobs, retries, delivery semantics and idempotency.
-- `go-cms-templating`: reusable `{{...}}` interpolation, variable allowlists/resolvers, context-aware rendering/escaping and migration of feature-specific template engines such as SEO to shared kernel templating.
-- `go-cms-mail`: mail templates, manual/automatic sending, preview/render snapshots, SMTP/null/log transports, mail jobs, attachments, delivery attempts/history, retention, permissions and mail admin UI/API.
-- `go-cms-forms`: site-owned forms, form fields/elements/layout trees, public submission, results/values/statuses, triggers/actions/action executions, CAPTCHA/consent/upload fields, transient submission spool, Mail actions and Forms admin UI/API.
-- `go-cms-architecture-review`: architecture/refactor/PR/commit review.
-- `go-cms-admin-ui`: backend-driven admin extensibility/navigation/frontend plugin work.
-- `go-cms-administration`: global system administration reserved for the protected built-in `admin` group, including administration navigation/pages, destructive maintenance and global cleanup operations.
-- `go-cms-api`: HTTP API contracts, CRUD endpoint design, DTOs, validation, pagination/filter/sort, transport errors, site context and API-layer authorization wiring.
-- `go-cms-authorization`: groups/roles/permissions, site-scoped access, create/view/edit/delete rules, authorizer contracts, permission composition and enforcement boundaries.
-- `go-cms-widgets`: widget definitions, layouts, persistence, editing or rendering.
-- `go-cms-resources`: resource types/tree/identity, Library/LibraryItem architecture, resource paths/routing, storage/lifecycle/moves or resource admin capabilities.
-- `go-cms-resource-revisions`: resource version counters, immutable revision snapshots, optimistic locking, restore/rollback, revision authors, revision persistence and purge/retention behavior.
-- `go-cms-resource-fields`: template/resource field values, typed persistence, filtering/sorting/indexing, storage kinds or migration away from JSONB resource settings.
-
-For a focused local bug fix or routine CRUD change whose architecture and API contract are already established, root/backend instructions plus the affected code are normally enough.
+- `go-cms-code-style` is the local Go style skill for this project repository. Load it whenever a task materially writes, refactors, or reviews Go code in `backend/`.
+- Canonical backend/domain skills are maintained in `go-cms-kernel/.codex/skills/`; do not duplicate them in this repository.
+- When work spans the kernel or requires a kernel/domain architecture rule, use the smallest relevant skill from `go-cms-kernel`.
+- Do not load every skill proactively.
 
 ## Human-facing Codex prompts
 
