@@ -8,10 +8,16 @@ import (
 )
 
 // Profile is the profile and module bindings used by the starter app.
-var Profile = kernel.Profile{Code: "starter", Name: "Starter", Modules: []kernel.ProfileModule{
-	{Module: core.Module{}, Caches: []cache.Binding{
-		{Alias: core.DurableCacheAlias, Code: "shared"},
-		{Alias: core.HotCacheAlias, Code: "shared"},
-	}},
-	{Module: admin.Module{}},
-}}
+var Profile = kernel.Profile{
+	Code: "starter",
+	Name: "Starter",
+	Modules: []kernel.Module{
+		core.New(core.Config{
+			Caches: []cache.Binding{
+				{Alias: core.DurableCacheAlias, Code: "shared"},
+				{Alias: core.HotCacheAlias, Code: "shared"},
+			},
+		}),
+		admin.New(),
+	},
+}

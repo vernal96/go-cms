@@ -19,12 +19,12 @@
    var Profile = kernel.Profile{
        Code: "editorial",
        Name: "Editorial",
-       Modules: []kernel.ProfileModule{
-           {Module: core.Module{}, Caches: []cache.Binding{
+       Modules: []kernel.Module{
+           core.New(core.Config{Caches: []cache.Binding{
                {Alias: core.DurableCacheAlias, Code: "shared"},
                {Alias: core.HotCacheAlias, Code: "shared"},
-           }},
-           {Module: admin.Module{}},
+           }}),
+           admin.New(),
        },
    }
    ```
@@ -46,11 +46,27 @@
 
 Профили объявляйте как переменные `kernel.Profile`, без фабричных функций. Не помещайте в них lifecycle-код, создание приложения, подключение инфраструктуры или изменяемые runtime-объекты.
 
+## Типизированные параметры модулей
+
+`Profile.Modules` — список `[]kernel.Module`. Параметры принадлежат модулю: `core.New(core.Config{...})`, `mail.New(mail.Config{...})`, `forms.New(forms.Config{...})`, `seo.New(seo.Config{...})`. Модули без параметров объявляются как `admin.New()` и `search.New()`.
+
+IDE подсказывает поля конкретного `Config`. Например, `seo.New(seo.Config{MaxTemplateLength: 2000})` принимает целочисленный лимит, но не предлагает кэш или файловые привязки. `core.Config.Caches` задаёт кэши Core; `mail.Config.Filesystems` и `forms.Config.Filesystems` задают файловые привязки spool. Открытые соединения и runtime в конструкторы не передаются.
+
+Компилятор Go отклоняет чужой тип конфигурации, неизвестное поле, неверный тип значения и аргументы для модуля без параметров. Нулевые значения полей допустимы для языка Go: обязательность и допустимые диапазоны проверяются при запуске с сохранением документированных defaults.
+
+При подготовке blueprint проверяются **все объявленные профили**, включая профили без сайтов: зависимости, параметры модулей, кэши, диски, database adapters и application dependencies. Ошибка прекращает запуск до HTTP listener и фоновых обработчиков; сообщение содержит профиль, модуль и причину. Проверки данных конкретного сайта и внешних операций остаются в runtime.
+
+Для собственного модуля реализуйте `Code`, `Validate(context.Context, kernel.ModuleValidationContext) error` и `Build(context.Context, kernel.ModuleContext) (kernel.ModuleRuntime, error)`. Сигнатуру конструктора выбирает модуль: например, `counter.New(limit int)`. `Validate` проверяет требования без создания фиктивного сайта; `Build` создаёт отдельный runtime сайта. Настройки декларации должны быть неизменяемыми: копируйте срезы и указатели на данные в конструкторе.
+
+При необходимости модуль реализует `RegistryProvider` с `Registry() (kernel.ModuleRegistry, error)`, `CacheBindingsProvider` или `FilesystemBindingsProvider`. Возвращайте копии изменяемых привязок. Типизированные зависимости доступны через `ModuleDatabaseFrom` и `ModuleApplicationFrom` как при проверке, так и при сборке runtime; контекст проверки не разрешает выбирать database другого модуля.
+
+Этот API включён в kernel `v0.4.0`, закреплённый в Starter. Обычные Go- и Docker-сборки используют опубликованную зависимость без локального `replace` или Go workspace.
+
 ## Поля параметров профиля
 
 `Profile.Params` задаёт поля настроек сайта для всех сайтов, использующих профиль. Это именно параметры сайта, сохраняемые в `core.sites.settings`; это не поля контентных ресурсов (они объявляются в шаблонах ресурсов).
 
-Тип поля указывается через `field.Definition`; стандартные типы регистрирует модуль `core`. Примеры `Validators` ниже относятся к текущему исходному коду kernel после `v0.3.0`. В `backend/go.mod` пока закреплена опубликованная `v0.3.0`; до выпуска новой версии проверяйте совместимость исходников через временный Go workspace с соседним kernel. Для обычного развёртывания требуется публикация согласованной версии kernel:
+Тип поля указывается через `field.Definition`; стандартные типы регистрирует модуль `core`. Примеры `Validators` ниже используют контракт kernel `v0.4.0`, закреплённого в `backend/go.mod`:
 
 | Код типа | Назначение | Опции |
 | --- | --- | --- |
@@ -109,12 +125,12 @@ var editorialParams = []field.Definition{
 var Profile = kernel.Profile{
 	Code: "editorial",
 	Name: "Editorial",
-	Modules: []kernel.ProfileModule{
-		{Module: core.Module{}, Caches: []cache.Binding{
+	Modules: []kernel.Module{
+		core.New(core.Config{Caches: []cache.Binding{
 			{Alias: core.DurableCacheAlias, Code: "shared"},
 			{Alias: core.HotCacheAlias, Code: "shared"},
-		}},
-		{Module: admin.Module{}},
+		}}),
+		admin.New(),
 	},
 	Params: editorialParams,
 	EditorTabs: []field.EditorTab{
