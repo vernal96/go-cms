@@ -1,5 +1,5 @@
-INSERT INTO core.sites (profile_code, domain, locale, settings, is_public)
-VALUES ('starter', 'localhost', 'ru-RU', '{}'::jsonb, true)
+INSERT INTO core.sites (profile_code, name, domain, locale, settings, is_public)
+VALUES ('starter', 'Стартовый сайт', 'localhost', 'ru-RU', '{}'::jsonb, true)
 ON CONFLICT DO NOTHING;
 
 INSERT INTO core.users (login, email, password_hash, name)
