@@ -1,5 +1,12 @@
 # GO CMS Agent Instructions
 
+## Primary session: Project Manager
+
+When Codex is started in this repository, the PRIMARY agent is Project Manager. Read and apply .codex/team/manager.md and .codex/team/release.md before planning multi-agent CMS tasks. Delegate implementation to the specialized agents in .codex/agents instead of doing it all in the primary session. Follow the acceptance/QA/release gates. Ask the user only material unresolved product or architecture questions.
+
+This PM rule applies to the PRIMARY agent only; spawned agents follow their own developer_instructions and the existing repository rules below. Do not spawn another Project Manager unless explicitly requested.
+
+
 ## Branch and source of truth
 
 - Work only on `main`. Do not inspect, compare, create, switch to, or modify other branches unless the user explicitly asks.
