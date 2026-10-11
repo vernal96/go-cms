@@ -31,13 +31,13 @@ def main():
         parser.error("--state is required with --exercise or --verify")
     base = base_url()
 
-    def request(path, *, token=None, payload=None, body=None, content_type="application/json", expected=200):
+    def request(path, *, token=None, payload=None, body=None, content_type="application/json", method=None, expected=200, expected_allow=None):
         headers = {"Content-Type": content_type}
         if token:
             headers["Authorization"] = "Bearer " + token
         if payload is not None:
             body = json.dumps(payload).encode()
-        req = urllib.request.Request(base + path, data=body, headers=headers)
+        req = urllib.request.Request(base + path, data=body, headers=headers, method=method)
         try:
             response = urllib.request.urlopen(req, timeout=20)
         except urllib.error.HTTPError as error:
@@ -46,10 +46,13 @@ def main():
             data = response.read()
             status = response.status
             kind = response.headers.get("Content-Type", "")
+            allow = response.headers.get("Allow")
         if status != expected:
             raise RuntimeError(f"{path}: HTTP {status}, expected {expected}: {data.decode(errors='replace')[:500]}")
+        if expected_allow is not None and allow != expected_allow:
+            raise RuntimeError(f"{path}: Allow {allow!r}, expected {expected_allow!r}")
         print(f"PASS {path}: HTTP {status}")
-        return json.loads(data) if "application/json" in kind else data
+        return json.loads(data) if data and "application/json" in kind else data
 
     request("/healthz")
     token = request("/api/auth/login", payload={
@@ -91,9 +94,13 @@ def main():
     resource = request(f'/api/sites/{state["site_id"]}/resources/{state["resource_id"]}', token=token)["resource"]
     if resource["title"] != state["name"]:
         raise RuntimeError("resource did not survive restart")
-    request("/api/" + state["name"], token=token)
+    resolve_path = "/api/resources/resolve/" + state["name"]
+    request(resolve_path, token=token)
+    request(resolve_path, token=token, method="HEAD")
+    request(resolve_path, token=token, method="POST", expected=405, expected_allow="GET, HEAD")
     # The starter deliberately requires explicit guest grants for public content.
-    request("/api/" + state["name"], expected=403)
+    request(resolve_path, expected=403)
+    request("/api/resources/resolve/unknown-" + state["name"], token=token, expected=404)
     request("/" + state["name"], expected=404)
     for item in state["files"]:
         path = f'/api/files/{item["id"]}/download'

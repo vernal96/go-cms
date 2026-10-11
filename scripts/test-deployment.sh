@@ -59,6 +59,10 @@ if docker compose --env-file .env run --rm --no-deps -e JWT_SIGNING_KEY= \
 fi
 echo 'PASS Core command rejects duplicate user creation'
 docker compose --env-file .env run --rm --no-deps server console seeds up --tags=dev
+# The running server started before the dev seed created its ministry site.
+# Restart only that service so it loads the new site runtime, then wait for health.
+docker compose --env-file .env restart server
+docker compose --env-file .env up --detach --wait --wait-timeout 180 --no-deps server
 ./scripts/smoke.sh --exercise --state "$test_dir/smoke-state.json"
 # A failure reported to the file logger must also be visible in Docker logs.
 if docker compose --env-file .env run --rm --no-deps \

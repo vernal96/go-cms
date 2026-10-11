@@ -6,7 +6,7 @@
 [проверки полей](https://github.com/vernal96/go-cms-kernel/blob/main/docs/modules/core/fields.md). Полный список — в [навигации по документации](https://github.com/vernal96/go-cms-kernel/blob/main/docs/README.md).
 
 Минимальный backend на Go с отдельной зависимостью
-[`go-cms-kernel v0.4.0`](https://github.com/vernal96/go-cms-kernel).
+[`go-cms-kernel v0.8.0`](https://github.com/vernal96/go-cms-kernel).
 Включает Core, Admin, PostgreSQL, Redis, Kafka, миграции, опциональный dev seed, JWT и public/private диски.
 [Админка](https://github.com/vernal96/go-cms-admin) — отдельное приложение,
 подключаемое по HTTP.
@@ -30,6 +30,11 @@ make up
 - API: `http://localhost:8080/api`.
 - Проверка запуска: `http://localhost:8080/healthz` → HTTP 200.
 - [Адреса HTTP API](https://github.com/vernal96/go-cms-kernel/blob/main/docs/http-api.md): публичные и административные маршруты, пути ресурсов и исключения.
+- Корневой ресурс доступен по `GET /api/resources/resolve`; `/about` — по
+  `GET /api/resources/resolve/about`, а `/news/article` — по
+  `GET /api/resources/resolve/news/article`. Endpoint принимает также `HEAD`;
+  прочие методы возвращают 405 с `Allow: GET, HEAD`. Пути страниц сайта,
+  ссылки меню, поиска и SEO остаются без `/api`.
 - Dev-пользователь `admin` / `admin-dev-only-2026` создаётся только при ручном запуске `console seeds up --tags=dev`.
 - `make env` создаёт уникальные секреты инфраструктуры и HTTP.
 - Первого администратора создайте вручную через команду Core:
@@ -147,13 +152,15 @@ Compose использует внутренний адрес `redis:6379`; Redis
 `REDIS_PASSWORD`. Данные Redis являются расходным кэшем; для них не создаётся
 постоянный volume.
 
-Версия ядра фиксируется в `backend/go.mod`. Ядро v0.4.0 включает типизированные
-конструкторы модулей, проверку всех профилей до запуска HTTP, префикс `/api`
-и типизированные валидаторы полей. Кэши URL, ресурсов, конфигурации виджетов
-и опциональных результатов виджетов остаются раздельными.
+Версия ядра фиксируется в `backend/go.mod` и использует опубликованный тег
+`v0.8.0` без локальных подмен. Ядро предоставляет типизированные конструкторы
+модулей, проверку профилей до запуска HTTP, префикс `/api`, типизированные
+валидаторы полей и явный endpoint чтения ресурсов `/api/resources/resolve`.
+Кэши URL, ресурсов, конфигурации виджетов и опциональных результатов виджетов
+остаются раздельными.
 
 Для smoke-проверок нужны Python 3; для `make check` — Go версии из `backend/go.mod`
-(1.26.1 или новее) либо рабочая автоматическая загрузка Go toolchain.
+(1.27.0 или новее) либо рабочая автоматическая загрузка Go toolchain.
 
 ```sh
 make up
@@ -175,7 +182,7 @@ DEPLOYMENT_TEST_PORT=28080 make test-deployment
 ```
 
 В CI выполняются `make check` и `make test-deployment`. Это проверяет реальную
-зависимость v0.4.0 без локальных подмен.
+зависимость v0.8.0 без локальных подмен.
 
 ## Логи и остановка
 
@@ -193,7 +200,7 @@ make down      # остановить, сохранив БД и файлы
 docker compose cp server:/app/var/log/cms.log ./cms.log
 ```
 
-Если сборка не может получить `go-cms-kernel@v0.4.0`, проверьте доступ к GitHub,
+Если сборка не может получить `go-cms-kernel@v0.8.0`, проверьте доступ к GitHub,
 `proxy.golang.org` и `sum.golang.org`. Ошибки `Repository not found` / HTTP 404
 означают, что исходники или тег недоступны; наличие локального ядра не заменяет
 проверку опубликованной зависимости.
