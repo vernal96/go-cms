@@ -14,6 +14,7 @@ func cleanEnv(t *testing.T) {
 	for _, key := range []string{
 		"POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB", "POSTGRES_USER",
 		"POSTGRES_PASSWORD", "POSTGRES_SSL_MODE", "KAFKA_BROKERS", "REDIS_ADDR", "REDIS_PASSWORD",
+		"REDIS_VIEWS_ADDR",
 		"FILES_PUBLIC_ROOT", "FILES_PUBLIC_BASE_URL", "FILES_PRIVATE_ROOT", "FILES_PRIVATE_BASE_URL",
 		"FILES_PRIVATE_SIGNING_KEY", "LOGGER_FILE_PATH", "SERVER_HOST", "SERVER_PORT",
 		"JWT_SIGNING_KEY", "JWT_ISSUER", "JWT_AUDIENCE", "JWT_ACCESS_TTL", "JWT_CLOCK_SKEW",
@@ -38,6 +39,7 @@ func TestDefaults(t *testing.T) {
 			PublicFilesRoot: "var/files/public", PublicFilesBaseURL: "http://localhost:8080",
 			PrivateFilesRoot: "var/files/private", PrivateFilesBaseURL: "http://localhost:8080",
 			PrivateFilesSignKey: strings.Repeat("f", 32), RedisAddress: "localhost:6379",
+			RedisViewsAddress: "localhost:6380",
 		},
 		LoggerPath: "var/log/cms.log",
 	}
@@ -64,6 +66,7 @@ func TestEnvironmentOverrides(t *testing.T) {
 		"POSTGRES_DB": "project", "POSTGRES_USER": "owner", "POSTGRES_PASSWORD": " password ",
 		"POSTGRES_SSL_MODE": "require", "KAFKA_BROKERS": "broker1:9092,broker2:9092",
 		"REDIS_ADDR": "cache:6379", "REDIS_PASSWORD": " cache-secret ",
+		"REDIS_VIEWS_ADDR": "views-cache:6379",
 		"FILES_PUBLIC_ROOT": "/public", "FILES_PUBLIC_BASE_URL": "https://public.example",
 		"FILES_PRIVATE_ROOT": "/private", "FILES_PRIVATE_BASE_URL": "https://private.example",
 		"FILES_PRIVATE_SIGNING_KEY": " " + strings.Repeat("f", 32) + " ",
@@ -86,6 +89,7 @@ func TestEnvironmentOverrides(t *testing.T) {
 			PrivateFilesRoot: "/private", PrivateFilesBaseURL: "https://private.example",
 			PrivateFilesSignKey: " " + strings.Repeat("f", 32) + " ",
 			RedisAddress:        "cache:6379", RedisPassword: " cache-secret ",
+			RedisViewsAddress: "views-cache:6379",
 		},
 		LoggerPath: "/logs/project.log",
 	}

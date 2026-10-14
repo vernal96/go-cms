@@ -57,6 +57,7 @@ func Load() (Config, error) {
 			PrivateFilesSignKey: signingKey,
 			RedisAddress:        env("REDIS_ADDR", "localhost:6379"),
 			RedisPassword:       os.Getenv("REDIS_PASSWORD"),
+			RedisViewsAddress:   env("REDIS_VIEWS_ADDR", "localhost:6380"),
 		},
 		LoggerPath: env("LOGGER_FILE_PATH", "var/log/cms.log"),
 	}, nil

@@ -3,6 +3,7 @@ package infrastructure
 import (
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	kernel "github.com/vernal96/go-cms-kernel"
 	appkernel "github.com/vernal96/go-cms-kernel/app"
 	"github.com/vernal96/go-cms-kernel/cache"
@@ -12,6 +13,8 @@ import (
 	connectorredis "github.com/vernal96/go-cms-kernel/connectors/redis"
 	"github.com/vernal96/go-cms-kernel/filesystem"
 	corepostgres "github.com/vernal96/go-cms-kernel/modules/core/adapters/postgres"
+	"github.com/vernal96/go-cms-kernel/modules/core/resourceviews"
+	viewsredis "github.com/vernal96/go-cms-kernel/modules/core/resourceviews/adapters/redis"
 	"github.com/vernal96/go-cms-kernel/modules/core/user/adapters/argon2id"
 )
 
@@ -31,6 +34,7 @@ type Config struct {
 	PrivateFilesSignKey string
 	RedisAddress        string
 	RedisPassword       string
+	RedisViewsAddress   string
 }
 
 // Definition returns the infrastructure declarations used by the starter app.
@@ -61,6 +65,15 @@ func (c Config) Definition() appkernel.Definition {
 			Code: "shared", Addrs: []string{c.RedisAddress}, Password: c.RedisPassword,
 			DialTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second,
 		}}},
+		ResourceViews: []resourceviews.Definition{{
+			Code: "views",
+			Factory: viewsredis.Factory{
+				Options: goredis.UniversalOptions{
+					Addrs: []string{c.RedisViewsAddress},
+				},
+				Prefix: "cms:resource-views",
+			},
+		}},
 		PasswordHasher: argon2id.Factory{},
 	}
 }

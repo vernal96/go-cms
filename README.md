@@ -6,7 +6,7 @@
 [проверки полей](https://github.com/vernal96/go-cms-kernel/blob/main/docs/modules/core/fields.md). Полный список — в [навигации по документации](https://github.com/vernal96/go-cms-kernel/blob/main/docs/README.md).
 
 Минимальный backend на Go с отдельной зависимостью
-[`go-cms-kernel v0.8.0`](https://github.com/vernal96/go-cms-kernel).
+[`go-cms-kernel v0.9.0`](https://github.com/vernal96/go-cms-kernel).
 Включает Core, Admin, PostgreSQL, Redis, Kafka, миграции, опциональный dev seed, JWT и public/private диски.
 [Админка](https://github.com/vernal96/go-cms-admin) — отдельное приложение,
 подключаемое по HTTP.
@@ -146,14 +146,20 @@ seed на dev-стенде нужно пересоздать его базу; к
 
 ## Проверки
 
-Кэш подключён через модульные aliases `core.durable` и `core.hot` к одному Redis.
-Compose использует внутренний адрес `redis:6379`; Redis не публикуется на хосте.
-При запуске backend через Go задайте `REDIS_ADDR` и при необходимости
-`REDIS_PASSWORD`. Данные Redis являются расходным кэшем; для них не создаётся
-постоянный volume.
+Кэш подключён через модульные aliases `core.durable` и `core.hot` к Redis
+`redis:6379` с политикой `allkeys-lru`; эти данные являются расходным кэшем.
+Подробности контракта и правил учёта см. в [руководстве по счётчику просмотров Core](https://github.com/vernal96/go-cms-kernel/blob/main/docs/modules/core/resource-views.md).
+Счётчик просмотров использует отдельный Redis `redis-views:6379` с AOF,
+постоянным volume, политикой `noeviction` и host port `REDIS_VIEWS_PORT` (по
+умолчанию `6380`). Его адрес настраивается через `REDIS_VIEWS_ADDR`; при запуске
+без Compose по умолчанию используется `localhost:6380`. Остановка Redis просмотров не останавливает backend: во время
+недоступности накопителя просмотры не накапливаются. Пакеты записываются в
+PostgreSQL примерно раз в 45 секунд; все экземпляры приложения используют один
+Redis и общий key prefix, чтобы обработчик мог продолжить работу после остановки
+одного экземпляра.
 
 Версия ядра фиксируется в `backend/go.mod` и использует опубликованный тег
-`v0.8.0` без локальных подмен. Ядро предоставляет типизированные конструкторы
+`v0.9.0` без локальных подмен. Ядро предоставляет типизированные конструкторы
 модулей, проверку профилей до запуска HTTP, префикс `/api`, типизированные
 валидаторы полей и явный endpoint чтения ресурсов `/api/resources/resolve`.
 Кэши URL, ресурсов, конфигурации виджетов и опциональных результатов виджетов
@@ -182,7 +188,7 @@ DEPLOYMENT_TEST_PORT=28080 make test-deployment
 ```
 
 В CI выполняются `make check` и `make test-deployment`. Это проверяет реальную
-зависимость v0.8.0 без локальных подмен.
+зависимость v0.9.0 без локальных подмен.
 
 ## Логи и остановка
 
@@ -200,7 +206,7 @@ make down      # остановить, сохранив БД и файлы
 docker compose cp server:/app/var/log/cms.log ./cms.log
 ```
 
-Если сборка не может получить `go-cms-kernel@v0.8.0`, проверьте доступ к GitHub,
+Если сборка не может получить `go-cms-kernel@v0.9.0`, проверьте доступ к GitHub,
 `proxy.golang.org` и `sum.golang.org`. Ошибки `Repository not found` / HTTP 404
 означают, что исходники или тег недоступны; наличие локального ядра не заменяет
 проверку опубликованной зависимости.
