@@ -3,7 +3,6 @@ package infrastructure
 import (
 	"time"
 
-	goredis "github.com/redis/go-redis/v9"
 	kernel "github.com/vernal96/go-cms-kernel"
 	appkernel "github.com/vernal96/go-cms-kernel/app"
 	"github.com/vernal96/go-cms-kernel/cache"
@@ -68,9 +67,7 @@ func (c Config) Definition() appkernel.Definition {
 		ResourceViews: []resourceviews.Definition{{
 			Code: "views",
 			Factory: viewsredis.Factory{
-				Options: goredis.UniversalOptions{
-					Addrs: []string{c.RedisViewsAddress},
-				},
+				Config: connectorredis.ClientConfig{Addrs: []string{c.RedisViewsAddress}},
 				Prefix: "cms:resource-views",
 			},
 		}},

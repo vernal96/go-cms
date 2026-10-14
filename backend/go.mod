@@ -2,10 +2,7 @@ module github.com/vernal96/go-cms
 
 go 1.27.0
 
-require (
-	github.com/redis/go-redis/v9 v9.23.0
-	github.com/vernal96/go-cms-kernel v0.9.0
-)
+require github.com/vernal96/go-cms-kernel v0.10.0
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -22,6 +19,7 @@ require (
 	github.com/klauspost/compress v1.20.1 // indirect
 	github.com/libtnb/logrotate v0.1.6 // indirect
 	github.com/pierrec/lz4/v4 v4.1.33 // indirect
+	github.com/redis/go-redis/v9 v9.23.0 // indirect
 	github.com/twmb/franz-go v1.22.1 // indirect
 	github.com/twmb/franz-go/pkg/kmsg v1.14.0 // indirect
 	go.opentelemetry.io/otel/metric v1.46.0 // indirect

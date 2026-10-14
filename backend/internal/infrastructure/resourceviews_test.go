@@ -26,7 +26,7 @@ func TestResourceViewsUseDedicatedRedisBinding(t *testing.T) {
 	if !ok {
 		t.Fatalf("resource view factory = %T, want Redis accumulator", definition.ResourceViews[0].Factory)
 	}
-	if !reflect.DeepEqual(viewFactory.Options.Addrs, []string{"views-cache:6379"}) || viewFactory.Prefix != "cms:resource-views" {
+	if !reflect.DeepEqual(viewFactory.Config.Addrs, []string{"views-cache:6379"}) || viewFactory.Prefix != "cms:resource-views" {
 		t.Fatalf("resource view Redis = %#v, want dedicated address and stable project prefix", viewFactory)
 	}
 }
