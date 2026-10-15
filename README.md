@@ -35,6 +35,12 @@ make up
   `GET /api/resources/resolve/news/article`. Endpoint принимает также `HEAD`;
   прочие методы возвращают 405 с `Allow: GET, HEAD`. Пути страниц сайта,
   ссылки меню, поиска и SEO остаются без `/api`.
+- Ответ ресурса включает `resource.breadcrumbs` — массив `{title, link}` от
+  опубликованных предков к текущей странице. Профиль Starter оставляет главную
+  страницу вне цепочки, если она не является предком (`IncludeHomeInBreadcrumbs`
+  по умолчанию `false`). Формат и настройка описаны в
+  [HTTP API](https://github.com/vernal96/go-cms-kernel/blob/main/docs/http-api.md#хлебные-крошки-ресурса)
+  и [руководстве по профилям](https://github.com/vernal96/go-cms-kernel/blob/main/docs/profiles.md#хлебные-крошки).
 - Dev-пользователь `admin` / `admin-dev-only-2026` создаётся только при ручном запуске `console seeds up --tags=dev`.
 - `make env` создаёт уникальные секреты инфраструктуры и HTTP.
 - Первого администратора создайте вручную через команду Core:
