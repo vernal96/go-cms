@@ -7,6 +7,38 @@ test_dir=$(mktemp -d "${TMPDIR:-/tmp}/cms-deployment-XXXXXX")
 export COMPOSE_PROJECT_NAME="cms-test-$(date +%s)-$$"
 export SERVER_PORT="${DEPLOYMENT_TEST_PORT:-18080}"
 export BASE_URL="http://localhost:$SERVER_PORT"
+read -r selected_postgres_port selected_redis_views_port <<EOF
+$(python3 - "${POSTGRES_PORT-}" "${REDIS_VIEWS_PORT-}" <<'PY'
+import socket, sys
+
+requested = sys.argv[1:]
+selected = []
+sockets = []
+excluded = {int(port) for port in requested if port.isdigit() and 1 <= int(port) <= 65535}
+try:
+    for port in requested:
+        if port:
+            selected.append(port)
+            continue
+        while True:
+            reservation = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            reservation.bind(('0.0.0.0', 0))
+            selected_port = reservation.getsockname()[1]
+            if selected_port not in excluded:
+                sockets.append(reservation)
+                excluded.add(selected_port)
+                selected.append(str(selected_port))
+                break
+            reservation.close()
+    print(*selected)
+finally:
+    for reservation in sockets:
+        reservation.close()
+PY
+)
+EOF
+export POSTGRES_PORT="$selected_postgres_port"
+export REDIS_VIEWS_PORT="$selected_redis_views_port"
 cleanup() {
   result=$?
   trap - EXIT HUP INT TERM
@@ -58,6 +90,36 @@ if docker compose --env-file .env run --rm --no-deps -e JWT_SIGNING_KEY= \
   exit 1
 fi
 echo 'PASS Core command rejects duplicate user creation'
+docker compose --env-file .env run --rm --no-deps -e JWT_SIGNING_KEY= \
+  server console users create --login explicit-password-user \
+  --email explicit-password-user@example.test --name 'Explicit Password User' \
+  --group admin --password 'deployment-test-password' > "$test_dir/explicit-password-user.json"
+python3 - "$test_dir/explicit-password-user.json" <<'PY'
+import json, pathlib, sys
+result = json.loads(pathlib.Path(sys.argv[1]).read_text())
+if result['user']['Login'] != 'explicit-password-user':
+    raise SystemExit('FAIL explicit-password user creation returned an unexpected user')
+if 'generated_password' in result:
+    raise SystemExit('FAIL explicit-password user creation unexpectedly returned a generated password')
+if not any(group['Code'] == 'admin' for group in result['groups']):
+    raise SystemExit('FAIL explicit-password user lacks the administrator group')
+print('PASS Core command creates a user with an explicit password')
+PY
+explicit_password_user_id=$(python3 - "$test_dir/explicit-password-user.json" <<'PY'
+import json, pathlib, sys
+print(json.loads(pathlib.Path(sys.argv[1]).read_text())['user']['ID'])
+PY
+)
+docker compose --env-file .env run --rm --no-deps -e JWT_SIGNING_KEY= \
+  server console users password --id "$explicit_password_user_id" \
+  --password 'deployment-test-updated-password' > "$test_dir/explicit-password-change.json"
+python3 - "$test_dir/explicit-password-change.json" "$explicit_password_user_id" <<'PY'
+import json, pathlib, sys
+result = json.loads(pathlib.Path(sys.argv[1]).read_text())
+if str(result['ID']) != sys.argv[2]:
+    raise SystemExit('FAIL password change returned an unexpected result')
+print('PASS Core command changes an existing user password')
+PY
 docker compose --env-file .env run --rm --no-deps server console seeds up --tags=dev
 # The running server started before the dev seed created its ministry site.
 # Restart only that service so it loads the new site runtime, then wait for health.

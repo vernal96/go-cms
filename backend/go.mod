@@ -2,7 +2,7 @@ module github.com/vernal96/go-cms
 
 go 1.27.0
 
-require github.com/vernal96/go-cms-kernel v0.10.0
+require github.com/vernal96/go-cms-kernel v0.12.0
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
