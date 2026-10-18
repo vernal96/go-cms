@@ -98,8 +98,11 @@ def main():
     request(resolve_path, token=token)
     request(resolve_path, token=token, method="HEAD")
     request(resolve_path, token=token, method="POST", expected=405, expected_allow="GET, HEAD")
-    # The starter deliberately requires explicit guest grants for public content.
-    request(resolve_path, expected=403)
+    # Public sites expose published resources without explicit guest grants.
+    public_resource = request(resolve_path)
+    if public_resource.get("resource", {}).get("id") != state["resource_id"]:
+        raise RuntimeError("anonymous resource route resolved a different resource")
+    request(resolve_path, method="HEAD")
     request("/api/resources/resolve/unknown-" + state["name"], token=token, expected=404)
     request("/" + state["name"], expected=404)
     for item in state["files"]:
@@ -107,7 +110,7 @@ def main():
         if request(path, token=token) != item["content"].encode():
             raise RuntimeError("stored file bytes differ")
         request(path, expected=401)
-    print("PASS CMS deployment: resource and public/private files persisted; guest access remains restricted")
+    print("PASS CMS deployment: resource and public/private files persisted; public resource is anonymously readable")
 
 
 if __name__ == "__main__":
