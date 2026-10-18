@@ -79,6 +79,7 @@ Never ask the user for information that can be reliably discovered from the curr
 ## Change discipline
 
 - Make the smallest coherent change that satisfies the task; avoid unrelated renames, package moves and cosmetic refactors.
+- For new static Go declarations of standard field definitions, prefer the typed constructors in `modules/core/field` and their `With...` methods. Keep dynamic JSON/API field configuration and `field.ConfigField` on their existing contracts; runtime validation remains required.
 - Reuse a nearby established pattern before inventing a new abstraction.
 - If adding another routine item would copy generic registration/lifecycle glue into `internal`, improve the reusable declaration mechanism instead.
 - Pass `context.Context` through blocking/I/O/request/lifecycle operations; do not store request contexts in long-lived objects.

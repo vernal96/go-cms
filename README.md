@@ -6,7 +6,7 @@
 [проверки полей](https://github.com/vernal96/go-cms-kernel/blob/main/docs/modules/core/fields.md). Полный список — в [навигации по документации](https://github.com/vernal96/go-cms-kernel/blob/main/docs/README.md).
 
 Минимальный backend на Go с отдельной зависимостью
-[`go-cms-kernel v0.16.0`](https://github.com/vernal96/go-cms-kernel).
+[`go-cms-kernel v0.17.0`](https://github.com/vernal96/go-cms-kernel).
 Включает Core, Admin, PostgreSQL, Redis, Kafka, миграции, опциональный dev seed, JWT и public/private диски.
 [Админка](https://github.com/vernal96/go-cms-admin) — отдельное приложение,
 подключаемое по HTTP.
@@ -217,7 +217,7 @@ make down      # остановить, сохранив БД и файлы
 docker compose cp server:/app/var/log/cms.log ./cms.log
 ```
 
-Если сборка не может получить `go-cms-kernel@v0.16.0`, проверьте доступ к GitHub,
+Если сборка не может получить `go-cms-kernel@v0.17.0`, проверьте доступ к GitHub,
 `proxy.golang.org` и `sum.golang.org`. Ошибки `Repository not found` / HTTP 404
 означают, что исходники или тег недоступны; наличие локального ядра не заменяет
 проверку опубликованной зависимости.
@@ -234,7 +234,7 @@ Frontend не встраивается в Go binary и взаимодейств�
 
 Добавляйте модули в `kernel.Profile.Modules` после Core, явно указывая зависимости.
 Типизированные точки расширения и порядок их регистрации описаны в
-[руководстве по contributions](https://github.com/vernal96/go-cms-kernel/blob/v0.16.0/docs/contributions.md).
+[руководстве по contributions](https://github.com/vernal96/go-cms-kernel/blob/v0.17.0/docs/contributions.md).
 Database adapters подключаются в `app.DatabaseDefinition.Adapters`, проектные
 migrations/seeds — через публичные kernel providers. Не импортируйте `internal`
 другого репозитория.
