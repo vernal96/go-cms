@@ -60,7 +60,7 @@ help:
 	@printf 'Go CMS Start commands:\n'
 	@printf '  make, make up  Build and start PostgreSQL, Redis, Kafka and backend\n'
 	@printf '  make env       Create .env if it is missing\n'
-	@printf '  make build     Build the backend image\n'
+	@printf '  make build     Build the shared backend image once\n'
 	@printf '  make check     Run Go and Compose checks\n'
 	@printf '  make smoke     Check a running API with dev credentials\n'
 	@printf '  make test-deployment  Test fresh volumes and persistence (port 18080)\n'

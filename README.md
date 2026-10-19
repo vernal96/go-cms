@@ -22,7 +22,7 @@ cd go-cms
 make up
 ```
 
-`make up` создаёт `.env` из `.env.example`, генерирует уникальные секреты, собирает backend, запускает PostgreSQL, Redis и Kafka
+`make up` создаёт `.env` из `.env.example`, генерирует уникальные секреты, собирает backend, запускает PostgreSQL, Redis, Kafka, HTTP-сервер и постоянный контейнер `console`
 и дожидается healthcheck. На новой базе автоматически применяются миграции и системные seeds с тегом `prod`; пользователи и демо-сайт не создаются.
 Ядро скачивается по версии из `backend/go.mod`; соседняя папка с ядром,
 `replace` и `go.work` не нужны.
@@ -46,7 +46,7 @@ make up
 - Первого администратора создайте вручную через команду Core:
 
 ```sh
-docker compose --env-file .env run --rm --no-deps server console users create \
+docker compose --env-file .env exec console server console users create \
   --login admin --email admin@example.test --name Administrator \
   --group admin --generate-password
 ```
@@ -56,6 +56,9 @@ docker compose --env-file .env run --rm --no-deps server console users create \
 `--password 'change-this-password'`. Укажите ровно один из этих флагов.
 Команда не перезаписывает существующие аккаунты. Для смены пароля используйте
 `console users password --id 17 --password 'change-this-password'`.
+Сервис `console` использует тот же backend-образ, настройки и том данных, что и
+`server`, но не публикует порт. Он запускается вместе с приложением и остаётся
+доступным для команд через `docker compose --env-file .env exec console server console ...`.
 
 Backend отдаёт API, а не HTML админки или готовую главную страницу сайта.
 Ответ 404 на `/` не означает сбой запуска: starter не создаёт главную страницу.
@@ -124,7 +127,7 @@ ADMIN_PORT=15173 ADMIN_API_TARGET=http://host.docker.internal:18080 docker compo
 Для локального демо вручную выполните:
 
 ```sh
-docker compose --env-file .env run --rm --no-deps server console seeds up --tags=dev
+docker compose --env-file .env exec console server console seeds up --tags=dev
 ```
 
 Dev seed создаёт сайт `localhost` и пользователя в защищённой группе `admin`.
@@ -181,7 +184,7 @@ Redis и общий key prefix, чтобы обработчик мог прод�
 
 ```sh
 make up
-docker compose --env-file .env run --rm --no-deps server console seeds up --tags=dev
+docker compose --env-file .env exec console server console seeds up --tags=dev
 make smoke             # health, вход, API, отрицательные проверки доступа
 make check             # Go test/vet/build и Compose config
 make test-deployment   # чистая копия, новая БД/диски, запуск и проверка сохранности

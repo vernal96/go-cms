@@ -1,3 +1,40 @@
+x-backend: &backend
+  image: ${COMPOSE_PROJECT_NAME:-cms}-backend:local
+  build:
+    context: ./backend
+  environment:
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: 5432
+    POSTGRES_DB: ${POSTGRES_DB}
+    POSTGRES_USER: ${POSTGRES_USER}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    POSTGRES_SSL_MODE: ${POSTGRES_SSL_MODE:-disable}
+    REDIS_ADDR: redis:6379
+    REDIS_VIEWS_ADDR: redis-views:6379
+    KAFKA_BROKERS: kafka:9092
+    SERVER_HOST: 0.0.0.0
+    SERVER_PORT: 8080
+    JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
+    JWT_ISSUER: ${JWT_ISSUER:-go-cms-start}
+    JWT_AUDIENCE: ${JWT_AUDIENCE:-go-cms-start-api}
+    JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-30m}
+    JWT_CLOCK_SKEW: ${JWT_CLOCK_SKEW:-30s}
+    FILES_PUBLIC_ROOT: ${FILES_PUBLIC_ROOT:-var/files/public}
+    FILES_PRIVATE_ROOT: ${FILES_PRIVATE_ROOT:-var/files/private}
+    FILES_PRIVATE_SIGNING_KEY: ${FILES_PRIVATE_SIGNING_KEY}
+    LOGGER_FILE_PATH: ${LOGGER_FILE_PATH:-var/log/cms.log}
+    FILES_PUBLIC_BASE_URL: ${FILES_PUBLIC_BASE_URL:-http://localhost:${SERVER_PORT:-8080}}
+    FILES_PRIVATE_BASE_URL: ${FILES_PRIVATE_BASE_URL:-http://localhost:${SERVER_PORT:-8080}}
+  volumes:
+    - server_data:/app/var
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    kafka:
+      condition: service_healthy
+
 services:
   postgres:
     image: postgres:18
@@ -62,48 +99,20 @@ services:
       retries: 30
 
   server:
-    build:
-      context: ./backend
-    environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_SSL_MODE: ${POSTGRES_SSL_MODE:-disable}
-      REDIS_ADDR: redis:6379
-      REDIS_VIEWS_ADDR: redis-views:6379
-      KAFKA_BROKERS: kafka:9092
-      SERVER_HOST: 0.0.0.0
-      SERVER_PORT: 8080
-      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
-      JWT_ISSUER: ${JWT_ISSUER:-go-cms-start}
-      JWT_AUDIENCE: ${JWT_AUDIENCE:-go-cms-start-api}
-      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-30m}
-      JWT_CLOCK_SKEW: ${JWT_CLOCK_SKEW:-30s}
-      FILES_PUBLIC_ROOT: ${FILES_PUBLIC_ROOT:-var/files/public}
-      FILES_PRIVATE_ROOT: ${FILES_PRIVATE_ROOT:-var/files/private}
-      FILES_PRIVATE_SIGNING_KEY: ${FILES_PRIVATE_SIGNING_KEY}
-      LOGGER_FILE_PATH: ${LOGGER_FILE_PATH:-var/log/cms.log}
-      FILES_PUBLIC_BASE_URL: ${FILES_PUBLIC_BASE_URL:-http://localhost:${SERVER_PORT:-8080}}
-      FILES_PRIVATE_BASE_URL: ${FILES_PRIVATE_BASE_URL:-http://localhost:${SERVER_PORT:-8080}}
+    <<: *backend
     ports:
       - "${SERVER_PORT:-8080}:8080"
-    volumes:
-      - server_data:/app/var
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 3s
       timeout: 5s
       retries: 20
       start_period: 5s
+
+  console:
+    <<: *backend
+    entrypoint: ["/bin/sh"]
+    command: ["-c", "while :; do sleep 3600; done"]
 
 volumes:
   postgres_data:

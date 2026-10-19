@@ -62,16 +62,16 @@ sys.stdout.buffer.write(b"".join(path + b"\0" for path in paths if path and os.p
 ' | tar --null -T - -cf - | tar -xf - -C "$test_dir"
 cd "$test_dir"
 make up
-docker compose --env-file .env run --rm --no-deps \
+docker compose --env-file .env exec -T \
   -e JWT_SIGNING_KEY= -e SERVER_PORT=invalid -e JWT_ACCESS_TTL=invalid \
-  server console users list > "$test_dir/users-before-seed.json"
+  console server console users list > "$test_dir/users-before-seed.json"
 python3 - "$test_dir/users-before-seed.json" <<'PY'
 import json, pathlib, sys
 if json.loads(pathlib.Path(sys.argv[1]).read_text()) != []:
     raise SystemExit('FAIL ordinary startup unexpectedly created users')
 print('PASS ordinary startup creates no users; console ignores HTTP/JWT settings')
 PY
-docker compose --env-file .env run --rm --no-deps -e JWT_SIGNING_KEY= \
+docker compose --env-file .env exec -T -e JWT_SIGNING_KEY= console \
   server console users create --login manual-admin --email manual-admin@example.test \
   --name Administrator --group admin --generate-password > "$test_dir/manual-admin.json"
 python3 - "$test_dir/manual-admin.json" <<'PY'
@@ -83,14 +83,14 @@ if not any(group['Code'] == 'admin' for group in result['groups']):
     raise SystemExit('FAIL manually created user lacks the administrator group')
 print('PASS Core command creates the first administrator manually')
 PY
-if docker compose --env-file .env run --rm --no-deps -e JWT_SIGNING_KEY= \
+if docker compose --env-file .env exec -T -e JWT_SIGNING_KEY= console \
   server console users create --login manual-admin --email manual-admin@example.test \
   --name Administrator --group admin --generate-password > "$test_dir/duplicate-user.log" 2>&1; then
   echo 'FAIL duplicate user creation unexpectedly succeeded' >&2
   exit 1
 fi
 echo 'PASS Core command rejects duplicate user creation'
-docker compose --env-file .env run --rm --no-deps -e JWT_SIGNING_KEY= \
+docker compose --env-file .env exec -T -e JWT_SIGNING_KEY= console \
   server console users create --login explicit-password-user \
   --email explicit-password-user@example.test --name 'Explicit Password User' \
   --group admin --password 'deployment-test-password' > "$test_dir/explicit-password-user.json"
@@ -110,7 +110,7 @@ import json, pathlib, sys
 print(json.loads(pathlib.Path(sys.argv[1]).read_text())['user']['ID'])
 PY
 )
-docker compose --env-file .env run --rm --no-deps -e JWT_SIGNING_KEY= \
+docker compose --env-file .env exec -T -e JWT_SIGNING_KEY= console \
   server console users password --id "$explicit_password_user_id" \
   --password 'deployment-test-updated-password' > "$test_dir/explicit-password-change.json"
 python3 - "$test_dir/explicit-password-change.json" "$explicit_password_user_id" <<'PY'
@@ -120,16 +120,16 @@ if str(result['ID']) != sys.argv[2]:
     raise SystemExit('FAIL password change returned an unexpected result')
 print('PASS Core command changes an existing user password')
 PY
-docker compose --env-file .env run --rm --no-deps server console seeds up --tags=dev
+docker compose --env-file .env exec -T console server console seeds up --tags=dev
 # The running server started before the dev seed created its ministry site.
 # Restart only that service so it loads the new site runtime, then wait for health.
 docker compose --env-file .env restart server
 docker compose --env-file .env up --detach --wait --wait-timeout 180 --no-deps server
 ./scripts/smoke.sh --exercise --state "$test_dir/smoke-state.json"
 # A failure reported to the file logger must also be visible in Docker logs.
-if docker compose --env-file .env run --rm --no-deps \
+if docker compose --env-file .env exec -T \
   -e POSTGRES_PASSWORD=invalid-smoke-password \
-  -e LOGGER_FILE_PATH=/tmp/startup-failure.log server > "$test_dir/startup-failure.log" 2>&1; then
+  -e LOGGER_FILE_PATH=/tmp/startup-failure.log console server > "$test_dir/startup-failure.log" 2>&1; then
   echo 'FAIL invalid database credentials unexpectedly started the server' >&2
   exit 1
 fi
