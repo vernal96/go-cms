@@ -6,7 +6,7 @@
 [проверки полей](https://github.com/vernal96/go-cms-kernel/blob/main/docs/modules/core/fields.md). Полный список — в [навигации по документации](https://github.com/vernal96/go-cms-kernel/blob/main/docs/README.md).
 
 Минимальный backend на Go с отдельной зависимостью
-[`go-cms-kernel v0.18.0`](https://github.com/vernal96/go-cms-kernel).
+[`go-cms-kernel v0.19.0`](https://github.com/vernal96/go-cms-kernel).
 Включает Core, Admin, PostgreSQL, Redis, Kafka, миграции, опциональный dev seed, JWT и public/private диски.
 [Админка](https://github.com/vernal96/go-cms-admin) — отдельное приложение,
 подключаемое по HTTP.
@@ -171,14 +171,14 @@ Redis и общий key prefix, чтобы обработчик мог прод�
 одного экземпляра.
 
 Версия ядра фиксируется в `backend/go.mod` и использует опубликованный тег
-`v0.18.0` без локальных подмен. Ядро предоставляет типизированные конструкторы
+`v0.19.0` без локальных подмен. Ядро предоставляет типизированные конструкторы
 модулей, проверку профилей до запуска HTTP, префикс `/api`, типизированные
 валидаторы полей и явный endpoint чтения ресурсов `/api/resources/resolve`.
 Встроенный виджет `core_resource_fields` возвращает выбранные поля шаблона
 текущего ресурса; media-поля представлены объектами с ID, URL, MIME-типом,
 размером и настроенными метаданными, а множественные поля — массивом таких
 объектов. Локальные URL относительные; URL S3/CDN абсолютные. Настройка полей
-доступна в совместимой админке v0.8.6.
+доступна в совместимой админке v0.9.0.
 Кэши URL, ресурсов, конфигурации виджетов и опциональных результатов виджетов
 остаются раздельными.
 
@@ -205,7 +205,7 @@ DEPLOYMENT_TEST_PORT=28080 make test-deployment
 ```
 
 В CI выполняются `make check` и `make test-deployment`. Это проверяет реальную
-зависимость v0.18.0 без локальных подмен.
+зависимость v0.19.0 без локальных подмен.
 
 ## Логи и остановка
 
@@ -223,7 +223,7 @@ make down      # остановить, сохранив БД и файлы
 docker compose cp server:/app/var/log/cms.log ./cms.log
 ```
 
-Если сборка не может получить `go-cms-kernel@v0.18.0`, проверьте доступ к GitHub,
+Если сборка не может получить `go-cms-kernel@v0.19.0`, проверьте доступ к GitHub,
 `proxy.golang.org` и `sum.golang.org`. Ошибки `Repository not found` / HTTP 404
 означают, что исходники или тег недоступны; наличие локального ядра не заменяет
 проверку опубликованной зависимости.
@@ -240,7 +240,7 @@ Frontend не встраивается в Go binary и взаимодейств�
 
 Добавляйте модули в `kernel.Profile.Modules` после Core, явно указывая зависимости.
 Типизированные точки расширения и порядок их регистрации описаны в
-[руководстве по contributions](https://github.com/vernal96/go-cms-kernel/blob/v0.18.0/docs/contributions.md).
+[руководстве по contributions](https://github.com/vernal96/go-cms-kernel/blob/v0.19.0/docs/contributions.md).
 Database adapters подключаются в `app.DatabaseDefinition.Adapters`, проектные
 migrations/seeds — через публичные kernel providers. Не импортируйте `internal`
 другого репозитория.
